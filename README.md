@@ -130,6 +130,22 @@
 .\install.ps1             # 不覆盖已有文件；keys.json 只加缺的键，冲突只报不改
 ```
 
+### 用脚本（macOS / Linux / WSL）
+
+```sh
+./install.sh --dry-run    # 先看会写什么
+./install.sh              # 不覆盖已有文件；--force 覆盖
+./install.sh --target=DIR # 装到别的配置目录
+```
+
+`install.sh` 合并 `keys.json` 需要一个能用的 `python3`（或 `python`）；都没有时它会把要加的键直接打印出来，你手动加。
+
+### 多台电脑
+
+同一个仓库装到第二台机器：clone 下来跑对应脚本就行，布局、mod、主题完全一致。**不随仓库走的**有三样——空间配色与收藏（在 `shared.json`）、字体和外观（在 `settings.json`，本包不带）、以及每台机器自己的空间与会话记录（`view.json`、`~/.omp/agent/sessions`）。所以第二台机器上空间会重新分配颜色、收藏是空的，功能本身不受影响。
+
+每台机器需要的是：Herdr 自带的 `files`/`changes`/`workspace-status` 三个 mod（安装 Herdr 就有）、`git`（显示分支）、`omp` 在 PATH（只有会话抽屉需要）。
+
 ### 手动
 
 1. `layouts/oh-my-herdr.json` → `~/.config/herdr-app/layouts/`（Windows：`C:\Users\<你>\.config\herdr-app\layouts\`）。
@@ -249,8 +265,9 @@ mods/cockpit                 驾驶舱抽屉
 themes/qingci.json           月白
 themes/xuanmo.json           玄墨
 keys.json                    五个 alt-shift 快捷键
-install.ps1 / refresh.ps1    安装 / 反向同步
-RECIPE.md                    从零重建的说明书（给她自己的 agent 用）
+install.ps1 / install.sh     安装（Windows / macOS·Linux）
+refresh.ps1                  反向同步（把配置目录的最新文件抓回包）
+RECIPE.md                    从零重建的说明书（给你的 agent 用）
 ```
 
 ## License

@@ -130,6 +130,22 @@ After a dozen spaces, Herdr's stock sidebar has two problems: every space looks 
 .\install.ps1             # never overwrites; keys.json only gains missing keys
 ```
 
+### Script (macOS / Linux / WSL)
+
+```sh
+./install.sh --dry-run    # see what it would write
+./install.sh              # never overwrites; --force overwrites
+./install.sh --target=DIR # install somewhere else
+```
+
+Merging `keys.json` needs a working `python3` (or `python`); without one the script prints the keys to add by hand.
+
+### On a second machine
+
+Clone the repo and run the right script — layout, mods and themes come out identical. Three things are deliberately **not** in the repo: space colours and favourites (they live in `shared.json`), fonts and appearance (`settings.json`, not shipped), and each machine's own spaces and sessions (`view.json`, `~/.omp/agent/sessions`). So on a second machine spaces get their colours assigned afresh and favourites start empty; the behaviour is unaffected.
+
+Each machine needs Herdr's shipped `files` / `changes` / `workspace-status` mods (they come with Herdr), `git` for the branch labels, and `omp` on `PATH` (only the sessions drawer uses it).
+
 ### By hand
 
 1. `layouts/oh-my-herdr.json` → `~/.config/herdr-app/layouts/` (`C:\Users\<you>\.config\herdr-app\layouts\` on Windows).
@@ -249,7 +265,8 @@ mods/cockpit                 cockpit drawer
 themes/qingci.json           moon-white
 themes/xuanmo.json           ink-black
 keys.json                    five alt-shift shortcuts
-install.ps1 / refresh.ps1    install / reverse-sync
+install.ps1 / install.sh     install (Windows / macOS·Linux)
+refresh.ps1                  reverse-sync (pull the latest files back)
 RECIPE.md                    brief for rebuilding it from scratch
 ```
 
