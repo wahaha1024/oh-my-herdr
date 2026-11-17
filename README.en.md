@@ -1,125 +1,24 @@
 # Oh My Herdr
 
-A workbench layout for [Herdr](https://herdr.dev): spaces grouped by directory, each one carrying its own colour; a tab strip with panel buttons on top; a collapsible drawer on the right for files, changes and sessions; and a permanent status bar for CPU, ports, pending hand-offs and review. Two themes — `qingci` (moon-white) and `xuanmo` (ink-black).
+A workbench layout for [Herdr](https://herdr.dev): spaces grouped by folder in the sidebar, each with a fixed colour; a collapsible drawer on the right for files and sessions; a status bar that keeps metrics in sight. Two themes: qingci (light) and xuanmo (dark).
 
-[中文说明](README.md)
+中文说明见 [README.md](README.md).
 
-![Oh My Herdr](preview.png)
+![qingci](preview.png)
+![xuanmo](preview-dark.png)
 
----
-
-## Why
-
-After a dozen spaces, Herdr's stock sidebar has two problems: every space looks identical, so your eye has nowhere to land; and switching spaces or opening a file means hunting through shortcuts and panels. This layout does three things:
-
-1. **Every space becomes a coloured record** — a coloured number badge and a coloured name. The colour belongs to the space and follows it; switching theme changes brightness, never hue.
-2. **The sidebar states the hierarchy** — directory group, space, terminal are three distinct sizes and indents, with a rule between groups. Drag the sidebar to 44px and it collapses into a rail of badges.
-3. **The useful bits sit on the edges** — five drawer pages (files, changes, sessions, favourites, cockpit) and a status bar that always shows system metrics. Nothing requires a shortcut.
+> Both images are drawn to the layout's proportions — not screenshots.
 
 ---
 
-## Shape
+## What changed
 
-```
-┌──────────────┬────────────────────────────────────────────────────────────┐
-│ Oh My Herdr  │  ⊞ tabs:  π  π DISK: server space  ×    +  ⎇ master  ▣ ⋯ ⚙ ─ □ ✕│ 42px
-├──────────────┼────────────────────────────────────────────────────────────┤
-│              │                                                            │
-│  Workbench  2 agents                                                ┌─────┐ │
-│  ▾ DSH                                        1/1                  │     │ │
-│    ❶ DSH              (space: coloured badge + name)                │ dr- │ │
-│      π terminal row                                                 │ awer│ │
-│  ────────────────────────────────  (rule between groups)             │ 380 │ │
-│  ▾ projects                                   6/6                  │     │ │
-│    ❶ server          (group colour = first space's colour)           │     │ │
-│      π DISK: server space                                            │     │ │
-│    ❷ Magpie                                                         └─────┘ │
-│  ▸ qrcode (collapsed group)                                                 │
-│              │                                                            │
-│  (272px)     │  terminals: 8 gap, 10 radius                                 │
-├──────────────┴────────────────────────────────────────────────────────────┤
-│ server82 ⎇ master · 2 agents     Ctrl+Shift+P commands │ CPU 10% 10.6 GB │ 27 │ none │ review │ 28px
-└────────────────────────────────────────────────────────────────────────────┘
-│ Preferences / Herdr settings / Add machine — sidebar footer, 120px          │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-| Region | Size | Contents |
-|---|---|---|
-| `sidebar` | 272px, draggable 44–420 | 46px brand, `inkstone-workbench` list, 120px footer |
-| `inkstone-tabs` | 42px | tabs, panel buttons, space dot, window buttons |
-| `panel-body` | fills | terminals (`terminal_padding` 14/12, 1px divider) |
-| `panel` | 380px, draggable 280–620 | five-page stack, hidden by default |
-| status bar | 28px | `workspace-status` + metrics + ports + inbox + review |
-
----
-
-## What's in it
-
-### Sidebar
-
-**Directory group** — a 27px row: 11px chevron, 13px `folder.svg` tinted with the first space's colour, 13px semibold name, 10px "shown/total" count. A 1px rule separates groups.
-
-**Space row** — 30px tall, radius 7, `pl(10) pr(8) gap(6)`:
-
-- Badge: 16×16, radius 4, 9px semibold. Selected means **solid fill + inverted ink** (`#f7faf8` on dark fills, `#14131a` on light ones); otherwise a 15%-alpha wash of the same colour with the colour as text.
-- Name: 14px in the space colour, semibold when selected.
-- Then an 11px git branch and a 7px status dot.
-- The selected row gets a 10%-alpha background of the space colour.
-
-**Terminal / agent rows** — 24px, indented 38px (aligned to the name, not the badge), 11px:
-
-- Spaces with agents show agent rows: program icon (16px, tinted when the program has a tint) + name + status dot or spinner.
-- Plain terminals show `terminal.svg` or the program's icon + name.
-- An empty space shows "no terminals yet".
-- Clicking a space that is already shown sends nothing — every `space.select`/`tab.select` rebuilds the terminal view and replays the whole scrollback.
-
-**Status is encoded by shape**, not just colour:
-
-| Status | Shape |
-|---|---|
-| `blocked` | small solid square, radius 1 |
-| `done` | solid circle |
-| `working` | 2px ring + spinning `spinner.svg` (12px, 900ms) |
-| `idle` | 1.5px hollow circle |
-
-**Rail mode (sidebar < 160px)** — spaces shrink to their coloured number badges (tooltip carries name, terminal count, status), groups to their folder icon, the header keeps only `+`, centred. Click behaviour is unchanged.
-
-### Tab strip
-
-- Tabs: 30px, 14px type, max 200px, `π` prefix means an agent is running; the close button appears on hover.
-- Panel buttons: 26px tall, 14px icon + 11px label (files / sessions / favourites / cockpit / changes), highlighting the active drawer page. **With Git off, "changes" disappears entirely** (`shared("inkstone.git")`).
-- The rightmost element is a 7px dot in the current space's colour, tooltipped with the space name — one glance tells you which space this window is.
-- Window buttons are drawn as vectors: with `titlebar: "none"` the layout owns them. The collapse button sits on this row whenever the sidebar is wider than 160px.
-
-### Drawer (380px, right)
-
-| Page | Mod | Contents |
-|---|---|---|
-| Files | shipped `files` | the current directory tree |
-| Changes | shipped `changes` | git status |
-| Cockpit | `cockpit` | space and terminal overview |
-| Sessions | `inkstone-sessions` | omp sessions; **clicking one that is already running just switches to it** |
-| Favourites | `inkstone-favorites` | `[{name, folder}]`, one click opens a space |
-
-**The sessions drawer** solves a specific annoyance: clicking an old session runs `omp --resume`, which re-renders the entire history — it looks like the terminal scrolls from the top all the way down. So before launching anything it looks for the session among live terminals: if a terminal's title contains the first 24 characters of the session title and its cwd matches, it sends `space.select` + `tab.select` + `pane.focus` instead and never resumes. When several historical records share a title, only the newest is matched, so the wrong one can't be picked.
-
-**The favourites drawer** stores `[{name, folder}]` in `shared("inkstone.favorites")`. "Collect current" saves the current space's folder; an "open" chip on a row means a space is already open on that folder.
-
-**Right-click pastes.** `terminal_menu: "inkstone-paste"` means a right-click in a terminal does not raise a menu: it hands focus back to the terminal that was clicked, types the clipboard straight in, and closes itself. One click from right-click to paste.
-
-### Status bar
-
-`status-text` (shipped, fills the space) plus four fixed-width blocks:
-
-| Block | Width | Contents |
-|---|---|---|
-| `inkstone-metrics` | 152 | CPU %, memory GB |
-| `inkstone-ports` | 64 | number of listening ports |
-| `inkstone-inbox` | 84 | agents waiting on you; opens a 400×320 list |
-| `inkstone-review` | 88 | review entry point |
-
----
+- **Spaces grouped by folder.** Group headers (folder icon, count, rule), space rows, terminal rows — three levels of indent. Spaces carry a coloured number badge and a coloured name; colours are assigned automatically and remembered, and switching themes only swaps the light/dark step, not the hue.
+- **Sidebar folds to 44px** into a rail of coloured badges, and back.
+- **Top bar reworked.** Tabs are 30px tall; the panel buttons carry names; a small dot on the left shows the current space's colour.
+- **Five drawer pages** — files, changes, cockpit, sessions, favourites — all closed by default. A session that is already running in some terminal is marked "open", and clicking it switches there instead of replaying the whole history through a fresh `--resume`.
+- **Status bar**: CPU and memory, listening port count, agents waiting on you (click for the list), review entry.
+- **Right-click pastes** in terminals, no menu.
 
 ## Install
 
@@ -148,128 +47,90 @@ Each machine needs Herdr's shipped `files` / `changes` / `workspace-status` mods
 
 ### By hand
 
-1. `layouts/oh-my-herdr.json` → `~/.config/herdr-app/layouts/` (`C:\Users\<you>\.config\herdr-app\layouts\` on Windows).
-2. Each folder under `mods/` → the config directory's `mods/`.
-3. `themes/qingci.json`, `themes/xuanmo.json` → `themes/`.
-4. Merge the `global` section of `keys.json` into your own; pick a winner for any clash.
+1. `layouts/oh-my-herdr.json` → `~/.config/herdr-app/layouts/` (Windows: `C:\Users\<you>\.config\herdr-app\layouts\`).
+2. Every folder under `mods/` → the config dir's `mods/`.
+3. `themes/qingci.json`, `themes/xuanmo.json` → the config dir's `themes/`.
+4. Merge the `global` section of `keys.json` into your own `keys.json` (on a conflict, pick one).
 5. Switch to it:
 
 ```sh
-herdr-app check mods/inkstone-workbench     # worth running for every mod
+herdr-app check mods/inkstone-workbench     # worth doing for every mod
 herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 ```
 
-`ctrl-shift-l` switches back; deleting the files removes it.
+Back is `ctrl-shift-l`; to undo, delete the files.
 
-### Dependencies
+### Requirements
 
-Herdr's shipped `files`, `changes` and `workspace-status` mods. `inkstone-sessions` reads `~/.omp/agent/sessions` (empty list, no error, if absent). `inkstone-metrics` reads system CPU and memory; `inkstone-ports` reads listening ports. Everything runs locally; nothing calls the network.
-
----
+Herdr's shipped `files`, `changes` and `workspace-status` mods; `inkstone-sessions` reads `~/.omp/agent/sessions` (missing means an empty list, not an error); `inkstone-metrics` reads system CPU/memory; `inkstone-ports` reads listening ports. Everything runs locally, nothing goes on the network.
 
 ## Keys
 
-| Key | Action |
+| Key | Does |
 |---|---|
 | `alt-shift-p` | preferences (theme, appearance) |
 | `alt-shift-r` | review |
 | `alt-shift-m` | system metrics |
 | `alt-shift-o` | port list |
-| `alt-shift-i` | pending list |
+| `alt-shift-i` | waiting list |
 
----
+## Palette
 
-## Space colours
+Seven space colours, assigned by "least used index" and stored as indices, not hex: `shared("inkstone.spaceColors")` = `{spaceId: 0..6}`. Contrast against the qingci background is 4.82–5.69:1; against xuanmo, 6.39–11.26:1.
 
-Seven colours. The light theme (qingci) uses the dark set, the dark theme (xuanmo) the bright set — **the same index keeps its hue across themes; only brightness changes**:
-
-| # | Light (qingci) | Dark (xuanmo) | Hue |
+| # | Light | Dark | Hue |
 |---|---|---|---|
 | 0 | `#a84a50` | `#f08a8a` | brick |
 | 1 | `#8a5619` | `#f2a46a` | ochre |
 | 2 | `#7d640c` | `#e8c76a` | mustard |
 | 3 | `#357041` | `#7ecf86` | bamboo |
 | 4 | `#34618f` | `#6fb3ea` | indigo |
-| 5 | `#5f5399` | `#9a8ce6` | iris |
+| 5 | `#5f5399` | `#9a8ce6` | violet |
 | 6 | `#805083` | `#c98ae6` | wisteria |
 
-Measured contrast: light set against `#e8f0ec` is 4.82–5.69:1; dark set against `#14131a` is 6.39–11.26:1.
-
-What's stored is an **index, not a hex**: `shared("inkstone.spaceColors")` = `{spaceId: 0..6}`. A new space takes the least-used colour; a space's colour is reclaimed when it goes away. `luminance(hex)` (WCAG relative luminance) decides which set the current theme needs.
-
-> `inkstone-workbench` and `inkstone-tabs` each keep their own copy of the palette — mods cannot import from each other. Change both `PALETTE_LIGHT` / `PALETTE_DARK` blocks, in `mods/inkstone-workbench/main.js` and `mods/inkstone-tabs/main.js`.
-
----
+The palette exists twice — `mods/inkstone-workbench/main.js` and `mods/inkstone-tabs/main.js` — because mods cannot import each other; change both.
 
 ## Themes
 
-`themes/qingci.json` (moon-white: `#e8f0ec` ground, `#2b333e` ink, `#126e82` accent) and `themes/xuanmo.json` (ink-black: `#14131a` ground, `#d4cec4` ink, `#619ac3` accent). Both are complete 16-colour ANSI palettes plus semantic slots (`surface`, `raised`, `hover`, `border`, `accent`, `blocked`, `done`, `working`, `idle`, …). The layout declares `theme: { "light": "qingci", "dark": "xuanmo" }`, so it follows `settings.json`'s `appearance`.
+`themes/qingci.json` (background `#e8f0ec`, foreground `#2b333e`, accent `#126e82`) and `themes/xuanmo.json` (background `#14131a`, foreground `#d4cec4`, accent `#619ac3`), each a full 16-colour ANSI set plus semantic slots. The layout declares `theme: { "light": "qingci", "dark": "xuanmo" }` and follows `appearance` in `settings.json`.
 
----
-
-## What it reads and runs
-
-| Kind | Detail |
-|---|---|
-| Reads | `~/.omp/agent/sessions/**/*.jsonl` (first lines only, for title and cwd), git state |
-| Runs | `git` via `exec` (branch, worktree), `hc` (Herdr core queries) |
-| Writes shared state | `inkstone.spaceColors`, `inkstone.favorites`, `inkstone.git`, `sidebar.width` |
-| Network | none |
-
----
-
-## Limits
-
-- Sidebar width, drawer state and rail mode are runtime state (`layout.resize`, clicks), mostly under `layouts/.state/`, and are not guaranteed across restarts. The 272/380 in the layout file are the starting values.
-- The four status blocks have fixed widths; changing their content length means editing the `px` values in `layouts/oh-my-herdr.json`.
-- Session matching relies on terminal titles (omp writes its session title into the OSC title). Rename the title by hand and it won't be recognised — a fresh session will open instead. Sessions on other machines aren't matched.
-- The cockpit page depends on the `cockpit` mod's data shape; copying it out on its own will degrade.
-- Grouping is inferred from cwd prefixes; very deep trees get merged for display.
-
----
-
-## Checking and developing
+The preview images are regenerated from `preview.svg` and the two theme files:
 
 ```sh
-herdr-app check mods/inkstone-workbench        # → check passed
-herdr-app do layout.switch '{"name":"oh-my-herdr"}'
-herdr-app status | jq .errors                  # → []
-herdr-app shot out.png                         # eyeball it
+python mkprev.py    # reads themes/*.json, redraws both previews
 ```
 
-After editing a mod, pull the current files back into this repo:
+## Limitations
 
-```powershell
-.\refresh.ps1
-```
-
----
+- Sidebar width, drawer state and the folded rail are runtime state (`layouts/.state/`); they may not survive a restart. The 272/380 in the layout file are starting values.
+- The four status blocks are fixed width — changing their content length means editing the `px` values in `layouts/oh-my-herdr.json`.
+- Session matching goes through the terminal title (omp writes the session title into the OSC title). Rename the title by hand and it won't match, so a new session gets opened; sessions on other machines are out of scope.
+- The cockpit page depends on the `cockpit` mod's own data shape; copying it out alone degrades.
+- Sidebar grouping is inferred from cwd prefixes; deep directories get merged.
 
 ## Files
 
 ```
-layouts/oh-my-herdr.json     the layout
-layouts/oh-my-herdr.png      preview (same as preview.png)
-mods/inkstone-chrome         brand strip + three-row footer (`footer` prop)
-mods/inkstone-workbench      directory/space/terminal list, rail mode
-mods/inkstone-tabs           tabs, panel buttons, window buttons
+layouts/oh-my-herdr.json     layout
+layouts/oh-my-herdr.png      layout preview (same as preview.png)
+preview.svg                  diagram source, shared by both themes
+mkprev.py                    generates preview.png / preview-dark.png
+mods/inkstone-chrome         brand row + footer rows
+mods/inkstone-workbench      folder/space/terminal list, rail mode
+mods/inkstone-tabs           tabs + panel buttons + window buttons
 mods/inkstone-sessions       omp session drawer
 mods/inkstone-favorites      favourites drawer
-mods/inkstone-inbox          pending status block + overlay
+mods/inkstone-inbox          waiting block + overlay
 mods/inkstone-metrics        CPU/memory block
-mods/inkstone-ports          ports block
+mods/inkstone-ports          port block
 mods/inkstone-review         review block
 mods/inkstone-settings       preferences overlay
-mods/inkstone-paste          right-click pastes straight into the terminal
+mods/inkstone-paste          right-click paste in terminals
 mods/cockpit                 cockpit drawer
-themes/qingci.json           moon-white
-themes/xuanmo.json           ink-black
+themes/qingci.json           light
+themes/xuanmo.json           dark
 keys.json                    five alt-shift shortcuts
 install.ps1 / install.sh     install (Windows / macOS·Linux)
 refresh.ps1                  reverse-sync (pull the latest files back)
 RECIPE.md                    brief for rebuilding it from scratch
 ```
-
-## License
-
-MIT

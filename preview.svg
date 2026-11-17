@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="715" viewBox="0 0 1200 715" font-family="Segoe UI, Inter, system-ui, sans-serif">
+  <!-- window -->
+  <rect width="1200" height="715" fill="#e8f0ec"/>
+
+  <!-- ===== sidebar ===== -->
+  <rect width="237" height="715" fill="#e1eae4"/>
+
+  <!-- brand -->
+  <text x="14" y="26" font-size="13" font-weight="600" fill="#2b333e">Oh My Herdr</text>
+  <g stroke="#5f6b67" stroke-width="1.4" fill="none">
+    <circle cx="196" cy="21" r="4.6"/><path d="M199.6 24.6 L203 28"/>
+  </g>
+  <g stroke="#5f6b67" stroke-width="1.4" fill="none">
+    <rect x="213" y="15" width="13" height="12" rx="2"/><path d="M216 21 H223"/>
+  </g>
+
+  <!-- group: web -->
+  <path d="M15 56 l4 4 l4 -4" stroke="#8a979f" stroke-width="1.4" fill="none"/>
+  <g stroke="#a84a50" stroke-width="1.5" fill="none">
+    <path d="M29 51 h9 l2 3 h4 v8 h-15 z"/>
+  </g>
+  <text x="48" y="62" font-size="11.5" font-weight="600" fill="#2b333e">web</text>
+  <text x="210" y="62" font-size="9" fill="#646c73">2/3</text>
+
+  <!-- space 1: web -->
+  <rect x="6" y="72" width="225" height="26" rx="6" fill="#a84a5019"/>
+  <rect x="14" y="77" width="16" height="16" rx="4" fill="#a84a50"/>
+  <text x="22" y="89" font-size="8.5" font-weight="600" fill="#f7faf8" text-anchor="middle">1</text>
+  <text x="38" y="90" font-size="12.5" font-weight="600" fill="#a84a50">web</text>
+  <text x="196" y="89" font-size="9" fill="#646c73">main</text>
+  <circle cx="222" cy="85" r="3" fill="#1a6840"/>
+
+  <!-- terminal rows of web -->
+  <circle cx="52" cy="107" r="3.2" fill="#8a979f"/>
+  <text x="60" y="111" font-size="9.5" fill="#5f6b67">vite dev</text>
+  <circle cx="52" cy="126" r="3.2" fill="#8a979f"/>
+  <text x="60" y="130" font-size="9.5" fill="#5f6b67">pnpm test</text>
+
+  <!-- space 2: api -->
+  <rect x="14" y="140" width="16" height="16" rx="4" fill="#35704126"/>
+  <text x="22" y="152" font-size="8.5" font-weight="600" fill="#357041" text-anchor="middle">2</text>
+  <text x="38" y="153" font-size="12.5" fill="#357041">api</text>
+  <text x="196" y="152" font-size="9" fill="#646c73">main</text>
+
+  <!-- rule -->
+  <rect x="10" y="170" width="217" height="1" fill="#afcdd0"/>
+
+  <!-- group: services -->
+  <path d="M15 186 l4 4 l4 -4" stroke="#8a979f" stroke-width="1.4" fill="none"/>
+  <g stroke="#357041" stroke-width="1.5" fill="none">
+    <path d="M29 181 h9 l2 3 h4 v8 h-15 z"/>
+  </g>
+  <text x="48" y="192" font-size="11.5" font-weight="600" fill="#2b333e">services</text>
+  <text x="210" y="192" font-size="9" fill="#646c73">3/3</text>
+
+  <!-- space 3 -->
+  <rect x="6" y="202" width="225" height="26" rx="6" fill="#35704119"/>
+  <rect x="14" y="207" width="16" height="16" rx="4" fill="#357041"/>
+  <text x="22" y="219" font-size="8.5" font-weight="600" fill="#f7faf8" text-anchor="middle">3</text>
+  <text x="38" y="220" font-size="12.5" font-weight="600" fill="#357041">api</text>
+  <text x="188" y="219" font-size="9" fill="#646c73">release</text>
+  <circle cx="222" cy="215" r="3" fill="#66462a"/>
+
+  <!-- terminal rows of api -->
+  <circle cx="52" cy="237" r="3.2" fill="#8a979f"/>
+  <text x="60" y="241" font-size="9.5" fill="#5f6b67">cargo run</text>
+
+  <!-- space 4 -->
+  <rect x="14" y="254" width="16" height="16" rx="4" fill="#34618f26"/>
+  <text x="22" y="266" font-size="8.5" font-weight="600" fill="#34618f" text-anchor="middle">4</text>
+  <text x="38" y="267" font-size="12.5" fill="#34618f">worker</text>
+
+  <!-- rule -->
+  <rect x="10" y="284" width="217" height="1" fill="#afcdd0"/>
+
+  <!-- group: infra (collapsed) -->
+  <path d="M15 300 l4 3 l-4 3" stroke="#8a979f" stroke-width="1.4" fill="none"/>
+  <g stroke="#8a979f" stroke-width="1.5" fill="none">
+    <path d="M29 295 h9 l2 3 h4 v8 h-15 z"/>
+  </g>
+  <text x="48" y="306" font-size="11.5" font-weight="600" fill="#2b333e">infra</text>
+  <text x="210" y="306" font-size="9" fill="#646c73">0/2</text>
+
+  <!-- sidebar footer -->
+  <g font-size="10.5" fill="#5f6b67">
+    <text x="34" y="622">Preferences</text>
+    <text x="34" y="654">Herdr settings</text>
+    <text x="34" y="686">Add machine</text>
+  </g>
+  <g stroke="#5f6b67" stroke-width="1.3" fill="none">
+    <circle cx="18" cy="618" r="4"/>
+    <rect x="14" y="646" width="8" height="8" rx="1.5"/>
+    <path d="M18 678 v8 M14 682 h8"/>
+  </g>
+
+  <!-- ===== top bar ===== -->
+  <rect x="237" y="0" width="963" height="37" fill="#e1eae4"/>
+  <!-- tab 1 active -->
+  <rect x="245" y="5" width="176" height="27" rx="6" fill="#d9e3dc"/>
+  <text x="268" y="23" font-size="11" fill="#2b333e">build the landing page</text>
+  <circle cx="257" cy="19" r="2.5" fill="#126e82"/>
+  <!-- tab 2 -->
+  <text x="444" y="23" font-size="11" fill="#5f6b67">api: tests</text>
+  <circle cx="433" cy="19" r="2.5" fill="#66462a"/>
+
+  <!-- panel buttons -->
+  <g font-size="9.5" fill="#5f6b67">
+    <text x="742" y="23">Files</text>
+    <text x="784" y="23">Sessions</text>
+    <text x="841" y="23">Favorites</text>
+    <text x="906" y="23">Cockpit</text>
+  </g>
+  <circle cx="979" cy="19" r="3.5" fill="#a84a50"/>
+  <!-- window buttons -->
+  <g stroke="#5f6b67" stroke-width="1.3">
+    <path d="M1000 24 h8"/>
+    <rect x="1030" y="16" width="8" height="8" fill="none"/>
+    <path d="M1060 16 l8 8 M1068 16 l-8 8"/>
+  </g>
+
+  <!-- ===== terminal ===== -->
+  <rect x="245" y="45" width="616" height="638" rx="9" fill="#e8f0ec" stroke="#afcdd0"/>
+  <!-- terminal header line -->
+  <text x="262" y="68" font-size="9.5" fill="#646c73">~/acme/web — pnpm dev</text>
+  <g font-family="Consolas, ui-monospace, monospace" font-size="10.5">
+    <text x="262" y="94" fill="#5f6b67">$ pnpm dev</text>
+    <text x="262" y="116" fill="#1a6840">VITE v5.4.2  ready in 412 ms</text>
+    <text x="262" y="138" fill="#2b333e">  ➜  Local:   http://localhost:5173/</text>
+    <text x="262" y="160" fill="#2b333e">  ➜  Network: http://10.0.0.12:5173/</text>
+    <text x="262" y="190" fill="#5f6b67">$ git status --short</text>
+    <text x="262" y="212" fill="#b78b26"> M src/components/Hero.tsx</text>
+    <text x="262" y="234" fill="#b78b26"> M src/styles/theme.css</text>
+    <text x="262" y="256" fill="#1a6840">?? src/components/Footer.tsx</text>
+    <text x="262" y="286" fill="#5f6b67">$ pnpm test</text>
+    <text x="262" y="308" fill="#2b333e"> ✓ src/lib/format.test.ts (12)</text>
+    <text x="262" y="330" fill="#2b333e"> ✓ src/lib/api.test.ts (7)</text>
+    <text x="262" y="352" fill="#1a6840"> Tests  19 passed (19)</text>
+    <text x="262" y="382" fill="#5f6b67">$</text>
+  </g>
+  <rect x="276" y="374" width="6" height="12" fill="#126e82"/>
+
+  <!-- ===== drawer ===== -->
+  <rect x="869" y="45" width="331" height="638" fill="#e1eae4"/>
+  <text x="884" y="68" font-size="10.5" font-weight="600" fill="#2b333e">Files</text>
+  <g font-size="10" fill="#5f6b67">
+    <text x="884" y="96">▾ web</text>
+    <text x="898" y="118">▾ src</text>
+    <text x="912" y="140">▸ components</text>
+    <text x="912" y="162">▸ lib</text>
+    <text x="912" y="184">▸ styles</text>
+    <text x="898" y="206">index.html</text>
+    <text x="898" y="228">package.json</text>
+    <text x="898" y="250">tsconfig.json</text>
+    <text x="898" y="272">vite.config.ts</text>
+    <text x="884" y="294">▸ public</text>
+  </g>
+  <rect x="884" y="312" width="301" height="1" fill="#afcdd0"/>
+  <g font-size="9.5" fill="#646c73">
+    <text x="884" y="336">components/</text>
+    <text x="884" y="356">Hero.tsx</text>
+    <text x="884" y="376">Footer.tsx</text>
+    <text x="884" y="396">Nav.tsx</text>
+  </g>
+
+  <!-- ===== status bar ===== -->
+  <rect x="237" y="691" width="963" height="24" fill="#e1eae4"/>
+  <text x="250" y="707" font-size="9.5" fill="#5f6b67">server-a</text>
+  <text x="296" y="707" font-size="9.5" fill="#646c73">main · 2 agents</text>
+  <text x="950" y="707" font-size="9.5" fill="#646c73">CPU 12% · 8.1 GB</text>
+  <text x="1046" y="707" font-size="9.5" fill="#646c73">3</text>
+  <text x="1070" y="707" font-size="9.5" fill="#1a6840">1 waiting</text>
+  <text x="1136" y="707" font-size="9.5" fill="#646c73">Review</text>
+</svg>
