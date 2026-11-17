@@ -1,0 +1,78 @@
+# Oh My Herdr
+
+一扇给自己用的工作台：左边是「目录 → 空间 → 终端」三层列表，右边终端，右侧一个 380px 的抽屉（文件/变更/驾驶舱/会话/收藏），底部一条 28px 状态栏。空间自带颜色，扫一眼就知道自己在哪个项目、哪台机器。主题两套：月白（qingci）/ 玄墨（xuanmo）。
+
+![Oh My Herdr](preview.png)
+
+## 看到什么
+
+从上到下、从左到右：
+
+- **侧栏 272px**（可拖动，最小 44px 收缩成图标轨）：
+  - 顶部 46px 品牌条（`inkstone-chrome`，可拖动窗口，双击最大化）。
+  - 中间 `inkstone-workbench`：按目录分组（folder 图标 = 组内第一个空间的颜色，组间一条 1px 分隔线），组内每个空间一行 30px、圆角 7：彩色数字徽章（16×16，选中时实心底 + 反色字）、彩色空间名 14px、分支名 11px、7px 状态点。空间展开后列终端：有智能体的显示「图标 + 名字 + 状态」24px 行，普通终端显示「图标 + 名字」24px 行；空空间显示「还没有终端」。
+  - 底部 120px `inkstone-chrome`（footer 模式）：偏好、Herdr 设置、添加机器三行 32px。
+- **顶部 42px**：`inkstone-tabs` 画标签（`inkstone-tabs` 自己画窗口按钮，Windows 下用矢量图标），左边一排面板按钮（文件/会话/收藏/驾驶舱/变更），右边空间色点 7px。
+- **中间**：终端，间距 8，圆角 10。
+- **右侧抽屉 380px**（默认藏起，点顶部面板按钮展开）：`files`、`changes`、`cockpit`、`inkstone-sessions`、`inkstone-favorites` 五页。
+- **底部 28px**：`status-text` 占满剩余，右侧依次 `inkstone-metrics`（CPU/内存）、`inkstone-ports`（端口数）、`inkstone-inbox`（待处理数）、`inkstone-review`（审查）。
+
+## 怎么用
+
+- **空间颜色**：7 色调色板（浅色档 `#a84a50 #8a5619 #7d640c #357041 #34618f #5f5399 #805083`，深色档换亮版），新空间拿用得最少的那个。切深浅主题时色相不变，只换亮度档。存在 `shared("inkstone.spaceColors")`，值是序号。
+- **点击**：侧栏空间/终端行——已在显示的那个就不发命令（每次切换都会重建终端视图、重放 scrollback）；点智能体行会 `space.select` + `tab.select` + `agent.focus`。
+- **折叠侧栏**：拖到 44px 自动进入图标轨模式——空间只剩彩色数字徽章（tooltip 带名字、终端数、状态），目录只剩 folder 图标，点击照样能展开。
+- **会话抽屉**（`inkstone-sessions`）：列 `~/.omp/agent/sessions` 里的 omp 会话，点一条——**如果那个会话已经开在某个终端里（终端标题认出来），就切过去，不重新 `omp --resume`**，避免整段历史重渲染。正在跑的行右边有绿色「已打开」。同一标题多条记录时只认最新的那条。
+- **收藏抽屉**（`inkstone-favorites`）：`shared("inkstone.favorites")` 是 `[{name, folder}]`；「收藏当前」取当前空间的目录，行上「已打开」表示该目录正有空间开着。
+- **待处理**（`inkstone-inbox`）：状态栏 84px 紧凑块 + 400×320 overlay，列出 `blocked` 的智能体。
+- **右键即粘贴**：`terminal_menu: "inkstone-paste"`，终端里右键不弹菜单，直接把剪贴板打进被右键的终端（先 `pane.focus` 交回焦点，再 `terminal.paste`，最后关掉自己的 overlay）。`init()` 开头 `if (checking()) return`，所以 `herdr-app check` 不会碰剪贴板。
+- **快捷键**：
+
+  | 键 | 作用 |
+  |---|---|
+  | `alt-shift-p` | 偏好面板（主题、外观） |
+  | `alt-shift-r` | 审查 |
+  | `alt-shift-m` | 指标 |
+  | `alt-shift-o` | 端口 |
+  | `alt-shift-i` | 待处理 |
+
+## 装法
+
+```powershell
+.\install.ps1 -DryRun   # 先看会写什么
+.\install.ps1           # 不覆盖已有文件；keys.json 只加缺的键，冲突会列出来
+```
+
+装完：
+
+```sh
+herdr-app check mods/inkstone-workbench   # 每个 mod 都可以 check 一遍
+herdr-app do layout.switch '{"name":"oh-my-herdr"}'
+```
+
+## 用到的东西
+
+- **布局节点**：root `row`（`titlebar: "none"`、`traffic_lights: [12,16]`、`theme: {light:"qingci",dark:"xuanmo"}`、`terminal_menu: "inkstone-paste"`、`preview`）→ `sidebar`（column，272，min 44，max 420）+ `work`（column：42px `inkstone-tabs` 块 + body row + 28px 状态栏 row）。body 里 `panel-body` 是 `{tab:"active"}` 的 block，`panel` 是 380px 的 column（`stack` id `panel-stack`，子页 files/changes/cockpit/inkstone-sessions/inkstone-favorites）。
+- **自己的 mod**（12 个）：`inkstone-chrome`（品牌条 + footer）、`inkstone-workbench`（列表）、`inkstone-tabs`（标签 + 窗口按钮 + 面板按钮）、`inkstone-sessions`、`inkstone-favorites`、`inkstone-inbox`、`inkstone-metrics`、`inkstone-ports`、`inkstone-review`、`inkstone-settings`、`inkstone-paste`（右键即粘贴）、`cockpit`。
+- **用到的 Herdr 自带 mod**：`files`、`changes`、`workspace-status`。
+- **herdr 函数**：`theme()`、`spaces()`、`panes()`、`terminals()`、`keys()`、`shared()` / `setShared()`、`layout()`、`exec()`、`run()`、`notify()`、`openOverlay()` / `closeOverlay()`、`props()`。
+- **命令**：`space.select`、`tab.select`、`tab.new`、`pane.focus`、`pane.split`、`pane.close`、`pane.zoom`、`agent.focus`、`terminal.open`、`terminal.kill`、`terminal.copy` / `terminal.paste`、`layout.select` / `layout.show` / `layout.hide` / `layout.resize`、`mod.open`、`app.theme`、`window.*`。
+- **读的外部数据**：`~/.omp/agent/sessions/*/*.jsonl`（会话标题与 cwd，用 python 读头两行）；`hc` / `git` 通过 `exec`。
+
+## 注意
+
+- 侧栏宽度和折叠状态是 `layout.resize` 的点击状态，存在 `layouts/.state/`，**重启不保留**（布局文件里的 272 才是初始值）。
+- `inkstone-workbench` 和 `inkstone-tabs` 各存了一份调色板常量（mod 之间不能 import），改配色要同时改两个文件。
+- 状态栏几个块是固定宽度（metrics 152 / ports 64 / inbox 84 / review 88），改内容长度要同步改布局里的 px。
+- 会话识别靠**终端标题**匹配：omp 把会话标题写进 OSC 标题。标题被程序改掉（比如手动 `title`）就认不出来了，会当成新会话开。
+- 「已打开」只看本机终端：跨机器的会话记录不在这里。
+- 复制了 `gpui-kit.d.ts` 之外的全部资产；mod 目录里没有 `.d.ts` / `jsconfig.json`，编辑器里没有类型提示，运行不受影响。
+
+## 装好了怎么验
+
+```sh
+herdr-app check mods/inkstone-workbench    # → check passed
+herdr-app do layout.switch '{"name":"oh-my-herdr"}'
+herdr-app status | jq .errors              # → []
+herdr-app shot out.png                     # 看侧栏有彩色徽章、状态栏右侧四块、顶部五个面板按钮
+```

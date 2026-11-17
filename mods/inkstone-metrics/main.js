@@ -1,0 +1,240 @@
+// 系统资源：状态栏显示 CPU 占用与内存，点开看总览和吃内存最多的进程。
+// 取自 VladTemp27/herdr-orca 的 System Resource Meter；上游读 macOS 的 sysctl / vm_stat，
+// 这里用 .NET 的 PerformanceCounter（比 WMI 快一倍）：
+//   Processor\% Processor Time\_Total、Memory\Available MBytes；
+// 物理内存总量只取一次（Win32_OperatingSystem），之后用「总量 - 可用」算占用。
+
+import { View, div, svg } from "gpui-kit";
+import { v_flex, h_flex, ScrollHandle } from "gpui-base";
+import { exec, props, closeOverlay, theme, run } from "herdr";
+
+const SAMPLE = [
+  "-NoProfile",
+  "-NonInteractive",
+  "-Command",
+  [
+    "$cpu = New-Object System.Diagnostics.PerformanceCounter('Processor','% Processor Time','_Total')",
+    "$mem = New-Object System.Diagnostics.PerformanceCounter('Memory','Available MBytes')",
+    "$null = $cpu.NextValue()",
+    "Start-Sleep -Milliseconds 300",
+    "$c = [int][math]::Round($cpu.NextValue())",
+    "$m = [int]$mem.NextValue()",
+    "\"$c|$m\"",
+  ].join("\n"),
+];
+
+const TOTAL = [
+  "-NoProfile",
+  "-NonInteractive",
+  "-Command",
+  "$o=Get-CimInstance Win32_OperatingSystem; [math]::Round([double]$o.TotalVisibleMemorySize/1MB,1)",
+];
+
+const PROCS = [
+  "-NoProfile",
+  "-NonInteractive",
+  "-Command",
+  "Get-Process -ErrorAction SilentlyContinue | Sort-Object WS -Descending | Select-Object -First 8 | ForEach-Object { \"$($_.ProcessName)|$($_.Id)|$([math]::Round($_.WS/1MB,1))\" }",
+];
+
+const ff = (n) => (n >= 10 ? n.toFixed(1) : n.toFixed(2));
+
+export default class Metrics extends View {
+  init(_p, cx) {
+    this.scroll = ScrollHandle.new();
+    this.cpu = null;
+    this.used = null;
+    this.total = null;
+    this.procs = [];
+    this.loadTotal(cx);
+    this.sample(cx);
+    cx.timer.every(20000, (cx) => this.sample(cx));
+    if (props()?.overlay) this.loadProcs(cx);
+  }
+
+  loadTotal(cx) {
+    cx.spawn(async (cx) => {
+      const r = await exec("powershell", TOTAL, { timeout: 15000 }).catch(() => null);
+      const n = Number((r?.stdout ?? "").trim());
+      if (r?.code === 0 && Number.isFinite(n) && n > 0) this.total = n;
+      cx.notify();
+    });
+  }
+
+  sample(cx) {
+    if (this.busy) return;
+    this.busy = true;
+    cx.spawn(async (cx) => {
+      const r = await exec("powershell", SAMPLE, { timeout: 15000 }).catch(() => null);
+      if (r?.code === 0) {
+        const [cpu, avail] = (r.stdout ?? "").trim().split("|").map(Number);
+        if (Number.isFinite(cpu)) this.cpu = Math.max(0, Math.min(100, cpu));
+        if (Number.isFinite(avail) && this.total) this.used = Math.max(0, this.total - avail / 1024);
+      }
+      this.busy = false;
+      cx.notify();
+    });
+  }
+
+  loadProcs(cx) {
+    cx.spawn(async (cx) => {
+      const r = await exec("powershell", PROCS, { timeout: 15000 }).catch(() => null);
+      this.procs = (r?.stdout ?? "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const [name, pid, mb] = line.split("|");
+          return { name, pid: Number(pid), mb: Number(mb) };
+        })
+        .filter((x) => Number.isFinite(x.pid) && x.pid > 0);
+      cx.notify();
+    });
+  }
+
+  stop(pid, cx) {
+    exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`])
+      .catch(() => {})
+      .then(() => {
+        this.procs = this.procs.filter((x) => x.pid !== pid);
+        cx.notify();
+      });
+  }
+
+  tone(t) {
+    if (this.cpu === null) return t.dim;
+    if (this.cpu >= 85) return t.blocked;
+    if (this.cpu >= 60) return t.working;
+    return t.muted;
+  }
+
+  bar(value, max, color, t, height = 4) {
+    const pct = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
+    return div()
+      .h(height)
+      .w_full()
+      .rounded(height / 2)
+      .bg(t.border)
+      .child(div().h(height).w(Math.round(pct * 1000) / 10, "%").rounded(height / 2).bg(color));
+  }
+
+  // 状态栏形态：CPU 12% · 3.8 GB。两段数字各自固定宽度，位数变化时右侧列不抖。
+  compact(t) {
+    const cpu = this.cpu === null ? "—" : `${this.cpu}%`;
+    const mem = this.used === null ? "—" : `${ff(this.used)} GB`;
+    return h_flex()
+      .id("metrics-compact")
+      .size_full()
+      .flex_none()
+      .px(8)
+      .gap(5)
+      .items_center()
+      .border_l(1)
+      .border_color(t.border)
+      .cursor_pointer()
+      .tooltip(this.total ? `内存 ${ff(this.used ?? 0)} / ${ff(this.total)} GB\n${cpu} · 点开看进程` : "读取系统资源…")
+      .accessibility_label(`系统资源 CPU ${cpu} 内存 ${mem}`)
+      .hover((s) => s.bg(t.hover))
+      .on_click(() => run("mod.open", { name: "inkstone-metrics" }))
+      .child(svg("mods/workspace-chrome/monitor.svg").size(12).flex_none().text_color(this.tone(t)))
+      .child(div().w(44).flex_none().whitespace_nowrap().text_size(11).text_color(this.tone(t)).child(`CPU ${cpu}`))
+      .child(div().text_size(11).text_color(t.dim).child("·"))
+      .child(div().w(56).flex_none().whitespace_nowrap().text_size(11).text_color(t.muted).child(mem));
+  }
+
+  popup(t, cx) {
+    const cpu = this.cpu ?? 0;
+    const used = this.used ?? 0;
+    const total = this.total ?? 0;
+    return v_flex()
+      .size_full()
+      .min_h(0)
+      .bg(t.chrome)
+      .child(h_flex()
+        .h(34)
+        .flex_none()
+        .px(13)
+        .gap(8)
+        .items_center()
+        .border_b(1)
+        .border_color(t.border)
+        .child(svg("mods/workspace-chrome/monitor.svg").size(14).flex_none().text_color(t.accent))
+        .child(div().flex_1().text_size(13).font_semibold().child("系统资源"))
+        .child(div()
+          .id("metrics-close")
+          .px(6)
+          .py(2)
+          .rounded(5)
+          .text_size(11)
+          .text_color(t.dim)
+          .cursor_pointer()
+          .hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .on_click(() => closeOverlay(props()?.overlay))
+          .child("Esc")))
+      .child(v_flex()
+        .flex_1()
+        .min_h(0)
+        .p(12)
+        .gap(14)
+        .overflow_y_scrollbar()
+        .mode("always")
+        .track_scroll(this.scroll)
+        .child(v_flex()
+          .gap(5)
+          .child(h_flex().items_center().justify_between()
+            .child(div().text_size(12).text_color(t.muted).child("CPU 占用"))
+            .child(div().text_size(12).text_color(this.tone(t)).child(this.cpu === null ? "—" : `${cpu}%`)))
+          .child(this.bar(cpu, 100, this.tone(t), t, 6)))
+        .child(v_flex()
+          .gap(5)
+          .child(h_flex().items_center().justify_between()
+            .child(div().text_size(12).text_color(t.muted).child("物理内存"))
+            .child(div().text_size(12).text_color(t.foreground).child(total ? `${ff(used)} / ${ff(total)} GB` : "—")))
+          .child(this.bar(used, total || 1, used / (total || 1) >= 0.9 ? t.blocked : t.accent, t, 6)))
+        .child(h_flex().items_center().justify_between()
+          .child(div().text_size(11).text_color(t.dim).child("占用最高的进程"))
+          .child(div()
+            .id("metrics-refresh")
+            .px(7)
+            .py(2)
+            .rounded(5)
+            .text_size(11)
+            .text_color(t.dim)
+            .cursor_pointer()
+            .hover((s) => s.bg(t.hover).text_color(t.foreground))
+            .on_click(() => this.loadProcs(cx))
+            .child("刷新")))
+        .child(v_flex()
+          .gap(1)
+          .children(this.procs.length
+            ? this.procs.map((p) => h_flex()
+              .id(`proc-${p.pid}`)
+              .h(28)
+              .flex_none()
+              .px(8)
+              .gap(8)
+              .items_center()
+              .rounded(6)
+              .hover((s) => s.bg(t.hover))
+              .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).tooltip(`${p.name} (${p.pid})`).child(p.name))
+              .child(div().w(66).flex_none().text_size(11).text_color(p.mb >= 2048 ? t.working : t.dim).child(`${p.mb.toFixed(0)} MB`))
+              .child(div()
+                .id(`proc-stop-${p.pid}`)
+                .px(7)
+                .py(2)
+                .rounded(5)
+                .text_size(11)
+                .text_color(t.dim)
+                .cursor_pointer()
+                .hover((s) => s.bg(t.blocked).text_color(t.solid_foreground))
+                .tooltip("结束该进程")
+                .on_click(() => this.stop(p.pid, cx))
+                .child("结束")))
+            : [div().px(8).py(8).text_size(12).text_color(t.dim).child("读取中…")])));
+  }
+
+  render(cx) {
+    const t = theme();
+    return props()?.overlay ? this.popup(t, cx) : this.compact(t);
+  }
+}
