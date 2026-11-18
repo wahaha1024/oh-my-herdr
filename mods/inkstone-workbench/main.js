@@ -7,7 +7,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { spaces, agents, panes, run, openOverlay, exec, theme, shared, setShared, layout, window } from "herdr";
-import { sprite, glyph, assign, NAMES, FOLDER, WORKBENCH } from "./sprites.js";
+import { sprite, glyph, assign, NAMES, FOLDER } from "./sprites.js";
 
 const git = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
 const base = (path) => (path ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path || "~";
@@ -736,27 +736,24 @@ export default class Workbench extends View {
           .child(h_flex()
             .gap(8)
             .items_center()
-            .when(!paper, (el) => el.child(div()
+            .child(div()
               .size(24)
               .flex_none()
               .flex()
               .items_center()
               .justify_center()
-              .rounded(6)
-              .bg(t.accent)
-              .child(glyph(WORKBENCH, t.accent_foreground, { div, v_flex, h_flex }, 2))))
+              .rounded(7)
+              .bg(paper ? t.mark : t.accent)
+              .child(svg("mods/inkstone-chrome/ink/mark.svg").size(16).flex_none().text_color(paper ? t.ink : t.accent_foreground)))
             .child(v_flex()
-              .gap(2)
+              .gap(paper ? 0 : 1)
               .child(div()
                 .text_size(paper ? 15.5 : 18)
                 .line_height(paper ? "17px" : "19px")
                 .font_bold()
                 .text_color(inkOf(t, "ink", "foreground"))
                 .child("Spaces"))
-              .child(h_flex()
-                .gap(3)
-                .child(div().w(paper ? 26 : 32).h(2).rounded_full().bg(paper ? t.rule : t.accent))
-                .child(div().w(9).h(2).rounded_full().bg(paper ? "#c7d3e6" : tint(t.accent, "55"))))))
+              .child(svg("mods/inkstone-chrome/ink/squiggle.svg").w(46).h(6).ml(1).flex_none().text_color(paper ? t.down : t.accent))))
           .child(h_flex()
             .gap(6)
             .items_center()
