@@ -364,6 +364,8 @@ export default class Tabs extends View {
         .child(div().text_size(11).child(names[id]));
     };
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(PAPER(t) ? t.paper : t.chrome)
+      // 窗口按钮贴右边缘：系统标题栏去掉后（titlebar none），这排就是唯一的最小化/关闭入口。
+      .when(Boolean(w?.buttons), (el) => el.pr(6))
       .when(!PAPER(t), el => el.border_b(1).border_color(t.border))
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => this.wheel(e))
@@ -384,9 +386,10 @@ export default class Tabs extends View {
       .child(this.prChip(t))
       .child(this.waiting(t))
       .children(enabled.filter((id) => icons[id]).map((id) => panelButton(id)))
-      .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/inkstone-tabs/win-min.svg").size(16) : "−", () => run("window.minimize"), "最小化"))
+      .when(w?.buttons, el => el.child(h_flex().flex_none().gap(0)
+        .child(button("minimize", w.platform === "windows" ? svg("mods/inkstone-tabs/win-min.svg").size(16) : "−", () => run("window.minimize"), "最小化"))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/inkstone-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize"), w.maximized ? "还原窗口" : "最大化"))
-        .child(button("close-window", w.platform === "windows" ? svg("mods/inkstone-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"), "关闭窗口")))
+        .child(button("close-window", w.platform === "windows" ? svg("mods/inkstone-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"), "关闭窗口"))))
       // 纸感：标签条底边不是 1px 描边，而是铅笔压出来的一道横线（只在最底下露 2px）。
       .when(PAPER(t), el => el.relative().child(div().absolute().left(0).right(0).bottom(0).h(2).overflow_hidden()
         .child(image("mods/inkstone-chrome/ink/rule-h.svg").absolute().left(-12).top(-12).w(3864).h(26))));

@@ -1,6 +1,8 @@
 {
   "id": "ra0201554271d5d2b3386028b93e8d213",
   "type": "column",
+  "titlebar": "none",
+  "traffic_lights": [12, 16],
   "children": [
     {
       "id": "root",
@@ -321,11 +323,6 @@
         "width": 1,
         "color": "border"
       },
-      "titlebar": "none",
-      "traffic_lights": [
-        12,
-        16
-      ],
       "preview": "layouts/oh-my-herdr.png"
     }
   ],

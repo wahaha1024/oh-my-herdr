@@ -65,9 +65,9 @@ Both `inkstone-workbench` and `inkstone-tabs` hold their own copy — mods canno
 **Layout node tree** (`layouts/oh-my-herdr.json`), top to bottom:
 
 ```
-root            row    titlebar none, traffic_lights [12,16], bg canvas,
-                       terminal_padding [14,12], divider 1/border,
-                       terminal_menu inkstone-paste, theme {light:qingci, dark:xuanmo},
+layout root     column titlebar none, traffic_lights [12,16],
+                       terminal_menu inkstone-paste, theme {light:qingci, dark:xuanmo}
+root            row    bg canvas, terminal_padding [14,12], divider 1/border,
                        preview layouts/oh-my-herdr.png
 ├ sidebar       column 272 (min 44 max 420, bg canvas, resizable, window_drag false)
 │ ├ brand       block 52  window_drag, content {mod: inkstone-chrome}
@@ -137,5 +137,6 @@ root            row    titlebar none, traffic_lights [12,16], bg canvas,
 - **Do not swap the sprites for SVGs.** The 8×8 patterns are drawn as rectangles on purpose; a bell SVG rendered at 14px came out as a smooth blob with the pixel steps antialiased away. The same applies to the program icon: `image(...)` at 12px blurred it, at 16px (2× of 8 units) it is sharp.
 - **`programs.json` is a patch, not a file to copy blindly.** The installer only adds `omp` and leaves an existing entry alone; `pixel-icons/` must ship with it or the icon path dangles and Herdr falls back to its own glyph.
 - **`inkstone-edge`'s `mod.json` must stay `{ "place": "none" }`.** Any other `place` makes Herdr splice the block into the layout automatically, and deleting the mod then leaves a hole in the layout.
+- **`titlebar` and `traffic_lights` belong on the layout document's outermost node** — the same level as `id`, `type` and `children`. Put them on the inner `root` row and they are silently ignored: the OS titlebar keeps floating above the layout, `window().buttons` stays `false`, and the three − □ × in `inkstone-tabs` never render. Moved out, the titlebar disappears and minimize/maximize/close sit in the tab strip right after the panel buttons.
 - **Paper is gated on a theme slot, not a theme name.** Every paper branch reads `Boolean(theme().paper)` and falls back to ordinary slots, because the Looseleaf art is hardcoded light hex — vendored artwork cannot follow a dark theme. Keep the fallback branch free of expressions that would throw when the slot is missing (no `t.mark.slice(...)`, no `t.paper` arithmetic).
 - **The three parchment slices must agree to the pixel.** Brand, list and footer draw three crops of one 1600px sheet (`top`, `mid` offset `-520`, `foot`); a 1px difference in any `on_size_change` shows a seam band. The content layer paints `theme().paper` behind itself so the sheet's own gradient steps never show as a stripe. Rail mode (<160px) skips parchment entirely — a 44px torn edge stretches visibly.
