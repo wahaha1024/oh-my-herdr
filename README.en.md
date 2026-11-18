@@ -6,10 +6,10 @@ Default is qingci (light). xuanmo (dark) and the optional zhi (paper) are bundle
 
 中文说明见 [README.md](README.md).
 
-![qingci](preview.png)
-![xuanmo](preview-dark.png)
+![qingci](screenshot.png)
+![paper](screenshot-paper.png)
 
-> Both images are drawn to the layout's proportions to show structure — the real thing looks better once installed.
+> Real renders, not mockups: the sidebar is dragged to its 44px rail, the middle is two terminals side by side each with its own pane header, the page edge is torn, and the drawer sits on the files page. The terminal runs a demo repository — no real data. For xuanmo (dark), see `preview-dark.png` (a diagram).
 
 ## Why use it
 

@@ -6,10 +6,10 @@
 
 英文说明见 [README.en.md](README.en.md)。
 
-![月白](preview.png)
-![玄墨](preview-dark.png)
+![月白主题](screenshot.png)
+![纸墨主题](screenshot-paper.png)
 
-> 两张图按布局比例绘制，用来示意结构；实际观感以上机为准。
+> 真实渲染截图：侧栏拖成 44px 的图标轨，只留空间徽章；中间是左右分屏的两格终端，各带一个自绘窗格头，四周是撕边纸页；右侧抽屉停在文件页。终端里跑的是一个演示仓库，没有真实数据。深色的玄墨见 `preview-dark.png`（示意图）。
 
 ## 为什么用它
 
