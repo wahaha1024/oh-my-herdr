@@ -37,7 +37,7 @@ Copy-Item (Join-Path $From "layouts\oh-my-herdr.png") (Join-Path $dst "layouts\o
 Copy-Item (Join-Path $From "layouts\oh-my-herdr.png") (Join-Path $dst "preview.png") -Force
 
 # 主题
-Sync-Tree (Join-Path $From "themes") (Join-Path $dst "themes") { param($f) $f.Name -in @("qingci.json", "xuanmo.json") }
+Sync-Tree (Join-Path $From "themes") (Join-Path $dst "themes") { param($f) $f.Name -in @("qingci.json", "xuanmo.json", "zhi.json") }
 
 # 像素图标与程序表（OMP 显示 Codex 像素图标）
 Sync-Tree (Join-Path $From "pixel-icons") (Join-Path $dst "pixel-icons")

@@ -62,6 +62,10 @@ function label(tab, lead) {
 const PALETTE_LIGHT = ["#a84a50", "#8a5619", "#7d640c", "#357041", "#34618f", "#5f5399", "#805083"];
 const PALETTE_DARK = ["#f08a8a", "#f2a46a", "#e8c76a", "#7ecf86", "#6fb3ea", "#9a8ce6", "#c98ae6"];
 
+// 纸感只在定义了 paper 槽的主题下开启（见 themes/zhi.json）；其余主题原样走 GPUI 几何。
+const PAPER = (t) => Boolean(t.paper);
+const MARK = "#f8dc4c";
+
 function luminance(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? ""));
   if (!m) return 1;
@@ -304,7 +308,7 @@ export default class Tabs extends View {
       if (active >= 0) this.scroll.scroll_to_item(active);
     }
     const stop = (_e, cx) => cx.stop_propagation();
-    const button = (id, label, action, tip) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+    const button = (id, label, action, tip) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(PAPER(t) ? `${MARK}4d` : t.hover).text_color(t.foreground))
       .tooltip(tip ?? id).accessibility_label(tip ?? id)
       .on_mouse_down("left", stop).on_click(action).child(label);
     const item = (c, i) => {
@@ -315,8 +319,11 @@ export default class Tabs extends View {
         // 改名或状态点会改宽度、把活动标签挤出可见区：跟过去，但别再 notify 自己——
         // 每个标签尺寸一变就排一轮渲染，切换/重命名时会连环触发。
         .when(i <= active, el => el.on_size_change(() => this.scroll.scroll_to_item(active)))
-        .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
-        .hover(s => s.bg(t.hover))
+        .text_color(c.active ? t.foreground : t.muted)
+        .when(!PAPER(t), el => el.border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).hover(s => s.bg(t.hover)))
+        // 纸感：选中是一道荧光笔，边缘不是四次圆角而是四个不同的角，像手划出来的。
+        .when(PAPER(t), el => (c.active ? el.bg(`${MARK}9e`) : el).rounded_tl(3).rounded_tr(8).rounded_br(4).rounded_bl(9)
+          .hover(s => s.bg(c.active ? `${MARK}9e` : `${MARK}4d`)))
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
         .on_mouse_up("left", () => {
           const from = this.pressed; this.pressed = null;
@@ -347,8 +354,8 @@ export default class Tabs extends View {
     const panelButton = (id) => {
       const on = shownPanel(panel, enabled) === id;
       return h_flex().id(`panel-${id}`).h(26).flex_none().px(7).gap(5).items_center().rounded(6).cursor_pointer()
-        .bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
-        .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
+        .bg(on ? (PAPER(t) ? `${MARK}9e` : t.selected) : t.chrome).text_color(on ? t.foreground : t.muted)
+        .hover(s => s.bg(PAPER(t) ? `${MARK}4d` : t.hover)).on_mouse_down("left", stop)
         .on_click(() => {
           if (on) closePanel();
           else openPanel(id, layout());
@@ -356,7 +363,8 @@ export default class Tabs extends View {
         .child(svg(icons[id]).size(14).flex_none())
         .child(div().text_size(11).child(names[id]));
     };
-    return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+    return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(PAPER(t) ? t.paper : t.chrome)
+      .when(!PAPER(t), el => el.border_b(1).border_color(t.border))
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => this.wheel(e))
       // 当前空间的颜色点：和侧栏那一行、tab 数徽章是同一个颜色，终端区也有了归属。
@@ -378,6 +386,9 @@ export default class Tabs extends View {
       .children(enabled.filter((id) => icons[id]).map((id) => panelButton(id)))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/inkstone-tabs/win-min.svg").size(16) : "−", () => run("window.minimize"), "最小化"))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/inkstone-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize"), w.maximized ? "还原窗口" : "最大化"))
-        .child(button("close-window", w.platform === "windows" ? svg("mods/inkstone-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"), "关闭窗口")));
+        .child(button("close-window", w.platform === "windows" ? svg("mods/inkstone-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"), "关闭窗口")))
+      // 纸感：标签条底边不是 1px 描边，而是铅笔压出来的一道横线（只在最底下露 2px）。
+      .when(PAPER(t), el => el.relative().child(div().absolute().left(0).right(0).bottom(0).h(2).overflow_hidden()
+        .child(image("mods/inkstone-chrome/ink/rule-h.svg").absolute().left(-12).top(-12).w(3864).h(26))));
   }
 }

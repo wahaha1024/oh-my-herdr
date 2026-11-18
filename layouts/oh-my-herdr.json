@@ -17,7 +17,7 @@
                 "mod": "inkstone-chrome"
               },
               "size": {
-                "px": 46
+                "px": 52
               },
               "window_drag": true
             },
@@ -51,7 +51,7 @@
           },
           "min": 44,
           "max": 420,
-          "background": "chrome",
+          "background": "canvas",
           "resizable": true
         },
         {
@@ -84,33 +84,99 @@
               "type": "row",
               "children": [
                 {
-                  "id": "panel-body",
-                  "type": "block",
-                  "content": {
-                    "tab": "active",
-                    "pane": {
-                      "header": {
-                        "content": {
-                          "mod": "pane"
+                  "id": "page",
+                  "type": "column",
+                  "resizable": false,
+                  "children": [
+                    {
+                      "id": "page-top",
+                      "type": "block",
+                      "content": {
+                        "mod": "inkstone-edge",
+                        "props": {
+                          "side": "top"
+                        }
+                      },
+                      "size": {
+                        "px": 12
+                      }
+                    },
+                    {
+                      "id": "page-row",
+                      "type": "row",
+                      "resizable": false,
+                      "children": [
+                        {
+                          "id": "page-left",
+                          "type": "block",
+                          "content": {
+                            "mod": "inkstone-edge",
+                            "props": {
+                              "side": "left"
+                            }
+                          },
+                          "size": {
+                            "px": 12
+                          }
                         },
-                        "reveal": "always",
-                        "height": 30,
-                        "position": "top"
+                        {
+                          "id": "panel-body",
+                          "type": "block",
+                          "content": {
+                            "tab": "active",
+                            "pane": {
+                              "header": {
+                                "content": {
+                                  "mod": "inkstone-pane"
+                                },
+                                "reveal": "always",
+                                "height": 30,
+                                "position": "top"
+                              },
+                              "background": "background",
+                              "border": {
+                                "width": 0,
+                                "color": "#f8f5ee"
+                              },
+                              "focus": {
+                                "width": 2,
+                                "color": "accent"
+                              },
+                              "radius": 0,
+                              "gap": 1,
+                              "lone": true
+                            }
+                          }
+                        },
+                        {
+                          "id": "page-right",
+                          "type": "block",
+                          "content": {
+                            "mod": "inkstone-edge",
+                            "props": {
+                              "side": "right"
+                            }
+                          },
+                          "size": {
+                            "px": 12
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "page-bottom",
+                      "type": "block",
+                      "content": {
+                        "mod": "inkstone-edge",
+                        "props": {
+                          "side": "bottom"
+                        }
                       },
-                      "background": "background",
-                      "border": {
-                        "width": 1,
-                        "color": "border"
-                      },
-                      "focus": {
-                        "width": 1,
-                        "color": "accent"
-                      },
-                      "radius": 10,
-                      "gap": 8,
-                      "lone": true
+                      "size": {
+                        "px": 12
+                      }
                     }
-                  }
+                  ]
                 },
                 {
                   "id": "panel",
@@ -171,8 +237,12 @@
                   "resizable": true
                 }
               ],
-              "padding": 8,
-              "gap": 8
+              "padding": [
+                6,
+                6
+              ],
+              "gap": 8,
+              "background": "canvas"
             },
             {
               "id": "status",

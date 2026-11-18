@@ -1,6 +1,6 @@
 # Oh My Herdr
 
-A workbench layout for [Herdr](https://herdr.dev): spaces grouped by folder in the sidebar, each with a fixed colour; a collapsible drawer on the right for files and sessions; a status bar that keeps metrics in sight. Two themes: qingci (light) and xuanmo (dark).
+A workbench layout for [Herdr](https://herdr.dev): spaces grouped by folder in the sidebar, each with a fixed colour; a collapsible drawer on the right for files and sessions; a status bar that keeps metrics in sight. Default theme is qingci (light); xuanmo (dark) and zhi (paper) are bundled too — zhi stacks desk, parchment sidebar, torn-edge page and ink text into one paper look.
 
 中文说明见 [README.md](README.md).
 
@@ -52,7 +52,7 @@ Each machine needs Herdr's shipped `changes` / `workspace-status` / `pane` mods 
 
 1. `layouts/oh-my-herdr.json` → `~/.config/herdr-app/layouts/` (Windows: `C:\Users\<you>\.config\herdr-app\layouts\`).
 2. Every folder under `mods/` → the config dir's `mods/`.
-3. `themes/qingci.json`, `themes/xuanmo.json` → the config dir's `themes/`.
+3. `themes/qingci.json`, `themes/xuanmo.json`, `themes/zhi.json` → the config dir's `themes/`.
 4. Switch to it:
 
 ```sh
@@ -86,6 +86,8 @@ The palette exists twice — `mods/inkstone-workbench/main.js` and `mods/inkston
 
 `themes/qingci.json` (background `#e8f0ec`, foreground `#2b333e`, accent `#126e82`) and `themes/xuanmo.json` (background `#14131a`, foreground `#d4cec4`, accent `#619ac3`), each a full 16-colour ANSI set plus semantic slots. The layout declares `theme: { "light": "qingci", "dark": "xuanmo" }` and follows `appearance` in `settings.json`.
 
+`themes/zhi.json` (paper `#f8f5ee`, desk `#dad1bf`, ink `#2a2420`, highlighter `#f8dc4c`, blue-pencil bracket `#2c4f9e`) is an **optional third theme**, off by default: `herdr-app do app.theme '{"name":"zhi"}'`, or pick it in preferences. It adds 11 custom slots (`paper` / `desk` / `ink` / `pencil` / `rule` / `stroke` / `mark` / `bracket` / `up` / `down` / `seal`). Mods only test whether a `paper` slot exists — they never look at theme names — so any theme that defines `paper` gets the paper look, and themes that don't (qingci, xuanmo) fall back to plain GPUI geometry with no pale paper edges left behind.
+
 The preview images are regenerated from `preview.svg` and the two theme files:
 
 ```sh
@@ -110,6 +112,8 @@ mkprev.py                    generates preview.png / preview-dark.png
 mods/inkstone-chrome         brand row + footer rows
 mods/inkstone-workbench      folder/space/terminal list, rail mode, 8×8 pixel critters (sprites.js)
 mods/inkstone-tabs           tabs + panel buttons + window buttons
+mods/inkstone-edge           torn-edge slices around the terminal (paper themes only)
+mods/inkstone-pane           custom pane header: program, cwd, status badge, hover split/zoom/close
 mods/inkstone-files          file tree, path search, @path copy & jj/git marks
 mods/inkstone-sessions       multi-source sessions (search / filters / remote / copy cmd)
 mods/inkstone-favorites      favourites drawer
@@ -121,8 +125,9 @@ mods/inkstone-settings       preferences overlay
 mods/inkstone-paste          right-click paste in terminals
 mods/inkstone-menu           context menu for workbench rows and optional terminal menu
 mods/cockpit                 cockpit drawer
-themes/qingci.json           light
+themes/qingci.json           light (default)
 themes/xuanmo.json           dark
+themes/zhi.json              paper (optional: parchment sidebar, torn edges, highlighter)
 pixel-icons/codex.svg        the 8×8 Codex glyph OMP shows
 programs.json                program-table patch: omp → pixel-icons/codex.svg
 install.ps1 / install.sh     install (Windows / macOS·Linux)

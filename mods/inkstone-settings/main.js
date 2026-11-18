@@ -21,6 +21,7 @@ const SETTINGS_FILE = () => `${appHome()}/settings.json`;
 
 const THEMES = [
   { name: "qingci", label: "青瓷", hint: "月白釉底 · 亮" },
+  { name: "zhi", label: "纸", hint: "纸墨底 · 亮 · 撕边纸页" },
   { name: "xuanzhi", label: "宣纸", hint: "暖纸底 · 亮" },
   { name: "xuanzhi-dimmed", label: "宣纸 Dimmed", hint: "暖纸 · 降光" },
   { name: "xuanmo", label: "玄墨", hint: "松烟墨 · 暗" },
@@ -130,6 +131,16 @@ export default class InkstoneSettings extends View {
     run("layout.switch", { name: LAYOUT });
   }
 
+  // 空间标记：默认沿用上一版的像素精灵；打开后行首换成字母头像。
+  markAvatar() {
+    return shared("inkstone.spaces.mark") === "avatar";
+  }
+
+  setMarkAvatar(on, cx) {
+    setShared("inkstone.spaces.mark", on ? "avatar" : "sprite");
+    cx.notify();
+  }
+
   rightClick() {
     return this.doc?.terminal_menu === "inkstone-paste" ? "paste" : "menu";
   }
@@ -142,7 +153,7 @@ export default class InkstoneSettings extends View {
   }
 
   pickTheme(name, cx) {
-    const light = ["qingci", "xuanzhi", "xuanzhi-dimmed"].includes(name);
+    const light = ["qingci", "zhi", "xuanzhi", "xuanzhi-dimmed"].includes(name);
     if (this.doc) {
       this.doc.theme = { ...(this.doc.theme ?? {}), [light ? "light" : "dark"]: name };
       this.save(cx, true);
@@ -268,7 +279,8 @@ export default class InkstoneSettings extends View {
             .child(ligatures ? "连字 开" : "连字 关"))))
       .child(v_flex().w_full().gap(2)
         .child(this.heading(t, "工作台", "侧栏显示哪些内容"))
-        .child(this.toggle(t, "git-trees", "Git 工作树", "扫仓库工作树、显示分支标签；不用 git 时关掉更清爽", this.gitOn(), (_e, cx) => this.setGit(!this.gitOn(), cx))))
+        .child(this.toggle(t, "git-trees", "Git 工作树", "扫仓库工作树、显示分支标签；不用 git 时关掉更清爽", this.gitOn(), (_e, cx) => this.setGit(!this.gitOn(), cx)))
+        .child(this.toggle(t, "mark-avatar", "空间标记用头像", "关：上一版的像素精灵（默认）；开：字母头像", this.markAvatar(), (_e, cx) => this.setMarkAvatar(!this.markAvatar(), cx))))
       .child(v_flex().w_full().gap(2)
         .child(div().text_size(11).text_color(t.dim).child(`主题与右键写入 layouts/${LAYOUT}.json`))
         .child(div().text_size(11).text_color(t.dim).child("界面项写入 settings.json，Herdr 会热载"))

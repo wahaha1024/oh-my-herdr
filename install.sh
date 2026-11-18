@@ -49,6 +49,7 @@ put "$SRC/layouts/oh-my-herdr.png"  "$TARGET/layouts/oh-my-herdr.png"
 echo "themes/"
 put "$SRC/themes/qingci.json" "$TARGET/themes/qingci.json"
 put "$SRC/themes/xuanmo.json" "$TARGET/themes/xuanmo.json"
+put "$SRC/themes/zhi.json" "$TARGET/themes/zhi.json"
 
 echo "mods/"
 for d in "$SRC"/mods/*/; do

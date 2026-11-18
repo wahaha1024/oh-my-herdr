@@ -1,6 +1,6 @@
 # Oh My Herdr
 
-一扇给自己用的工作台：左边是「目录 → 空间 → 终端」三层列表，右边终端，右侧一个 380px 的抽屉（文件/变更/驾驶舱/会话/收藏），底部一条 28px 状态栏。空间自带颜色，扫一眼就知道自己在哪个项目、哪台机器。主题两套：月白（qingci）/ 玄墨（xuanmo）。
+一扇给自己用的工作台：左边是「目录 → 空间 → 终端」三层列表，右边终端，右侧一个 380px 的抽屉（文件/变更/驾驶舱/会话/收藏），底部一条 28px 状态栏。空间自带颜色，扫一眼就知道自己在哪个项目、哪台机器。默认主题月白（qingci），另带玄墨（xuanmo）与可选的纸墨（zhi）。
 
 ![Oh My Herdr](preview.png)
 
@@ -16,6 +16,7 @@
 - **中间**：终端，间距 8，圆角 10。
 - **右侧抽屉 380px**（默认藏起，点顶部面板按钮展开）：`inkstone-files`、`changes`、`cockpit`、`inkstone-sessions`、`inkstone-favorites` 五页。
 - **底部 28px**：`status-text` 占满剩余，右侧依次 `inkstone-metrics`（CPU/内存）、`inkstone-ports`（端口数）、`inkstone-inbox`（待处理数）、`inkstone-review`（审查）。
+- **纸墨（zhi）下多出四层**：桌面（`canvas` `#dad1bf`）→ 羊皮纸侧栏（brand / workbench / footer 三块各画同一张 `parchment-*.svg` 的一段，拼成一整页）→ 纸页（终端四周 `inkstone-edge` 撕边、自绘 `inkstone-pane` 窗格头、标签条底边用 `rule-h.svg` 裁 2px 铅笔线）→ 墨字。选中态不是实色底而是荧光笔 `#f8dc4c`（四角不等圆角），组头下面一条铅笔线，工作树左侧一条竖铅笔线，git 只在异常时留 `↑n` / `↓n`。切回月白/玄墨，所有 `PAPER ? … : …` 都走 fallback，退回原有 GPUI 几何。
 
 ## 怎么用
 
@@ -51,8 +52,8 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 
 ## 用到的东西
 
-- **布局节点**：root `row`（`titlebar: "none"`、`traffic_lights: [12,16]`、`theme: {light:"qingci",dark:"xuanmo"}`、`terminal_menu: "inkstone-paste"`、`preview`）→ `sidebar`（column，272，min 44，max 420）+ `work`（column：42px `inkstone-tabs` 块 + body row + 28px 状态栏 row）。body 里 `panel-body` 是 `{tab:"active"}` 的 block，`panel` 是 380px 的 column（`stack` id `panel-stack`，子页 inkstone-files/changes/cockpit/inkstone-sessions/inkstone-favorites）。
-- **自己的 mod**（14 个）：`inkstone-chrome`（品牌条 + footer）、`inkstone-workbench`（列表）、`inkstone-tabs`（标签 + 窗口按钮 + 面板按钮）、`inkstone-files`（文件树 + 搜索 + `@path` + `jj`/`git` 标记）、`inkstone-sessions`、`inkstone-favorites`、`inkstone-inbox`、`inkstone-metrics`、`inkstone-ports`、`inkstone-review`、`inkstone-settings`、`inkstone-paste`（右键即粘贴）、`inkstone-menu`（工作台与可选右键菜单）、`cockpit`。
+- **布局节点**：root `row`（`titlebar: "none"`、`traffic_lights: [12,16]`、`theme: {light:"qingci",dark:"xuanmo"}`、`terminal_menu: "inkstone-paste"`、`preview`）→ `sidebar`（column，272，min 44，max 420，背景 `canvas`）+ `work`（column：42px `inkstone-tabs` 块 + body row + 28px 状态栏 row）。body 是 `row`、padding `[6,6]`、gap 8、背景 `canvas`，里面一个 `page`（column）：`page-top` / `page-row`（`page-left` + `panel-body` + `page-right`）/ `page-bottom`，四条 12px 的 block 各挂一个 `inkstone-edge` 切片（`props.side` = top/bottom/left/right），把终端围成一张纸页。`panel-body` 是 `{tab:"active"}` 的 block，pane 帧为 `header: {content:{mod:"inkstone-pane"}, reveal:"always", height:30, position:"top"}`、`radius 0`、`border.width 0`、`gap 1`、`lone true`、`focus 2px accent`——窗格之间的 1px 缝透出 body 的桌面色。`panel` 是 380px 的 column（`stack` id `panel-stack`，子页 inkstone-files/changes/cockpit/inkstone-sessions/inkstone-favorites）。
+- **自己的 mod**（16 个）：`inkstone-chrome`（品牌条 + footer）、`inkstone-workbench`（列表）、`inkstone-tabs`（标签 + 窗口按钮 + 面板按钮）、`inkstone-edge`（终端四周的撕边切片）、`inkstone-pane`（自绘窗格头：程序名 / 目录 / 状态徽章 / 悬停按钮）、`inkstone-files`（文件树 + 搜索 + `@path` + `jj`/`git` 标记）、`inkstone-sessions`、`inkstone-favorites`、`inkstone-inbox`、`inkstone-metrics`、`inkstone-ports`、`inkstone-review`、`inkstone-settings`、`inkstone-paste`（右键即粘贴）、`inkstone-menu`（工作台与可选右键菜单）、`cockpit`。
 - **用到的 Herdr 自带资产**：`changes`、`workspace-status`、`pane`（及 `mods/files/*.svg` 图标）。
 - **herdr 函数**：`theme()`、`spaces()`、`panes()`、`terminals()`、`keys()`、`shared()` / `setShared()`、`layout()`、`exec()`、`run()`、`notify()`、`openOverlay()` / `closeOverlay()`、`props()`。
 - **命令**：`space.select`、`tab.select`、`tab.new`、`pane.focus`、`pane.split`、`pane.close`、`pane.zoom`、`agent.focus`、`terminal.open`、`terminal.kill`、`terminal.copy` / `terminal.paste`、`layout.select` / `layout.show` / `layout.hide` / `layout.resize`、`mod.open`、`app.theme`、`window.*`。
@@ -68,6 +69,9 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 - 图案、项目文件夹、铃铛都是 GPUI 矩形拼的，不走 svg；改图案只改 `sprites.js` 里的字符串数组（`.` 透空、`x` 主色、`o` 白、`k` 近黑），每行 8 列。
 - `programs.json` 是可选补丁：安装只加 `omp` 一条，已有 `omp` 条目原样保留；`pixel-icons/` 必须一起装，否则 `icon` 路径悬空，终端行与标签会退回默认图标。
 - 复制了 `gpui-kit.d.ts` 之外的全部资产；mod 目录里没有 `.d.ts` / `jsconfig.json`，编辑器里没有类型提示，运行不受影响。
+- `inkstone-edge` 的 `mod.json` 必须是 `{ "place": "none" }`：写别的值 Herdr 会把这块自动插进布局，删掉 mod 后布局就坏。
+- 纸感只由「主题里有没有 `paper` 槽」决定（`Boolean(theme().paper)`），mod 从不认主题名。`themes/zhi.json` 多带 11 个自定义槽（`paper` / `desk` / `ink` / `pencil` / `rule` / `stroke` / `mark` / `bracket` / `up` / `down` / `seal`）；没定义 `paper` 的主题自动走 fallback，不会留浅色纸边，也不会去取不存在的羊皮纸档（`nearest()` 取最近档，永不 404）。
+- 纸感资产约 2MB：`mods/inkstone-chrome/ink/`（39 个文件：羊皮纸 17 档、头像 11、墨线纸片 6、铅笔线 2、徽章 2、LICENSE）与 `mods/inkstone-edge/ink/`（8 片撕边 + LICENSE），都从 Looseleaf（MIT）搬来；`inkstone-pane` 另有 5 个 22px 图标。
 
 ## 装好了怎么验
 

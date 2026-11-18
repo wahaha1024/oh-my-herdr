@@ -1,6 +1,6 @@
 # Oh My Herdr
 
-一个给 [Herdr](https://herdr.dev) 用的工作台布局：侧栏按目录分组、每个空间固定配色，右侧可收起的抽屉装文件与会话，底部一条状态栏常驻指标。两套主题：月白（qingci）与玄墨（xuanmo）。
+一个给 [Herdr](https://herdr.dev) 用的工作台布局：侧栏按目录分组、每个空间固定配色，右侧可收起的抽屉装文件与会话，底部一条状态栏常驻指标。默认主题月白（qingci），另带深色玄墨（xuanmo）与纸墨（zhi）：桌面 → 羊皮纸侧栏 → 撕边纸页 → 墨字四层叠起来的一套纸感外观。
 
 英文说明见 [README.en.md](README.en.md)。
 
@@ -86,6 +86,8 @@ Herdr 自带的 `changes`、`workspace-status`、`pane`（及 `mods/files/*.svg`
 
 `themes/qingci.json`（月白：底 `#e8f0ec`、字 `#2b333e`、强调 `#126e82`）和 `themes/xuanmo.json`（玄墨：底 `#14131a`、字 `#d4cec4`、强调 `#619ac3`），都是完整 16 色 ANSI + 语义色槽。布局里 `theme: { "light": "qingci", "dark": "xuanmo" }`，跟随 `settings.json` 的 `appearance` 自动选。
 
+`themes/zhi.json`（纸墨：纸底 `#f8f5ee`、桌面色 `#dad1bf`、墨字 `#2a2420`、荧光笔 `#f8dc4c`、蓝铅笔括号 `#2c4f9e`）是**可选的第三套**，默认不启用：`herdr-app do app.theme '{"name":"zhi"}'` 或在偏好里切。它多带 11 个自定义色槽（`paper` / `desk` / `ink` / `pencil` / `rule` / `stroke` / `mark` / `bracket` / `up` / `down` / `seal`），mod 只按「有没有 `paper` 槽」判断纸感，不认识主题名——所以任何主题只要定义了 `paper` 就能借用这套外观，没定义的（月白、玄墨）自动退回普通 GPUI 几何，不留浅色纸边。
+
 `preview.png` / `preview-dark.png` 由 `preview.svg` + `mkprev.py` 按两个主题文件生成：
 
 ```sh
@@ -110,6 +112,8 @@ mkprev.py                    生成 preview.png / preview-dark.png
 mods/inkstone-chrome         品牌条 + 底部三行（footer props）
 mods/inkstone-workbench      目录/空间/终端列表，图标轨，8×8 像素图案（sprites.js）
 mods/inkstone-tabs           标签栏 + 面板按钮 + 窗口按钮
+mods/inkstone-edge           纸页四边的撕边切片（仅在定义了 paper 槽的主题下渲染）
+mods/inkstone-pane           自绘窗格头：程序名 / 目录 / 状态徽章 / 悬停出分裂·缩放·关闭
 mods/inkstone-files          文件树、索引搜索、@path 引用与 jj/git 状态
 mods/inkstone-sessions       多源会话抽屉（搜索 / 筛选 / 远程 / 复制命令）
 mods/inkstone-favorites      收藏抽屉
@@ -121,8 +125,9 @@ mods/inkstone-settings       偏好浮层
 mods/inkstone-paste          终端右键直接粘贴
 mods/inkstone-menu           工作台右键与标准终端中文菜单
 mods/cockpit                 驾驶舱抽屉
-themes/qingci.json           月白
+themes/qingci.json           月白（默认）
 themes/xuanmo.json           玄墨
+themes/zhi.json              纸墨（可选：羊皮纸侧栏 + 撕边纸页 + 荧光笔选中）
 pixel-icons/codex.svg        OMP 用的 Codex 像素图标（8×8）
 programs.json                程序表补丁：omp → pixel-icons/codex.svg
 install.ps1 / install.sh     安装（Windows / macOS·Linux）

@@ -10,9 +10,9 @@ A Herdr layout for someone who runs a dozen spaces across several repositories a
 
 The window has no OS titlebar (`"titlebar": "none"`); the layout draws its own chrome. Four regions:
 
-**Sidebar, left, 272px** (`min` 44, `max` 420, background `chrome`, `resizable: true`), a column of three blocks:
+**Sidebar, left, 272px** (`min` 44, `max` 420, background `canvas`, `resizable: true`), a column of three blocks. In a paper theme (`themes/zhi.json`) these three blocks each paint a slice of one parchment sheet — brand exposes the torn top edge, the list only the two side edges, the footer the bottom edge — so the column reads as a single page on a desk; in rail mode (below 160px) the parchment is dropped and the blocks go back to a flat `chrome` fill.
 
-- 46px brand strip (`inkstone-chrome`, `window_drag: true`): the layout name in 13px semibold next to a small mark, and to its right a search button and a collapse button.
+- 52px brand strip (`inkstone-chrome`, `window_drag: true`): the layout name in 13px semibold next to a small mark, and to its right a search button and a collapse button (46px and icon-only in non-paper themes).
 - The list (`inkstone-workbench`), filling the rest. Directory groups and spaces:
   - Group row, 27px: 11px chevron, 13px `folder.svg` tinted with the first space's colour (muted grey when the group holds no colour), 13px semibold name in `foreground`, and on the right a 10px `dim` count of the form `shown/total`. A 1px `border` rule, `mx(8) my(6)`, separates consecutive groups.
   - Space row, 30px, radius 7, `pl(10) pr(8) gap(6)`: a 16×16 badge (radius 4, 9px semibold, min-width 16, `px(3)`) carrying the 1-based index; then the space name at 14px in the space colour; then an 11px `dim` git branch and a 7px status mark. The selected row sits on a 10%-alpha wash of the space colour and the name turns semibold. Hover is `hover`. With nothing else to say a space shows a muted 12px second line instead of branch and status.
@@ -22,7 +22,7 @@ The window has no OS titlebar (`"titlebar": "none"`); the layout draws its own c
 **Work column, right**, a column of three:
 
 - 42px header block (`inkstone-tabs`, `window_drag: true`). Left: the tab strip — 30px tall tabs, radius 7, `px(11)`, 14px type, max width 200px, `selected` when active, an `π`/spinner prefix when an agent runs in that tab and a close button on hover. Then, after a 1px vertical rule, the panel buttons: 26px tall, `px(7) gap(5)`, a 14px icon plus an 11px Chinese label (文件 / 变更 / 会话 / 收藏 / 驾驶舱), the active page on `raised` with `foreground` text, others `muted`. Right of the strip: a 7px dot in the current space's colour (tooltip = space name), then the window buttons — minimise, maximise/restore, close — drawn as 10px vector strokes inside 26×26 hit areas, close turning `blocked` on hover, and the sidebar collapse button when the sidebar is wider than 160px.
-- Body, filling (`row`, `padding 8`, `gap 8`): `panel-body` is a block with `{ "tab": "active" }` holding the terminals (radius 10, `border` outline when a single pane, `gap 8` between panes), and `panel` is a 380px column (`min` 280, `max` 620, `resizable: true`, `px` 380) holding one `stack` with id `panel-stack` whose children are five blocks: `inkstone-files`, `changes`, `cockpit`, `inkstone-sessions`, `inkstone-favorites`. `hidden: true` on `panel` by default.
+- Body, filling (`row`, `padding [6,6]`, `gap 8`, background `canvas`): a `page` column holds `page-top`, `page-row` (`page-left` + `panel-body` + `page-right`), `page-bottom`. The four 12px side blocks each mount one `inkstone-edge` slice (`props.side` = top / bottom / left / right) so the terminal sits inside a torn paper edge; they render nothing in themes without a `paper` slot. `panel-body` is a block with `{ "tab": "active" }` holding the terminals through a frame of `header: { content: { mod: "inkstone-pane" }, reveal: "always", height: 30, position: "top" }`, `radius 0`, `border.width 0`, `focus 2px accent`, `gap 1`, `lone true` — the 1px gaps between panes let the desk colour through as a divider. `panel` is a 380px column (`min` 280, `max` 620, `resizable: true`, `px` 380) holding one `stack` with id `panel-stack` whose children are five blocks: `inkstone-files`, `changes`, `cockpit`, `inkstone-sessions`, `inkstone-favorites`. `hidden: true` on `panel` by default.
 - 28px status row (`chrome`): `workspace-status` growing, then four fixed blocks — `inkstone-metrics` 152px, `inkstone-ports` 64px, `inkstone-inbox` 84px, `inkstone-review` 88px.
 
 The root is a `row`, background `canvas`, `traffic_lights: [12, 16]`, `terminal_padding: [14, 12]`, `divider: { width: 1, color: "border" }`, `terminal_menu: "inkstone-paste"`, `theme: { "light": "qingci", "dark": "xuanmo" }`, `preview: "layouts/oh-my-herdr.png"`.
@@ -69,15 +69,22 @@ root            row    titlebar none, traffic_lights [12,16], bg canvas,
                        terminal_padding [14,12], divider 1/border,
                        terminal_menu inkstone-paste, theme {light:qingci, dark:xuanmo},
                        preview layouts/oh-my-herdr.png
-├ sidebar       column 272 (min 44 max 420, bg chrome, resizable, window_drag false)
-│ ├ brand       block 46  window_drag, content {mod: inkstone-chrome}
+├ sidebar       column 272 (min 44 max 420, bg canvas, resizable, window_drag false)
+│ ├ brand       block 52  window_drag, content {mod: inkstone-chrome}
 │ ├ sidebar-lists column
 │ │ ├ spaces    block content {mod: inkstone-workbench}
 │ │ └ footer    block 120 content {mod: inkstone-chrome, props {footer: true}}
 └ work          column
   ├ tabs        block 42 window_drag content {mod: inkstone-tabs}
-  ├ body        row padding 8 gap 8
-  │ ├ panel-body block {tab: "active"} content {mod: pane}
+  ├ body        row padding [6,6] gap 8, bg canvas
+  │ ├ page      column, weight 1
+  │ │ ├ page-top    block 12 content {mod: inkstone-edge, props {side: top}}
+  │ │ ├ page-row    row, weight 1
+  │ │ │ ├ page-left   block 12 content {mod: inkstone-edge, props {side: left}}
+  │ │ │ ├ panel-body  block {tab: "active"} content {mod: pane}
+  │ │ │ │   header {mod inkstone-pane, always, 30, top}, radius 0, border 0, gap 1, lone
+  │ │ │ └ page-right  block 12 content {mod: inkstone-edge, props {side: right}}
+  │ │ └ page-bottom block 12 content {mod: inkstone-edge, props {side: bottom}}
   │ └ panel     column 380 (min 280 max 620, resizable, hidden) → stack panel-stack
   │              active files; children: files {mod inkstone-files}, changes, cockpit,
   │              sessions {mod inkstone-sessions}, favorites {mod inkstone-favorites}
@@ -96,6 +103,8 @@ root            row    titlebar none, traffic_lights [12,16], bg canvas,
 | `inkstone-chrome` | brand strip and footer, one component with a `footer` prop | `layout()` (sidebar width), `shared("sidebar.width")`, `shared("sidebar.collapsed")` | `layout.resize`, `mod.open`, `app.help`, `space.new` |
 | `inkstone-workbench` | the list: groups, spaces, terminals, agents, rail mode | `spaces()`, `panes()`, `terminals()`, `layout()`, `shared("inkstone.spaceColors")` | `space.select`, `tab.select`, `pane.focus`, `agent.focus`, `tab.new` |
 | `inkstone-tabs` | tab strip, panel buttons, window buttons | `spaces()`, `panes()`, `shared("inkstone.git")`, `shared("inkstone.spaceColors")`, `layout()` | `tab.select`, `tab.close`, `tab.new`, `layout.select`, `layout.show`, `layout.hide`, `window.*`. |
+| `inkstone-edge` | one torn-paper slice per `props.side` (top / bottom / left / right) around the terminal page; renders an empty div unless the theme defines `paper` | `theme()`, `layout()` (panel frames) | — |
+| `inkstone-pane` | custom pane header: program icon + name, `~/`-folded cwd, working spinner / "待你处理" badge / done check, hover-only split-right / split-down / zoom / close buttons, pencil rule under it | `panes()`, `layout()`, `theme()` | `pane.focus`, `pane.split`, `pane.zoom`, `pane.close` |
 | `inkstone-files` | project file tree, path search, `@path` copy, `jj`/`git` marks | `spaces()`, `panes()`, `focused()`, `readTextFile`, `watchFolder`, `exec` | `cx.write_to_clipboard` |
 | `inkstone-sessions` | multi-source session drawer (search, filters, remote `{ on }`, copy cmd) | local/remote session dirs via `exec` (PowerShell / `sh`+`awk` / optional `sqlite3`), `terminals()`, `spaces()` | `space.select`, `tab.select`, `pane.focus`, `terminal.open` |
 | `inkstone-favorites` | favourites drawer | `shared("inkstone.favorites")`, `panes()` | `space.new`, `mod.open` |
@@ -110,8 +119,9 @@ root            row    titlebar none, traffic_lights [12,16], bg canvas,
 
 **Shipped mods/assets it uses:** `changes`, `workspace-status`, `pane`, plus `mods/files/*.svg` icons.
 **Themes:** `themes/qingci.json` — background `#e8f0ec`, foreground `#2b333e`, selection `#c7d9cf`, cursor `#126e82`; ANSI `#4f5b5a #c23142 #1a6840 #66462a #126e82 #813c85 #495c69 #7d8983` and bright `#a5b3ac #82111f #207f4c #b78b26 #11659a #894276 #134857 #8f9c96`; slots `surface #e1eae4`, `canvas #d9e3dc`, `chrome #e1eae4`, `popover #d9e3dc`, `raised #d9e3dc`, `hover #e2ebe5`, `selected #c7d9cf`, `border #afcdd0`, `input #edf4ef`, `muted #5f6b67`, `dim #646c73`, `accent #126e82`, `accent_foreground #f2f8f4`, `solid #126e82`, `ring #126e82`, `working #66462a`, `blocked #c23142`, `done #1a6840`, `idle #a5b3ac`. `themes/xuanmo.json` — background `#14131a`, foreground `#d4cec4`, selection `#332f46`, cursor `#619ac3`; ANSI opens `#3a3646 #e1505d #2bae85 #e2c027 #619ac3 #c08eaf` (16 in all); slots `surface #1a1922`, `canvas #0f0e14`, `chrome #1a1922`, `popover #22212c`, `raised #22212c`, `hover #24222e`, `border #273443`, `input #1e1d27`, `muted #8b8597`, `dim #827f7c`, `accent #619ac3`, `accent_foreground #14131a`, `working #e2c027`, `blocked #e1505d`, `done #2bae85`, `idle #6b6478`. No art or files beyond the theme schema.
+**Paper theme (optional):** `themes/zhi.json` — background `#f8f5ee`, foreground `#1f2328`, selection `#cfe3fb`, cursor `#0969da`, GitHub-Light 16-colour ANSI, canvas `#dad1bf`, chrome `#f8f2de`, selected `#f8e68a`, plus 11 custom slots: `paper #f8f5ee`, `desk #dad1bf`, `ink #2a2420`, `pencil #5a554e`, `rule #b2c3dc`, `stroke #8e887f`, `mark #f8dc4c`, `bracket #2c4f9e`, `up #3b7a4b`, `down #c2412d`, `seal #f8f2de`. Mods never check theme names — `Boolean(theme().paper)` is the whole switch — so the paper look is opt-in: the layout still says `{light: qingci, dark: xuanmo}` and zhi is picked with `app.theme` or the preferences overlay.
 **Programs run:** `git` / optional `jj` (branch, status, file index, worktree lookups via `exec`), `hc` (core queries); on Windows PowerShell (`Get-NetTCPConnection`, `Get-Process`, `Get-CimInstance`, JSONL scan, `where`); on macOS/Linux/remote machines `sh` + `awk` + `command -v`, optional `sqlite3`, `vm_stat`/`top`/`sysctl`/`ps` or `/proc`, `lsof`/`ss`, `open`/`xdg-open`, `kill`. No Python at runtime, no network.
-**Art:** small icons come from Herdr's own SVGs (`mods/files/file.svg`, `mods/changes/changes.svg`, `mods/workspace-chrome/*.svg`, `mods/inkstone-chrome/{terminal,pin,spinner}.svg` plus small stroke glyphs for window buttons drawn inline). Space sprites, the project folder and the header bell are GPUI rectangles from `sprites.js` / `bellGlyph`, not assets. One image ships: `pixel-icons/codex.svg` (8×8, `#7a9dff`), wired to OMP through `programs.json` as `"omp": { "icon": "pixel-icons/codex.svg", "tint": false }`.
+**Art:** small icons come from Herdr's own SVGs (`mods/files/file.svg`, `mods/changes/changes.svg`, `mods/workspace-chrome/*.svg`, `mods/inkstone-chrome/{terminal,pin,spinner}.svg` plus small stroke glyphs for window buttons drawn inline). Space sprites, the project folder and the header bell are GPUI rectangles from `sprites.js` / `bellGlyph`, not assets. One image ships: `pixel-icons/codex.svg` (8×8, `#7a9dff`), wired to OMP through `programs.json` as `"omp": { "icon": "pixel-icons/codex.svg", "tint": false }`. Paper mode adds ~2MB of SVGs taken from Looseleaf (MIT, license copied alongside): `mods/inkstone-chrome/ink/` holds 39 files — 17 parchment widths (144→400, step 16), 8 avatar discs + ring + 2 status dots, 6 ink-slip buttons, 2 pencil rules, 2 badges, LICENSE — and `mods/inkstone-edge/ink/` holds the 8 torn-edge pieces. Parchment is chosen by nearest width and stretched, so no requested width can 404.
 
 ## Watch out
 
@@ -126,3 +136,6 @@ root            row    titlebar none, traffic_lights [12,16], bg canvas,
 - The drawer starts hidden (`hidden: true` on `panel`); `openPanel` must therefore both select the page and show the node, and the page must be read from `stack.active` rather than tracked separately, or the buttons drift out of sync after a keyboard switch.
 - **Do not swap the sprites for SVGs.** The 8×8 patterns are drawn as rectangles on purpose; a bell SVG rendered at 14px came out as a smooth blob with the pixel steps antialiased away. The same applies to the program icon: `image(...)` at 12px blurred it, at 16px (2× of 8 units) it is sharp.
 - **`programs.json` is a patch, not a file to copy blindly.** The installer only adds `omp` and leaves an existing entry alone; `pixel-icons/` must ship with it or the icon path dangles and Herdr falls back to its own glyph.
+- **`inkstone-edge`'s `mod.json` must stay `{ "place": "none" }`.** Any other `place` makes Herdr splice the block into the layout automatically, and deleting the mod then leaves a hole in the layout.
+- **Paper is gated on a theme slot, not a theme name.** Every paper branch reads `Boolean(theme().paper)` and falls back to ordinary slots, because the Looseleaf art is hardcoded light hex — vendored artwork cannot follow a dark theme. Keep the fallback branch free of expressions that would throw when the slot is missing (no `t.mark.slice(...)`, no `t.paper` arithmetic).
+- **The three parchment slices must agree to the pixel.** Brand, list and footer draw three crops of one 1600px sheet (`top`, `mid` offset `-520`, `foot`); a 1px difference in any `on_size_change` shows a seam band. The content layer paints `theme().paper` behind itself so the sheet's own gradient steps never show as a stripe. Rail mode (<160px) skips parchment entirely — a 44px torn edge stretches visibly.
