@@ -1,9 +1,0 @@
-{
-  "global": {
-    "alt-shift-p": "mod.open:inkstone-settings",
-    "alt-shift-r": "mod.open:inkstone-review",
-    "alt-shift-m": "mod.open:inkstone-metrics",
-    "alt-shift-o": "mod.open:inkstone-ports",
-    "alt-shift-i": "mod.open:inkstone-inbox"
-  }
-}

@@ -113,54 +113,6 @@ else:
 PY
 fi
 
-echo "keys.json"
-if [ -z "$PY" ]; then
-  echo "  no python found — add the keys from keys.json by hand:"
-  cat "$SRC/keys.json"
-else
-  KEY_SRC="$SRC/keys.json" KEY_DST="$TARGET/keys.json" DRY="$DRY" "$PY" - <<'PY'
-import json, os, shutil, sys
-
-src, dst = os.environ["KEY_SRC"], os.environ["KEY_DST"]
-dry = os.environ.get("DRY")
-
-ours = json.load(open(src, encoding="utf-8")).get("global", {})
-cur = {}
-if os.path.exists(dst):
-    cur = json.load(open(dst, encoding="utf-8"))
-    if not isinstance(cur, dict):
-        sys.exit(f"  {dst} is not an object — left alone")
-glob = cur.setdefault("global", {})
-
-added, conflicts = {}, {}
-for k, v in ours.items():
-    if k in glob:
-        if glob[k] != v:
-            conflicts[k] = (glob[k], v)
-    else:
-        added[k] = v
-
-for k, (mine, theirs) in conflicts.items():
-    print(f"  conflict {k}: kept {mine} (this pack wants {theirs})")
-for k, v in added.items():
-    print(f"  add {k} -> {v}")
-
-if not added:
-    print("  nothing to add")
-else:
-    glob.update(added)
-    if dry:
-        print(f"  would write {dst}")
-    else:
-        if os.path.exists(dst):
-            shutil.copyfile(dst, dst + ".bak")
-        with open(dst, "w", encoding="utf-8") as f:
-            json.dump(cur, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        print(f"  wrote {dst}" + (" (backup: keys.json.bak)" if os.path.exists(dst + ".bak") else ""))
-PY
-fi
-
 echo
 echo "done. switch to it:"
 echo "  herdr-app do layout.switch '{\"name\":\"oh-my-herdr\"}'"

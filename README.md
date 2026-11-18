@@ -27,7 +27,7 @@
 
 ```powershell
 .\install.ps1 -DryRun     # 先看会写什么
-.\install.ps1             # 不覆盖已有文件；keys.json 只加缺的键，冲突只报不改
+.\install.ps1             # 不覆盖已有文件；programs.json 只加缺失的 omp 条目
 ```
 
 ### 用脚本（macOS / Linux / WSL）
@@ -38,7 +38,7 @@
 ./install.sh --target=DIR # 装到别的配置目录
 ```
 
-仅 `install.sh` 在自动合并 `keys.json` 时需要 `python3`（或 `python`）；没有时它会把要加的键直接打印出来，你手动加。布局和 14 个 mod 本身运行时不依赖 Python。
+仅 `install.sh` 在自动合并 `programs.json` 时需要 `python3`（或 `python`）；没有时它会把要加的 `omp` 条目直接打印出来，你手动加。布局和 14 个 mod 本身运行时不依赖 Python。
 
 `pixel-icons/` 与 `programs.json` 一起装：后者只往你的程序表里加一条 `omp`（图标指向 `pixel-icons/codex.svg`，`tint: false`）；已经有 `omp` 条目时原样保留，只提示一句。
 
@@ -53,8 +53,7 @@
 1. `layouts/oh-my-herdr.json` → `~/.config/herdr-app/layouts/`（Windows：`C:\Users\<你>\.config\herdr-app\layouts\`）。
 2. `mods/` 下每个文件夹 → 配置目录的 `mods/`。
 3. `themes/qingci.json`、`themes/xuanmo.json` → 配置目录的 `themes/`。
-4. `keys.json` 里的 `global` 段并进你自己的 `keys.json`（值冲突就自己挑）。
-5. 切过去：
+4. 切过去：
 
 ```sh
 herdr-app check mods/inkstone-workbench     # 每个 mod 都值得 check 一次
@@ -66,16 +65,6 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 ### 依赖
 
 Herdr 自带的 `changes`、`workspace-status`、`pane`（及 `mods/files/*.svg` 图标）；`inkstone-files` 用 `git`（或可选 `jj`）加 PowerShell / `sh` 列目录并建索引；`inkstone-sessions` 用 PowerShell（Windows）或 `sh` + `awk`（macOS / Linux / 远程机器）扫 OMP / Codex / Claude Code / Pi / 项目归档（有 `sqlite3` 时附带 OpenCode）会话目录（哪个不存在就跳过，不报错）；`inkstone-metrics` 用系统自带计数器；`inkstone-ports` 在 Windows 用 `Get-NetTCPConnection`，在 macOS / Linux 用 `lsof`（或 `ss`）。全部只在本机或已连远程机器跑，不额外联网，不依赖 Python。
-
-## 快捷键
-
-| 键 | 作用 |
-|---|---|
-| `alt-shift-p` | 偏好（主题、外观） |
-| `alt-shift-r` | 审查 |
-| `alt-shift-m` | 系统指标 |
-| `alt-shift-o` | 端口列表 |
-| `alt-shift-i` | 待处理列表 |
 
 ## 配色
 
@@ -136,7 +125,6 @@ themes/qingci.json           月白
 themes/xuanmo.json           玄墨
 pixel-icons/codex.svg        OMP 用的 Codex 像素图标（8×8）
 programs.json                程序表补丁：omp → pixel-icons/codex.svg
-keys.json                    五个 alt-shift 快捷键
 install.ps1 / install.sh     安装（Windows / macOS·Linux）
 refresh.ps1                  反向同步（把配置目录的最新文件抓回包）
 RECIPE.md                    从零重建的说明书（给你的 agent 用）

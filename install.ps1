@@ -1,4 +1,4 @@
-﻿# 把 Oh My Herdr 装进 Herdr 的配置目录：布局 + mods + 主题 + 快捷键。
+﻿# 把 Oh My Herdr 装进 Herdr 的配置目录：布局 + mods + 主题 + 程序图标。
 # 用法：
 #   .\install.ps1 -DryRun          # 只看会写什么，不动文件
 #   .\install.ps1                  # 不覆盖已有的布局/主题/mod
@@ -90,40 +90,6 @@ if (-not (Test-Path $progDst)) {
   }
 }
 
-# 快捷键：只加缺的，已有的不碰；值不同的列出来让人决定。
-$keysPath = Join-Path $Target "keys.json"
-$want = Get-Content (Join-Path $src "keys.json") -Raw | ConvertFrom-Json
-$have = Get-Content $keysPath -Raw | ConvertFrom-Json
-if (-not $have.global) { $have | Add-Member -NotePropertyName global -NotePropertyValue ([pscustomobject]@{}) }
-
-$added = @()
-$conflict = @()
-foreach ($p in $want.global.PSObject.Properties) {
-  $old = $have.global.PSObject.Properties[$p.Name]
-  if ($null -eq $old) { $added += $p.Name }
-  elseif ([string]$old.Value -ne [string]$p.Value) {
-    $conflict += ("{0}：现在是 {1}，本包要 {2}" -f $p.Name, $old.Value, $p.Value)
-  }
-}
-
-Write-Host ""
-Write-Host "快捷键 keys.json"
-if ($added.Count -eq 0) {
-  Write-Host "  没有要加的了。"
-} else {
-  foreach ($k in $added) { Write-Host ("  加上  " + $k) }
-  if (-not $DryRun) {
-    Copy-Item $keysPath "$keysPath.bak" -Force
-    foreach ($k in $added) {
-      $have.global | Add-Member -NotePropertyName $k -NotePropertyValue $want.global.$k
-    }
-    $json = $have | ConvertTo-Json -Depth 20
-    [System.IO.File]::WriteAllText($keysPath, $json, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Host "  原文件备份在 keys.json.bak"
-  }
-}
-foreach ($c in $conflict) { Write-Host ("  冲突  " + $c) -ForegroundColor Yellow }
-
 Write-Host ""
 Write-Host ("完成：写入 $copied 个文件，跳过 $skipped 个。")
 if ($DryRun) {
@@ -135,4 +101,3 @@ Write-Host ""
 Write-Host "接下来可以：" -ForegroundColor Green
 Write-Host "  herdr-app check mods/inkstone-workbench   # 每个 mod 都可以 check 一遍"
 Write-Host "  herdr-app do layout.switch '{""name"":""oh-my-herdr""}'"
-Write-Host "  Alt+Shift+P 偏好面板 / Alt+Shift+R 审查 / Alt+Shift+M 指标 / Alt+Shift+O 端口 / Alt+Shift+I 待处理"

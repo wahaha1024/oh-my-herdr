@@ -27,7 +27,7 @@ A workbench layout for [Herdr](https://herdr.dev): spaces grouped by folder in t
 
 ```powershell
 .\install.ps1 -DryRun     # see what it would write
-.\install.ps1             # never overwrites; keys.json only gains missing keys
+.\install.ps1             # never overwrites; programs.json only gains missing omp
 ```
 
 ### Script (macOS / Linux / WSL)
@@ -38,7 +38,7 @@ A workbench layout for [Herdr](https://herdr.dev): spaces grouped by folder in t
 ./install.sh --target=DIR # install somewhere else
 ```
 
-Only `install.sh` needs `python3` (or `python`) to merge `keys.json`; without one it prints the keys to add by hand. The layout and all 14 mods have zero runtime Python dependency.
+Only `install.sh` needs `python3` (or `python`) to merge `programs.json`; without one it prints the `omp` entry to add by hand. The layout and all 14 mods have zero runtime Python dependency.
 
 `pixel-icons/` and `programs.json` install together: the latter only adds one `omp` entry (icon `pixel-icons/codex.svg`, `tint: false`) to your program table; an existing `omp` entry is left as it is.
 
@@ -53,8 +53,7 @@ Each machine needs Herdr's shipped `changes` / `workspace-status` / `pane` mods 
 1. `layouts/oh-my-herdr.json` → `~/.config/herdr-app/layouts/` (Windows: `C:\Users\<you>\.config\herdr-app\layouts\`).
 2. Every folder under `mods/` → the config dir's `mods/`.
 3. `themes/qingci.json`, `themes/xuanmo.json` → the config dir's `themes/`.
-4. Merge the `global` section of `keys.json` into your own `keys.json` (on a conflict, pick one).
-5. Switch to it:
+4. Switch to it:
 
 ```sh
 herdr-app check mods/inkstone-workbench     # worth doing for every mod
@@ -66,16 +65,6 @@ Back is `ctrl-shift-l`; to undo, delete the files.
 ### Requirements
 
 Herdr's shipped `changes`, `workspace-status`, `pane` mods (and `mods/files/*.svg` icons); `inkstone-files` uses `git` (or optional `jj`) plus PowerShell/`sh`; `inkstone-sessions` uses PowerShell on Windows or `sh` + `awk` on macOS/Linux/remote machines to scan OMP / Codex / Claude Code / Pi / project-local archives (plus OpenCode when `sqlite3` is available); `inkstone-metrics` reads OS CPU/memory counters; `inkstone-ports` uses `Get-NetTCPConnection` on Windows and `lsof` (or `ss`) on macOS/Linux. Everything runs locally or over Herdr's configured remote machine, no extra network, no Python at runtime.
-
-## Keys
-
-| Key | Does |
-|---|---|
-| `alt-shift-p` | preferences (theme, appearance) |
-| `alt-shift-r` | review |
-| `alt-shift-m` | system metrics |
-| `alt-shift-o` | port list |
-| `alt-shift-i` | waiting list |
 
 ## Palette
 
@@ -136,7 +125,6 @@ themes/qingci.json           light
 themes/xuanmo.json           dark
 pixel-icons/codex.svg        the 8×8 Codex glyph OMP shows
 programs.json                program-table patch: omp → pixel-icons/codex.svg
-keys.json                    five alt-shift shortcuts
 install.ps1 / install.sh     install (Windows / macOS·Linux)
 refresh.ps1                  reverse-sync (pull the latest files back)
 RECIPE.md                    brief for rebuilding it from scratch

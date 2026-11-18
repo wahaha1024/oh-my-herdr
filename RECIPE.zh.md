@@ -29,21 +29,12 @@
 - **收藏抽屉**（`inkstone-favorites`）：`shared("inkstone.favorites")` 是 `[{name, folder}]`；「收藏当前」取当前空间的目录，行上「已打开」表示该目录正有空间开着。
 - **待处理**（`inkstone-inbox`）：状态栏 84px 紧凑块 + 400×320 overlay，列出 `blocked` 的智能体。
 - **右键即粘贴**：`terminal_menu: "inkstone-paste"`，终端里右键不弹菜单，直接把剪贴板打进被右键的终端（先 `pane.focus` 交回焦点，再 `terminal.paste`，最后关掉自己的 overlay）。`init()` 开头 `if (checking()) return`，所以 `herdr-app check` 不会碰剪贴板。
-- **快捷键**：
-
-  | 键 | 作用 |
-  |---|---|
-  | `alt-shift-p` | 偏好面板（主题、外观） |
-  | `alt-shift-r` | 审查 |
-  | `alt-shift-m` | 指标 |
-  | `alt-shift-o` | 端口 |
-  | `alt-shift-i` | 待处理 |
 
 ## 装法
 
 ```powershell
 .\install.ps1 -DryRun   # Windows：先看会写什么
-.\install.ps1           # 不覆盖已有文件；keys.json 只加缺的键，冲突会列出来
+.\install.ps1           # 不覆盖已有文件；programs.json 只加缺失的 omp 条目
 ```
 
 ```sh
