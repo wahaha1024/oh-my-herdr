@@ -38,19 +38,52 @@ function buildPsScan(target) {
     "$seen = @{}",
     "$rows = New-Object System.Collections.Generic.List[string]",
     "function Parse($line) { try { return ($line | ConvertFrom-Json) } catch { return $null } }",
+    "function ReadHeadTail($path, $len) {",
+    "  $list = New-Object System.Collections.Generic.List[string]",
+    "  try {",
+    "    $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)",
+    "    try {",
+    "      $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8, $true)",
+    "      for ($i = 0; $i -lt 25 -and -not $sr.EndOfStream; $i++) {",
+    "        $ln = $sr.ReadLine()",
+    "        if ($ln) { $list.Add($ln) }",
+    "      }",
+    "      if ($len -gt 65536 -and -not $sr.EndOfStream) {",
+    "        $tailBytes = [Math]::Min(65536, [int]$len)",
+    "        $fs.Seek(-$tailBytes, [System.IO.SeekOrigin]::End) | Out-Null",
+    "        $buf = New-Object byte[] $tailBytes",
+    "        $read = $fs.Read($buf, 0, $tailBytes)",
+    "        if ($read -gt 0) {",
+    "          $txt = [System.Text.Encoding]::UTF8.GetString($buf, 0, $read)",
+    "          $parts = $txt -split '\\r?\\n'",
+    "          $start = if ($tailBytes -lt $len) { 1 } else { 0 }",
+    "          for ($j = $start; $j -lt $parts.Length; $j++) {",
+    "            if ($parts[$j]) { $list.Add($parts[$j]) }",
+    "          }",
+    "        }",
+    "      } elseif (-not $sr.EndOfStream) {",
+    "        while (-not $sr.EndOfStream) {",
+    "          $ln = $sr.ReadLine()",
+    "          if ($ln) { $list.Add($ln) }",
+    "        }",
+    "      }",
+    "    } finally { $fs.Dispose() }",
+    "  } catch {}",
+    "  return $list",
+    "}",
     "function ReadJsonl($src, $f) {",
     "  if ($seen.ContainsKey($f.FullName)) { return }",
     "  $seen[$f.FullName] = $true",
     "  $id = ''; $ti = ''; $cwd = ''; $fu = ''",
-    "  if ($f.Length -le 65536) {",
-    "    $lines = Get-Content -LiteralPath $f.FullName -Encoding UTF8 -ErrorAction SilentlyContinue",
-    "  } else {",
-    "    $head = @(Get-Content -LiteralPath $f.FullName -TotalCount 25 -Encoding UTF8 -ErrorAction SilentlyContinue)",
-    "    $tail = @(Get-Content -LiteralPath $f.FullName -Tail 25 -Encoding UTF8 -ErrorAction SilentlyContinue)",
-    "    $lines = $head + $tail",
-    "  }",
+    "  $lines = ReadHeadTail $f.FullName $f.Length",
     "  foreach ($ln in $lines) {",
     "    if (-not $ln) { continue }",
+    "    if ($ln.Length -gt 131072) {",
+    "      $sub = $ln.Substring(0, 4096) + ' ' + $ln.Substring($ln.Length - 4096)",
+    "      if (-not $id -and $sub -match '\"id\"\\s*:\\s*\"([^\"]+)\"') { $id = $matches[1] }",
+    "      if (-not $cwd -and $sub -match '\"cwd\"\\s*:\\s*\"([^\"]+)\"') { $cwd = $matches[1].Replace('\\\\', '\\') }",
+    "      continue",
+    "    }",
     "    $o = Parse $ln",
     "    if ($null -eq $o) { continue }",
     "    if (-not $id) {",
@@ -142,14 +175,15 @@ function buildPsScan(target) {
 // 每条 JSON 首个出现的 id / cwd / 标题就够用了：取前 25 行，避免读大文件的整段历史。
 const AWK = [
   'BEGIN { sep = sprintf("%c", 31); id = ""; cwd = ""; ti = ""; fu = "" }',
-  "{",
-  '  if (id == "" && match($0, /"id"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "") id = s }',
-  '  if (id == "" && match($0, /"sessionId"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "") id = s }',
-  '  if (cwd == "" && match($0, /"cwd"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "") cwd = s }',
-  '  if ($0 ~ /"type"[ \\t]*:[ \\t]*"(title|title_change|custom-title|ai-title)"/ && match($0, /"(title|customTitle|aiTitle)"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "") ti = s }',
-  '  if (ti == "" && match($0, /"title"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "") ti = s }',
-  '  if (fu == "" && $0 ~ /"role"[ \\t]*:[ \\t]*"user"/ && match($0, /"text"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "" && substr(s, 1, 1) != "<") fu = substr(s, 1, 80) }',
-  "}",
+"{",
+'  ln = $0; if (length(ln) > 131072) ln = substr(ln, 1, 4096) " " substr(ln, length(ln) - 4095)',
+'  if (id == "" && match(ln, /"id"[ \t]*:[ \t]*"[^"]*"/)) { s = substr(ln, RSTART, RLENGTH); sub(/^[^:]*:[ \t]*"/, "", s); sub(/"$/, "", s); if (s != "") id = s }',
+'  if (id == "" && match(ln, /"sessionId"[ \t]*:[ \t]*"[^"]*"/)) { s = substr(ln, RSTART, RLENGTH); sub(/^[^:]*:[ \t]*"/, "", s); sub(/"$/, "", s); if (s != "") id = s }',
+'  if (cwd == "" && match(ln, /"cwd"[ \t]*:[ \t]*"[^"]*"/)) { s = substr(ln, RSTART, RLENGTH); sub(/^[^:]*:[ \t]*"/, "", s); sub(/"$/, "", s); if (s != "") cwd = s }',
+'  if (ln ~ /"type"[ \t]*:[ \t]*"(title|title_change|custom-title|ai-title)"/ && match(ln, /"(title|customTitle|aiTitle)"[ \t]*:[ \t]*"[^"]*"/)) { s = substr(ln, RSTART, RLENGTH); sub(/^[^:]*:[ \t]*"/, "", s); sub(/"$/, "", s); if (s != "") ti = s }',
+'  if (ti == "" && match(ln, /"title"[ \t]*:[ \t]*"[^"]*"/)) { s = substr(ln, RSTART, RLENGTH); sub(/^[^:]*:[ \t]*"/, "", s); sub(/"$/, "", s); if (s != "") ti = s }',
+'  if (fu == "" && ln ~ /"role"[ \t]*:[ \t]*"user"/ && match(ln, /"text"[ \t]*:[ \t]*"[^"]*"/)) { s = substr(ln, RSTART, RLENGTH); sub(/^[^:]*:[ \t]*"/, "", s); sub(/"$/, "", s); if (s != "" && substr(s, 1, 1) != "<") fu = substr(s, 1, 80) }',
+"}",
   'END { if (ti == "" && fu != "") ti = fu; if (id != "") printf "%s%s%s%s%s%s%s%s%s\\n", src, sep, m, sep, id, sep, ti, sep, cwd }',
 ].join("\n");
 
@@ -217,6 +251,7 @@ export default class Sessions extends View {
     this.list = [];
     this.loading = true;
     this.failed = false;
+    this.failReason = "";
     this.all = false;
     this.source = "all";
     this.query = "";
@@ -292,6 +327,8 @@ export default class Sessions extends View {
       .then((r) => {
         if (r?.code !== 0) {
           this.failed = true;
+          const err = String(r?.stderr ?? "").trim().split(/\r?\n/).filter(Boolean).pop() ?? "";
+          this.failReason = err ? `退出码 ${r?.code ?? "?"}：${err}` : `退出码 ${r?.code ?? "未知"}`;
           return;
         }
         const un = useWin ? (s) => s : (s) => String(s ?? "").replace(/\\(["\\])/g, "$1");
@@ -308,9 +345,11 @@ export default class Sessions extends View {
         }
         this.list = [...byKey.values()].sort((a, b) => b.m - a.m).slice(0, 120);
         this.failed = false;
+        this.failReason = "";
       })
-      .catch(() => {
+      .catch((e) => {
         this.failed = true;
+        this.failReason = String(e?.message || e || "执行异常");
       })
       .finally(() => {
         this.reloading = false;
@@ -654,8 +693,9 @@ export default class Sessions extends View {
 
   emptyState(t, hasFilter, scopedCount, cx) {
     if (this.failed) {
-      return div().p(10).text_size(12).text_color(t.blocked)
-        .child("扫描会话失败，点右上角「刷新」重试。");
+      return v_flex().p(10).gap(4)
+        .child(div().text_size(12).text_color(t.blocked).child("扫描会话失败，点右上角「刷新」重试。"))
+        .when(Boolean(this.failReason), (el) => el.child(div().text_size(11).text_color(t.dim).child(this.failReason)));
     }
     if (this.loading) {
       return div().p(10).text_size(12).text_color(t.dim).child("正在扫描会话…");
