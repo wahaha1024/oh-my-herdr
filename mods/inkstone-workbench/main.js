@@ -541,12 +541,12 @@ export default class Workbench extends View {
       .when(Boolean(q), (el) => el.child(div().pl(13).text_size(11).text_color(inkOf(t, "pencil", "muted")).truncate().child(q)));
   }
 
-  // 进行中：两行——在干什么 / 在哪个空间、什么程序、跑了多久。
-  flightRow(a, t, colors) {
+  // 进行中 / 已完成共用的一行：在干什么 / 在哪个空间、什么程序、跑了多久。
+  // accent 与状态词由调用方给：in flight 用绿 + running，concluded 按 done/idle 走绿或灰。
+  flightRow(a, t, colors, accent = FLOW_GREEN(t), word = "running") {
     const name = clean(a.title) || a.program?.name || a.app || a.address;
     const space = clean(a.space_name) || a.address;
     const icon = progIcon(a.program, 12, t.muted);
-    const accent = FLOW_GREEN(t);
     return v_flex()
       .id(`wb-fly-${a.address}`)
       .flex_none()
@@ -558,12 +558,12 @@ export default class Workbench extends View {
       .when(a.focused, (el) => swipeOn(t, el))
       .when(!a.focused, (el) => swipeHover(t, el))
       .tooltip(`${name}\n${statusLabel(a.status)} · ${a.tab_name ?? ""} · ${a.address}`)
-      .accessibility_label(`${name} 运行中`)
+      .accessibility_label(`${name} ${word}`)
       .on_click(() => this.openAgent(a))
       .child(h_flex()
         .gap(6)
         .items_center()
-        .child(svg("mods/inkstone-chrome/spinner.svg").size(12).flex_none().text_color(accent).spin(900))
+        .child(this.flowMark(a, t, accent))
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(name))
         .child(div().flex_none().text_size(10).text_color(t.dim).child(ago(sinceOf(a), this.now ?? Date.now()))))
       .child(h_flex()
@@ -572,8 +572,15 @@ export default class Workbench extends View {
         .items_center()
         .when(Boolean(icon), (el) => el.child(icon))
         .child(this.spaceChip(space, a.space, t, colors))
-        .child(div().flex_none().text_size(11).text_color(accent).child("running"))
+        .child(div().flex_none().text_size(11).text_color(accent).child(word))
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(a.program?.name ?? a.app ?? "")));
+  }
+
+  // 行首状态标记：在跑转圈、已完成打勾、空闲空心圈。
+  flowMark(a, t, accent) {
+    if (a.status === "done") return svg("mods/inkstone-chrome/circle-check.svg").size(12).flex_none().text_color(accent);
+    if (a.status === "working") return svg("mods/inkstone-chrome/spinner.svg").size(12).flex_none().text_color(accent).spin(900);
+    return div().size(12).flex_none().flex().items_center().justify_center().child(div().size(7).rounded_full().border(1).border_color(accent));
   }
 
   // 卡住的智能体在问什么：每 5 秒抓一次，结果进 shared，重绘时直接用。
@@ -923,6 +930,17 @@ export default class Workbench extends View {
       if (showFlight) {
         if (!running.length) rows.push(this.flowEmpty("nothing running", t));
         else for (const a of running) rows.push(this.flightRow(a, t, colors));
+      }
+      // 已收工的空闲会话：done 打勾走绿，idle 空心圈走灰，标题固定用灰，免得跟上面两栏抢注意力。
+      const concluded = list.filter((a) => a.status === "done" || a.status === "idle").sort((a, b) => b.seq - a.seq);
+      const showEnded = open.concluded !== false;
+      rows.push(this.flowHead("concluded", "Concluded", concluded.length, t.dim, t, showEnded, cx));
+      if (showEnded) {
+        if (!concluded.length) rows.push(this.flowEmpty("nothing yet", t));
+        else for (const a of concluded) {
+          const done = a.status === "done";
+          rows.push(this.flightRow(a, t, colors, done ? t.done : t.dim, done ? "done" : "idle"));
+        }
       }
     }
     const inner = v_flex()
