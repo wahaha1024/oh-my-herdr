@@ -60,7 +60,13 @@ for d in "$SRC"/mods/*/; do
   done
 done
 
-echo "keys.json"
+echo "pixel-icons/"
+if [ -d "$SRC/pixel-icons" ]; then
+  (cd "$SRC/pixel-icons" && find . -type f | sed 's|^\./||') | while read -r f; do
+    put "$SRC/pixel-icons/$f" "$TARGET/pixel-icons/$f"
+  done
+fi
+
 PY=""
 for cand in python3 python; do
   if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import json' >/dev/null 2>&1; then
@@ -69,6 +75,45 @@ for cand in python3 python; do
   fi
 done
 
+echo "programs.json"
+if [ -z "$PY" ]; then
+  echo "  no python found — copy pixel-icons/ beside herdr-app, then add this under \"programs\" by hand:"
+  echo '  "omp": { "icon": "pixel-icons/codex.svg", "tint": false }'
+else
+  PROG_SRC="$SRC/programs.json" PROG_DST="$TARGET/programs.json" DRY="$DRY" "$PY" - <<'PY'
+import json, os, shutil, sys
+
+src, dst = os.environ["PROG_SRC"], os.environ["PROG_DST"]
+dry = os.environ.get("DRY")
+
+ours = json.load(open(src, encoding="utf-8"))["programs"]["omp"]
+cur = {}
+if os.path.exists(dst):
+    try:
+        cur = json.load(open(dst, encoding="utf-8"))
+    except Exception as e:
+        sys.exit(f"  {dst} is not valid JSON ({e}) — left alone")
+    if not isinstance(cur, dict):
+        sys.exit(f"  {dst} is not an object — left alone")
+
+progs = cur.setdefault("programs", {})
+if "omp" in progs:
+    print(f"  skip omp (already {json.dumps(progs['omp'], ensure_ascii=False)})")
+else:
+    progs["omp"] = ours
+    if dry:
+        print(f"  would write {dst}")
+    else:
+        if os.path.exists(dst):
+            shutil.copyfile(dst, dst + ".bak")
+        with open(dst, "w", encoding="utf-8") as f:
+            json.dump(cur, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        print(f"  wrote {dst}" + (" (backup: programs.json.bak)" if os.path.exists(dst + ".bak") else ""))
+PY
+fi
+
+echo "keys.json"
 if [ -z "$PY" ]; then
   echo "  no python found — add the keys from keys.json by hand:"
   cat "$SRC/keys.json"

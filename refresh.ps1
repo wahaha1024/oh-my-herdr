@@ -39,6 +39,12 @@ Copy-Item (Join-Path $From "layouts\oh-my-herdr.png") (Join-Path $dst "preview.p
 # 主题
 Sync-Tree (Join-Path $From "themes") (Join-Path $dst "themes") { param($f) $f.Name -in @("qingci.json", "xuanmo.json") }
 
+# 像素图标与程序表（OMP 显示 Codex 像素图标）
+Sync-Tree (Join-Path $From "pixel-icons") (Join-Path $dst "pixel-icons")
+if (Test-Path (Join-Path $From "programs.json")) {
+  Copy-Item (Join-Path $From "programs.json") (Join-Path $dst "programs.json") -Force
+}
+
 # mods：所有 inkstone-* 加上 cockpit
 $dirs = Get-ChildItem (Join-Path $From "mods") -Directory | Where-Object { $_.Name -like "inkstone-*" -or $_.Name -eq "cockpit" }
 foreach ($d in $dirs) {

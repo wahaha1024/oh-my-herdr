@@ -56,6 +56,40 @@ foreach ($m in Get-ChildItem (Join-Path $src "mods") -Directory) {
 Write-Host "主题 themes/"
 Copy-Tree (Join-Path $src "themes") (Join-Path $Target "themes")
 
+Write-Host "像素图标 pixel-icons/"
+Copy-Tree (Join-Path $src "pixel-icons") (Join-Path $Target "pixel-icons")
+
+# programs.json：只加「OMP 用像素 Codex 图标」这一条，别人的程序表不动。
+$progSrc = Join-Path $src "programs.json"
+$progDst = Join-Path $Target "programs.json"
+Write-Host ""
+Write-Host "程序图标 programs.json"
+if (-not (Test-Path $progDst)) {
+  Write-Host "  写入  programs.json（OMP 显示像素 Codex 图标）"
+  $script:copied++
+  if (-not $DryRun) { Copy-Item $progSrc $progDst -Force }
+} else {
+  $pw = Get-Content $progSrc -Raw | ConvertFrom-Json
+  $ph = Get-Content $progDst -Raw | ConvertFrom-Json
+  if (-not $ph.programs) {
+    $ph | Add-Member -NotePropertyName programs -NotePropertyValue ([pscustomobject]@{})
+  }
+  $old = $ph.programs.PSObject.Properties["omp"]
+  if ($null -eq $old) {
+    Write-Host "  加上  programs.omp"
+    if (-not $DryRun) {
+      Copy-Item $progDst "$progDst.bak" -Force
+      $ph.programs | Add-Member -NotePropertyName omp -NotePropertyValue $pw.programs.omp
+      $json = $ph | ConvertTo-Json -Depth 20
+      [System.IO.File]::WriteAllText($progDst, $json, (New-Object System.Text.UTF8Encoding($false)))
+      Write-Host "  原文件备份在 programs.json.bak"
+    }
+  } else {
+    Write-Host ("  跳过  programs.omp 已存在（现在是 " + ($old.Value | ConvertTo-Json -Compress -Depth 5) + "）")
+    $script:skipped++
+  }
+}
+
 # 快捷键：只加缺的，已有的不碰；值不同的列出来让人决定。
 $keysPath = Join-Path $Target "keys.json"
 $want = Get-Content (Join-Path $src "keys.json") -Raw | ConvertFrom-Json

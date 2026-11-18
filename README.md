@@ -13,7 +13,8 @@
 
 ## 改了什么
 
-- **侧栏按目录分组**：组头（文件夹图标 + 计数 + 分隔线）、空间行、终端行三层缩进。空间带彩色数字徽章和彩色名字，颜色自动分配并记住，切主题只换明暗不换色相。
+- **侧栏按目录分组**：组头（像素文件夹 + 计数 + 分隔线）、空间行、终端行三层缩进。空间前面不是数字徽章，而是 8×8 像素小图案（15 个可选，按名字分配同一个，Alt+点击换下一个），颜色自动分配并记住，切主题只换明暗不换色相。
+- **像素图标**：项目行、空间行是同一套 8×8 格律（GPUI 矩形逐格画，边缘是硬的，不是缩放糊掉的矢量图）；`programs.json` 让 OMP 用 Codex 的像素图标；顶栏一个像素铃铛，只在有智能体等你时出现（待处理，或你不在时已完成），带数量，点一下跳到最急的那个。
 - **侧栏可折叠**：拖到 44px 变成图标轨，只剩彩色徽章；拖回来恢复。
 - **顶栏重排**：标签放大到 30px 高；右侧面板按钮带中文名；左侧一个小色点标出当前空间的颜色。
 - **五个抽屉页**：文件（`inkstone-files`）、变更、驾驶舱、会话、收藏，默认收起。文件页支持关键字检索（`git ls-files` / `jj file list` 优先）、行尾与预览顶栏一键复制 `@path`、以及 `jj` / `git` 变更标记；会话页无需 Python，支持关键字搜索、来源筛选药丸、当前目录直扫、远程机器扫描与一键复制恢复命令，已在终端跑着的标「已打开」，点一下直接切过去。
@@ -38,6 +39,8 @@
 ```
 
 仅 `install.sh` 在自动合并 `keys.json` 时需要 `python3`（或 `python`）；没有时它会把要加的键直接打印出来，你手动加。布局和 14 个 mod 本身运行时不依赖 Python。
+
+`pixel-icons/` 与 `programs.json` 一起装：后者只往你的程序表里加一条 `omp`（图标指向 `pixel-icons/codex.svg`，`tint: false`）；已经有 `omp` 条目时原样保留，只提示一句。
 
 ### 多台电脑
 
@@ -116,7 +119,7 @@ layouts/oh-my-herdr.png      布局预览（同 preview.png）
 preview.svg                  示意图源文件（两个主题共用，颜色按主题替换）
 mkprev.py                    生成 preview.png / preview-dark.png
 mods/inkstone-chrome         品牌条 + 底部三行（footer props）
-mods/inkstone-workbench      目录/空间/终端列表，图标轨
+mods/inkstone-workbench      目录/空间/终端列表，图标轨，8×8 像素图案（sprites.js）
 mods/inkstone-tabs           标签栏 + 面板按钮 + 窗口按钮
 mods/inkstone-files          文件树、索引搜索、@path 引用与 jj/git 状态
 mods/inkstone-sessions       多源会话抽屉（搜索 / 筛选 / 远程 / 复制命令）
@@ -131,6 +134,8 @@ mods/inkstone-menu           工作台右键与标准终端中文菜单
 mods/cockpit                 驾驶舱抽屉
 themes/qingci.json           月白
 themes/xuanmo.json           玄墨
+pixel-icons/codex.svg        OMP 用的 Codex 像素图标（8×8）
+programs.json                程序表补丁：omp → pixel-icons/codex.svg
 keys.json                    五个 alt-shift 快捷键
 install.ps1 / install.sh     安装（Windows / macOS·Linux）
 refresh.ps1                  反向同步（把配置目录的最新文件抓回包）

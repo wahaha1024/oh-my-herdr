@@ -1,6 +1,36 @@
 import { View, div, svg, image } from "gpui-kit";
-import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, exec, theme, window, shared, layout, settings } from "herdr";
+import { h_flex, v_flex, ScrollHandle } from "gpui-base";
+import { spaces, panes, agents, run, openOverlay, exec, theme, window, shared, layout, settings } from "herdr";
+
+// 8×8 像素铃铛，与侧栏空间图案同一套画法：GPUI 矩形逐格拼，边缘是硬的。
+// 不走 svg——矢量缩放会抗锯齿，8px 的铃铛会被糊成圆润的钟形。
+const BELL = [
+  "...xx...",
+  "..xxxx..",
+  ".xxxxxx.",
+  ".xxxxxx.",
+  "xxxxxxxx",
+  ".xxxxxx.",
+  "........",
+  "...xx...",
+];
+
+function bellGlyph(color, px = 2) {
+  const ink = { x: color };
+  return v_flex().flex_none().w(px * 8).h(px * BELL.length).children(
+    BELL.map((row) => {
+      const cells = [];
+      for (let i = 0; i < row.length; ) {
+        let j = i;
+        while (j < row.length && row[j] === row[i]) j++;
+        const cell = div().flex_none().w(px * (j - i)).h(px);
+        cells.push(row[i] === "." ? cell : cell.bg(ink[row[i]]));
+        i = j;
+      }
+      return h_flex().flex_none().h(px).children(cells);
+    }),
+  );
+}
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -221,6 +251,46 @@ export default class Tabs extends View {
       .when(this.prStale, el => el.child(div().text_size(10).text_color(t.dim).child("?")));
   }
 
+  // 顶部像素铃铛：只在有智能体等你（待处理，或你不在时已完成）时出现。
+  // 颜色分轻重（有 blocked 就是 blocked 色），数字是等你的总数；点一下到最急的那个。
+  waiting(t) {
+    const list = agents().filter((a) => a.status === "blocked" || a.status === "done");
+    if (!list.length) return div().flex_none();
+    const rank = (a) => (a.status === "blocked" ? 0 : 1);
+    const first = [...list].sort((a, b) => rank(a) - rank(b) || (b.seq ?? 0) - (a.seq ?? 0))[0];
+    const blocked = list.filter((a) => a.status === "blocked").length;
+    const tone = blocked ? t.blocked : t.done;
+    const tip = [
+      blocked ? `${blocked} 个待你处理` : null,
+      list.length > blocked ? `${list.length - blocked} 个已完成待查看` : null,
+      "点一下跳到最急的那个",
+    ].filter(Boolean).join(" · ");
+    return h_flex()
+      .id("inkstone-waiting")
+      .h(26)
+      .px(7)
+      .gap(5)
+      .flex_none()
+      .items_center()
+      .rounded(6)
+      .cursor_pointer()
+      .text_color(tone)
+      .hover((s) => s.bg(t.hover))
+      .tooltip(tip)
+      .accessibility_label(tip)
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click(() => {
+        // 与侧栏的智能体行一致：只在确实要换空间/标签时才切换，避免重放 scrollback。
+        const sp = spaces().find((s) => s.id === first.space);
+        if (sp && !sp.active) run("space.select", { id: first.space });
+        if (first.tab && !sp?.tabs?.find((x) => x.id === first.tab)?.active) run("tab.select", { id: first.tab });
+        if (first.pane) run("pane.focus", { pane: first.pane });
+        else if (first.address) run("agent.focus", { terminal: first.address });
+      })
+      .child(bellGlyph(tone))
+      .child(div().text_size(12).font_semibold().child(String(list.length)));
+  }
+
   render() {
     const t = theme();
     const space = spaces().find(p => p.active);
@@ -254,7 +324,7 @@ export default class Tabs extends View {
           else run("tab.select", { id: c.id });
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
-        .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
+        .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(16)))
         .child(div().max_w(200).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
@@ -304,6 +374,7 @@ export default class Tabs extends View {
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 }), "新建标签"))
       .when(Boolean(this.branch), el => el.child(this.branchChip(t)))
       .child(this.prChip(t))
+      .child(this.waiting(t))
       .children(enabled.filter((id) => icons[id]).map((id) => panelButton(id)))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/inkstone-tabs/win-min.svg").size(16) : "−", () => run("window.minimize"), "最小化"))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/inkstone-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize"), w.maximized ? "还原窗口" : "最大化"))

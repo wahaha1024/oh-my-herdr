@@ -13,7 +13,8 @@ A workbench layout for [Herdr](https://herdr.dev): spaces grouped by folder in t
 
 ## What changed
 
-- **Spaces grouped by folder.** Group headers (folder icon, count, rule), space rows, terminal rows — three levels of indent. Spaces carry a coloured number badge and a coloured name; colours are assigned automatically and remembered, and switching themes only swaps the light/dark step, not the hue.
+- **Spaces grouped by folder.** Group headers (pixel folder, count, rule), space rows, terminal rows — three levels of indent. Spaces lead with an 8×8 pixel critter instead of a number badge (15 to pick from, one per name, Alt+click to cycle); colours are assigned automatically and remembered, and switching themes only swaps the light/dark step, not the hue.
+- **Pixel icons.** Project rows and space rows share one 8×8 grid (drawn as GPUI rectangles, so edges stay hard instead of being blurred by scaling); `programs.json` gives OMP the Codex pixel glyph; a pixel bell in the header appears only when an agent waits on you (blocked, or done while you weren't looking), carries the count, and clicks through to the most urgent one.
 - **Sidebar folds to 44px** into a rail of coloured badges, and back.
 - **Top bar reworked.** Tabs are 30px tall; the panel buttons carry names; a small dot on the left shows the current space's colour.
 - **Five drawer pages** — files (`inkstone-files`), changes, cockpit, sessions, favourites — all closed by default. The files drawer adds fast path search (`git ls-files` / `jj file list` first), one-click `@path` copying in rows and previews, and `jj`/`git` status marks; the sessions drawer needs no Python and adds live search, source pills, current-folder & remote-machine scanning, and one-click resume-command copying, switching to live sessions instead of replaying history.
@@ -38,6 +39,8 @@ A workbench layout for [Herdr](https://herdr.dev): spaces grouped by folder in t
 ```
 
 Only `install.sh` needs `python3` (or `python`) to merge `keys.json`; without one it prints the keys to add by hand. The layout and all 14 mods have zero runtime Python dependency.
+
+`pixel-icons/` and `programs.json` install together: the latter only adds one `omp` entry (icon `pixel-icons/codex.svg`, `tint: false`) to your program table; an existing `omp` entry is left as it is.
 
 ### On a second machine
 
@@ -116,7 +119,7 @@ layouts/oh-my-herdr.png      layout preview (same as preview.png)
 preview.svg                  diagram source, shared by both themes
 mkprev.py                    generates preview.png / preview-dark.png
 mods/inkstone-chrome         brand row + footer rows
-mods/inkstone-workbench      folder/space/terminal list, rail mode
+mods/inkstone-workbench      folder/space/terminal list, rail mode, 8×8 pixel critters (sprites.js)
 mods/inkstone-tabs           tabs + panel buttons + window buttons
 mods/inkstone-files          file tree, path search, @path copy & jj/git marks
 mods/inkstone-sessions       multi-source sessions (search / filters / remote / copy cmd)
@@ -131,6 +134,8 @@ mods/inkstone-menu           context menu for workbench rows and optional termin
 mods/cockpit                 cockpit drawer
 themes/qingci.json           light
 themes/xuanmo.json           dark
+pixel-icons/codex.svg        the 8×8 Codex glyph OMP shows
+programs.json                program-table patch: omp → pixel-icons/codex.svg
 keys.json                    five alt-shift shortcuts
 install.ps1 / install.sh     install (Windows / macOS·Linux)
 refresh.ps1                  reverse-sync (pull the latest files back)

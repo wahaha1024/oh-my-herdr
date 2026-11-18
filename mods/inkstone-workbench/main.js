@@ -7,6 +7,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { spaces, agents, panes, run, openOverlay, exec, theme, shared, setShared, layout, window } from "herdr";
+import { sprite, glyph, assign, NAMES, FOLDER } from "./sprites.js";
 
 const git = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
 const base = (path) => (path ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path || "~";
@@ -217,6 +218,33 @@ export default class Workbench extends View {
     return kept;
   }
 
+  // 空间图案：8×8 像素精灵，替代原来的数字徽章。
+  // 存的是名字（slime/ghost/…），新空间拿用得最少的那个；删掉已经不存在的空间。
+  sprites() {
+    const kept = { ...(shared("inkstone.sprites") ?? {}) };
+    const list = spaces();
+    const ids = new Set(list.map((s) => s.id));
+    let changed = false;
+    for (const id of Object.keys(kept)) {
+      if (!ids.has(id) || !NAMES.includes(kept[id])) {
+        delete kept[id];
+        changed = true;
+      }
+    }
+    const next = assign(list, kept);
+    if (next.changed || changed) setShared("inkstone.sprites", next.out);
+    return next.out;
+  }
+
+  // Alt+点击图案：按 sprites.js 里的顺序换到下一个。
+  cycleSprite(id, cx) {
+    const all = { ...(shared("inkstone.sprites") ?? {}) };
+    const at = NAMES.indexOf(all[id]);
+    all[id] = NAMES[(at + 1) % NAMES.length];
+    setShared("inkstone.sprites", all);
+    cx.notify();
+  }
+
   // 序号 + 主题明暗 -> 具体颜色。
   fill(t, i) {
     const palette = luminance(t.background) < 0.5 ? PALETTE_DARK : PALETTE_LIGHT;
@@ -304,7 +332,7 @@ export default class Workbench extends View {
         if (!c.active) run("tab.select", { id: c.id });
       })
       .child(prog?.icon
-        ? (prog.tint ? svg(prog.icon).size(12).flex_none().text_color(t.dim) : image(prog.icon).size(12).flex_none())
+        ? (prog.tint ? svg(prog.icon).size(12).flex_none().text_color(t.dim) : image(prog.icon).size(16).flex_none())
         : svg("mods/inkstone-chrome/terminal.svg").size(12).flex_none().text_color(t.dim))
       .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(name));
   }
@@ -331,12 +359,11 @@ export default class Workbench extends View {
 
   // 空间行：30 高、14 号彩色名字 + tab 数徽章，夹在 26 高的项目头与 24 高的智能体行之间，
   // 三层用高度、字号、颜色分开。选中时徽章填实该空间的颜色，整行只留一层淡色底。
-  spaceRow({ space: s, folder, branch }, t, fill) {
+  spaceRow({ space: s, folder, branch }, t, fill, art) {
     const on = s.active;
     const has = s.status === "blocked" || s.status === "done" || s.status === "working";
     const folded = this.fold.has(s.id);
     const count = (s.tabs ?? []).length;
-    const ink = luminance(fill) < 0.5 ? "#f7faf8" : "#14131a";
     return h_flex()
       .id(`wb-s-${s.id}`)
       .h(30)
@@ -369,21 +396,24 @@ export default class Workbench extends View {
           this.toggleFold(s.id, cx);
         })
         .child(svg(folded ? "mods/workspace-chrome/chevron-right.svg" : "mods/workspace-chrome/chevron-down.svg").size(10).flex_none().text_color(t.dim)))
+      // 空间图案是它的固定头像：颜色分目录归属，形状分空间身份。
+      // Alt+点击换下一个（与 pixel-spaces 的快捷键一致），普通点击仍是切换空间。
       .child(div()
+        .id(`wb-sp-${s.id}`)
         .flex_none()
-        .min_w(16)
-        .px(3)
         .h(16)
         .flex()
         .items_center()
         .justify_center()
-        .rounded(4)
-        .bg(on ? fill : tint(fill, "26"))
-        .font_semibold()
-        .text_size(9)
-        .text_color(on ? ink : fill)
-        .tooltip(`${count} 个终端`)
-        .child(div().line_height("9px").child(String(count))))
+        .cursor_pointer()
+        .tooltip(`${count} 个终端 · Alt+点击换图案`)
+        .accessibility_label(`空间图案 ${art}`)
+        .on_mouse_down("left", (e, cx) => {
+          if (!e.modifiers.alt) return;
+          cx.stop_propagation();
+          this.cycleSprite(s.id, cx);
+        })
+        .child(sprite(art, fill, { div, v_flex, h_flex }, 2)))
       .child(div()
         .flex_1()
         .min_w(0)
@@ -392,11 +422,13 @@ export default class Workbench extends View {
         .text_color(fill)
         .when(on, (el) => el.font_semibold())
         .child(clean(s.name) || base(folder ?? s.folder) || "未命名空间"))
+      // 终端数从徽章里搬到这里：图案只剩身份，数量用小字跟在名字后。
+      .child(div().flex_none().text_size(10).text_color(t.dim).child(String(count)))
       .when(Boolean(branch), (el) => el.child(div().flex_none().max_w(96).truncate().text_size(11).text_color(t.dim).tooltip(branch ?? "").child(branch ?? "")))
       .when(has, (el) => el.child(dot(t, s.status, 7)));
   }
 
-  // 目录层用「文件夹图标 + 深色粗体名」，空间层用「数字徽章 + 彩色名」——
+  // 目录层用「文件夹图标 + 深色粗体名」，空间层用「像素图案 + 彩色名」——
   // 两层靠符号形状区分，不再靠字号大小去猜；组与组之间一条细分隔线。
   projectRow(g, t, fill) {
     const folded = this.fold.has(g.root);
@@ -416,16 +448,15 @@ export default class Workbench extends View {
       .on_click((_e, cx) => this.toggleFold(g.root, cx))
       .on_mouse_down("right", () => this.menu({ id: g.spaces.find((x) => x.space)?.space.id, folder: g.root }, "space"))
       .child(svg(folded ? "mods/workspace-chrome/chevron-right.svg" : "mods/workspace-chrome/chevron-down.svg").size(11).flex_none().text_color(t.dim))
-      .child(svg("mods/workspace-chrome/folder.svg").size(13).flex_none().text_color(fill ?? t.muted))
+      .child(glyph(FOLDER, fill ?? t.muted, { div, v_flex, h_flex }, 2))
       .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(base(g.root)))
       .child(div().flex_none().text_size(10).text_color(t.dim).child(`${open}/${g.spaces.length}`));
   }
 
-  // rail 模式：一个空间只剩它的彩色数字徽章，名字和分支收进 tooltip。
-  railSpace(s, t, fill) {
+  // rail 模式：一个空间只剩它的像素图案，名字、终端数与分支收进 tooltip。
+  railSpace(s, t, fill, art) {
     const on = Boolean(s.active);
     const count = (s.tabs ?? []).length;
-    const ink = luminance(fill) < 0.5 ? "#f7faf8" : "#14131a";
     return h_flex()
       .id(`wb-rs-${s.id}`)
       .h(28)
@@ -435,23 +466,16 @@ export default class Workbench extends View {
       .cursor_pointer()
       .when(on, (el) => el.bg(tint(fill, "1a")))
       .when(!on, (el) => el.hover((h) => h.bg(t.hover)))
-      .tooltip(`${clean(s.name) || base(s.folder) || "未命名空间"} · ${count} 个终端 · ${statusLabel(s.status)}`)
+      .tooltip(`${clean(s.name) || base(s.folder) || "未命名空间"} · ${count} 个终端 · ${statusLabel(s.status)}\nAlt+点击换图案`)
       .accessibility_label(`${clean(s.name) || "未命名空间"} · ${count} 个终端`)
       .on_click(() => (on ? null : run("space.select", { id: s.id })))
       .on_mouse_down("right", () => this.menu({ id: s.id }))
-      .child(div()
-        .min_w(20)
-        .px(4)
-        .h(20)
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(5)
-        .bg(on ? fill : tint(fill, "26"))
-        .font_semibold()
-        .text_size(10)
-        .text_color(on ? ink : fill)
-        .child(div().line_height("10px").child(String(count))));
+      .on_mouse_down("left", (e, cx) => {
+        if (!e.modifiers.alt) return;
+        cx.stop_propagation();
+        this.cycleSprite(s.id, cx);
+      })
+      .child(sprite(art, fill, { div, v_flex, h_flex }, 2));
   }
 
   // rail 模式下的目录头：一个 folder 图标，点一下折叠整组。
@@ -470,7 +494,7 @@ export default class Workbench extends View {
       .accessibility_label(`目录 ${base(g.root)}`)
       .on_click((_e, cx) => this.toggleFold(g.root, cx))
       .on_mouse_down("right", () => this.menu({ id: g.spaces.find((x) => x.space)?.space.id, folder: g.root }, "space"))
-      .child(svg("mods/workspace-chrome/folder.svg").size(14).flex_none().text_color(fill ?? t.muted));
+      .child(glyph(FOLDER, fill ?? t.muted, { div, v_flex, h_flex }, 2));
   }
 
   // 组下没有工作树可列时，说清是哪一种空（扫描中 / 不是仓库 / 只有主工作树），
@@ -490,6 +514,7 @@ export default class Workbench extends View {
     const t = theme();
     const groups = this.groups();
     const colors = this.colors();
+    const art = this.sprites();
     const total = agents().length;
     const needs = agents().filter((a) => a.status === "blocked").length;
     const rows = [];
@@ -501,7 +526,7 @@ export default class Workbench extends View {
         rows.push(this.railProject(g, t, fill));
         if (this.fold.has(g.root)) continue;
         for (const item of g.spaces) {
-          if (item.space) rows.push(this.railSpace(item.space, t, this.fill(t, colors[item.space.id] ?? 0)));
+          if (item.space) rows.push(this.railSpace(item.space, t, this.fill(t, colors[item.space.id] ?? 0), art[item.space.id] ?? "slime"));
         }
         continue;
       }
@@ -517,7 +542,7 @@ export default class Workbench extends View {
           continue;
         }
         const s = item.space;
-        rows.push(this.spaceRow(item, t, this.fill(t, colors[s.id] ?? 0)));
+        rows.push(this.spaceRow(item, t, this.fill(t, colors[s.id] ?? 0), art[s.id] ?? "slime"));
         if (this.fold.has(s.id)) continue;
         // 每个终端一行：跑着智能体的显示智能体（一个标签可能多个窗格），
         // 普通终端显示程序名——这样徽章上的 tab 数在下面都数得出来。
