@@ -2,7 +2,10 @@
   "id": "ra0201554271d5d2b3386028b93e8d213",
   "type": "column",
   "titlebar": "none",
-  "traffic_lights": [12, 16],
+  "traffic_lights": [
+    12,
+    16
+  ],
   "children": [
     {
       "id": "root",
@@ -24,15 +27,36 @@
               "window_drag": true
             },
             {
-              "id": "workbench",
-              "type": "block",
-              "content": {
-                "mod": "inkstone-workbench"
-              },
+              "id": "sidebar-lists",
+              "type": "column",
               "size": {
                 "weight": 1
               },
-              "min": 120
+              "min": 160,
+              "children": [
+                {
+                  "id": "workbench",
+                  "type": "block",
+                  "content": {
+                    "mod": "inkstone-workbench"
+                  },
+                  "size": {
+                    "weight": 1
+                  },
+                  "min": 90
+                },
+                {
+                  "id": "agents",
+                  "type": "block",
+                  "content": {
+                    "mod": "inkstone-agents"
+                  },
+                  "size": {
+                    "weight": 1
+                  },
+                  "min": 90
+                }
+              ]
             },
             {
               "id": "sidebar-footer",
@@ -193,13 +217,6 @@
                           "type": "block",
                           "content": {
                             "mod": "inkstone-files"
-                          }
-                        },
-                        {
-                          "id": "changes",
-                          "type": "block",
-                          "content": {
-                            "mod": "changes"
                           }
                         },
                         {

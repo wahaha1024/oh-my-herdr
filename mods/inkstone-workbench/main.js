@@ -6,10 +6,16 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, agents, panes, run, openOverlay, exec, hc, checking, theme, shared, setShared, layout, window } from "herdr";
+import { spaces, agents, panes, machines, run, openOverlay, exec, theme, shared, setShared, layout, window } from "herdr";
 import { sprite, glyph, assign, NAMES, FOLDER } from "./sprites.js";
 
 const git = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
+// 机器层（This computer / myserver…）在最上面，目录层往下缩进一档；
+// 下面几处行内的左内边距都按 IND 加，层次一眼能数出来。
+const IND = 10;
+const LOCAL = "This computer";
+// 缓存键带上机器：两台机器上同名目录不能共用一份 git 探测结果。
+const mkey = (on, path) => `${on ?? ""}\u0000${path ?? ""}`;
 const base = (path) => (path ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path || "~";
 const samePath = (a, b) => (a ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() === (b ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
@@ -46,73 +52,6 @@ function dot(t, status, size = 7) {
   return div().size(size).flex_none().rounded_full().border(1.5).border_color(status === "idle" ? t.idle : t.dim);
 }
 
-function duration(ms) {
-  if (!ms || ms < 0) return "";
-  const m = Math.floor(ms / 60000);
-  if (m < 1) return "刚刚";
-  if (m < 60) return `${m} 分钟`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时`;
-  return `${Math.floor(h / 24)} 天`;
-}
-
-// —— 侧栏底部「NEED YOU / IN FLIGHT」用到的纯函数 ——
-// 两个分区标题的语义色：待你处理用琥珀黄，在跑的用绿。
-// 纸感直接取主题自带的 working / up（纸底上刚好压得住）；非纸用青瓷那支琥珀，深底也够亮。
-const FLOW_YELLOW = (t) => (PAPER(t) ? t.working : "#b78b26");
-const FLOW_GREEN = (t) => (PAPER(t) ? (t.up ?? t.done) : t.done);
-// 相对时间：侧栏最窄只剩 200 多像素，放不下「3 分钟」，改成 3m / 2h / 1d。
-function ago(ms, now) {
-  if (!ms) return "";
-  const d = Math.max(0, now - ms);
-  if (d < 60000) return "刚刚";
-  if (d < 3600000) return `${Math.floor(d / 60000)}m`;
-  if (d < 86400000) return `${Math.floor(d / 3600000)}h`;
-  return `${Math.floor(d / 86400000)}d`;
-}
-
-// 这个智能体的标签从什么时候起在变：优先「开始干活」的时间，否则最后一次状态变化。
-function sinceOf(a) {
-  const tb = spaces().find((s) => s.id === a.space)?.tabs?.find((x) => x.id === a.tab);
-  return tb?.working_since ?? tb?.changed_at ?? null;
-}
-
-// 程序图标：单色 glyph 用 svg 上色，彩色图标用 image 原样贴。
-function progIcon(p, size, color) {
-  if (!p?.icon) return null;
-  return p.tint
-    ? svg(p.icon).size(size).flex_none().text_color(color)
-    : image(p.icon).w(size).h(size).flex_none();
-}
-
-// 被卡住的智能体在问什么：hc read 打出它的屏幕，取最后一条像问句的行。
-// 屏幕里混着框线、行号、状态栏、空提示符：先剥框线，再排除像代码的行（问句是自然语言）。
-// 只作卡片的一行说明，抓不到就留空串，不影响别的功能。
-const looksSentence = (l) => /\p{Script=Han}/u.test(l) || l.split(/\s+/).length >= 5;
-const looksCode = (l) => /[;{}<>]|=>|`|\breturn\b|\bconst\b|\bfunction\b|\bimport\b/.test(l);
-
-async function askedText(address) {
-  const r = await hc(["read", address]);
-  if (r.code !== 0 || !r.stdout) return "";
-  const lines = r.stdout.split("\n")
-    .map((l) => l
-      .replace(/^\s*\d+\s*[│┃|╎]\s*/u, "")
-      .replace(/^[\s│┃╭╰╮╯─━❯›>⎿⏺●•◆□☐✳*]+/u, "")
-      .replace(/[\s│┃╭╰╮╯─━]+$/u, "")
-      .trim())
-    .reverse();
-  const q = lines.find((l) =>
-    l.length >= 10
-    && /\p{L}/u.test(l)
-    && /[?？](\s|\)|。|$)/u.test(l)
-    && looksSentence(l)
-    && !looksCode(l)
-    && !l.startsWith("?")
-    && !/tok\/s|shortcuts/i.test(l));
-  if (!q) return "";
-  return q.length > 160 ? `${q.slice(0, 159)}…` : q;
-}
-
 // 每个空间一个固定的颜色：不同目录、不同空间靠名字就能分开。
 // 索引存进 shared，切明暗主题时只换亮度档，色相不变——认的还是同一个空间。
 // 浅色档按青瓷的 #e8f0ec 底选（最低 4.8:1），深色档按玄墨的 #14131a 底选（最低 6.3:1）。
@@ -136,8 +75,9 @@ function tint(hex, alpha) {
   return m ? `#${m[1]}${alpha}` : hex;
 }
 
-// 标题里常混着终端进度符号、Nerd Font 私有区图标和 emoji：本机字体没有这些字形，
-// 直接画出来就是豆腐块。这里统一剥掉，把空白压成单空格。
+// 标题里常混着终端进度符号、Nerd Font 私有区图标和 emoji。私有区图标（如 pi 的 󰕮）只有
+// Nerd 补丁字体才有字形，所以界面字体（settings.json 的 ui_font）要选 JetBrainsMono NF 一类；
+// 这里只剥 ANSI、变体选择符、零宽与 emoji，把空白压成单空格。
 function clean(text) {
   if (text == null) return "";
   return String(text)
@@ -212,18 +152,11 @@ export default class Workbench extends View {
   init(_props, cx) {
     this.scroll = ScrollHandle.new();
     this.fold = new Set(shared("inkstone.folded") ?? []);
+    this.foldM = new Set(shared("inkstone.foldedMachines") ?? []); // 折叠的机器："This computer" / 机器名
     this.repos = {}; // 目录 -> { root, branch } | null
     this.trees = {}; // 项目根 -> { at, list: [{ path, branch, main }] }
     this.refresh(cx);
     cx.timer.every(30000, (cx) => this.refresh(cx));
-    // 底部两块：相对时间的基准，以及被卡住智能体的提问原文（5 秒抓一次）。
-    this.now = Date.now();
-    this.asking = false;
-    cx.timer.every(30000, (cx) => {
-      this.now = Date.now();
-      cx.notify();
-    });
-    cx.timer.every(5000, (cx) => this.pollAsks(cx));
   }
 
   refresh(cx) {
@@ -242,7 +175,7 @@ export default class Workbench extends View {
     this.mode = "git";
     const ps = panes();
     const list = spaces();
-    const key = JSON.stringify(list.map((s) => [s.id, place(s, ps), s.machine ?? null]));
+    const key = JSON.stringify([list.map((s) => [s.id, place(s, ps), s.machine ?? null]), machines().map((m) => [m.name, m.layout])]);
     // 目录探测缓存 5 分钟、工作树列表 30 秒。只看 key 的话定时器形同虚设：
     // 空间没变就永远不再扫，新建的工作树要等下次增删空间才出现。
     const here = [...new Set(list.map((s) => place(s, ps)))];
@@ -262,11 +195,14 @@ export default class Workbench extends View {
     this.busy = true;
     cx.spawn(async (cx) => {
       try {
-        const folders = new Map(); // 目录 -> 机器
-        for (const s of list) folders.set(place(s, ps), s.machine ?? null);
-        for (const [folder, on] of folders) {
+        const folders = new Map(); // 机器::目录 -> { folder, on }
+        for (const s of list) {
+          const f = place(s, ps);
+          folders.set(mkey(s.machine ?? null, f), { folder: f, on: s.machine ?? null });
+        }
+        for (const [fk, { folder, on }] of folders) {
           if (!folder) continue;
-          const cached = this.repos[folder];
+          const cached = this.repos[fk];
           if (cached && (cached.value || Date.now() - cached.at < 300000)) continue;
           const top = await exec("git", [...git, "rev-parse", "--show-toplevel"], { cwd: folder, on }).catch(() => null);
           const br = top?.code === 0
@@ -277,18 +213,22 @@ export default class Workbench extends View {
             ? await exec("git", [...git, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"], { cwd: folder, on }).catch(() => null)
             : null;
           const [ahead, behind] = counts?.code === 0 ? counts.stdout.trim().split(/\s+/).map(Number) : [0, 0];
-          this.repos[folder] = {
+          this.repos[fk] = {
             at: Date.now(),
+            on,
             value: top?.code === 0
               ? { root: top.stdout.trim(), branch: br?.stdout.trim() || null, ahead: ahead || 0, behind: behind || 0 }
               : null,
           };
         }
-        const roots = new Set(Object.values(this.repos).map((r) => r?.value?.root).filter(Boolean));
-        for (const root of roots) {
-          const seen = this.trees[root];
+        // 项目根也按机器分开：两台机器上同名的仓库不能互相顶掉工作树列表。
+        const roots = new Map();
+        for (const r of Object.values(this.repos)) {
+          if (r?.value?.root) roots.set(mkey(r.on ?? null, r.value.root), { root: r.value.root, on: r.on ?? null });
+        }
+        for (const [rk, { root, on }] of roots) {
+          const seen = this.trees[rk];
           if (seen && Date.now() - seen.at < 30000) continue;
-          const on = spaces().find((s) => samePath(this.repos[place(s, panes())]?.value?.root, root))?.machine ?? null;
           const r = await exec("git", [...git, "worktree", "list", "--porcelain"], { cwd: root, on }).catch(() => null);
           const out = [];
           if (r?.code === 0) {
@@ -303,7 +243,7 @@ export default class Workbench extends View {
             }
             if (cur) out.push(cur);
           }
-          this.trees[root] = { at: Date.now(), list: out };
+          this.trees[rk] = { at: Date.now(), list: out };
         }
       } catch (e) {
         console.warn(`inkstone-workbench: ${e}`);
@@ -322,6 +262,28 @@ export default class Workbench extends View {
     else this.fold.add(id);
     setShared("inkstone.folded", [...this.fold]);
     cx.notify();
+  }
+
+  // 机器层自己的折叠：与本机/各服务器的空间互不影响。
+  machineKey(m) {
+    return m.name ?? LOCAL;
+  }
+
+  toggleMachine(m, cx) {
+    const key = this.machineKey(m);
+    if (this.foldM.has(key)) this.foldM.delete(key);
+    else this.foldM.add(key);
+    setShared("inkstone.foldedMachines", [...this.foldM]);
+    cx.notify();
+  }
+
+  // 新建空间：机器不同就从那台机器的 home 起（否则会把远程目录当成本机路径），
+  // 同机器沿用当前聚焦终端的目录。空串 = 这台电脑。
+  newSpace(on) {
+    const focused = spaces().find((s) => s.active)?.machine ?? null;
+    const args = { machine: on ?? "" };
+    if (focused !== (on ?? null)) args.folder = "";
+    run("space.new", args);
   }
 
   // 空间配色：只存调色板序号（0..6），切明暗主题时色相不变、只换亮度档。
@@ -382,17 +344,19 @@ export default class Workbench extends View {
     return palette[Math.abs(Number(i) || 0) % palette.length];
   }
 
-  // 项目 -> 工作树；不在 git 里的空间按目录单列。
-  groups() {
+  // 项目 -> 工作树；不在 git 里的空间按目录单列。缓存键带机器，两台机器上的同名目录不会串。
+  groupsOf(list) {
     const ps = panes();
-    const list = spaces();
     const byRoot = new Map();
     for (const s of list) {
       const here = place(s, ps);
-      const repo = gitOn() ? this.repos[here]?.value : null;
+      const on = s.machine ?? null;
+      const cached = this.repos[mkey(on, here)];
+      const repo = gitOn() ? cached?.value : null;
       const root = repo?.root ?? here ?? s.folder ?? "~";
-      if (!byRoot.has(root)) byRoot.set(root, { root, repo, spaces: [], trees: [] });
-      byRoot.get(root).spaces.push({
+      const rk = mkey(on, root);
+      if (!byRoot.has(rk)) byRoot.set(rk, { root, on, repo, spaces: [], trees: [] });
+      byRoot.get(rk).spaces.push({
         space: s,
         folder: here,
         branch: gitOn() ? (repo?.branch ?? s.branch) : null,
@@ -403,17 +367,39 @@ export default class Workbench extends View {
       });
     }
     for (const g of byRoot.values()) {
-      const seen = this.trees[g.root]?.list ?? [];
+      const cached = this.trees[mkey(g.on, g.root)];
+      const seen = cached?.list ?? [];
       g.trees = seen;
       // 还没扫过 / 不是仓库 / 只有主工作树：三种空态要说清，不能都写成「无」。
-      g.scanned = Boolean(this.trees[g.root]);
-      g.repo = g.repo ?? this.repos[g.root]?.value ?? null;
+      g.scanned = Boolean(cached);
+      g.repo = g.repo ?? this.repos[mkey(g.on, g.root)]?.value ?? null;
       // 工作树列出的路径里，没有空间打开的那些补在下面。
       for (const w of seen) {
-        if (!g.spaces.some((x) => samePath(x.folder, w.path))) g.spaces.push({ tree: w, folder: w.path, branch: w.branch });
+        if (!g.spaces.some((x) => samePath(x.folder, w.path))) g.spaces.push({ tree: w, folder: w.path, branch: w.branch, on: g.on });
       }
     }
     return [...byRoot.values()].sort((a, b) => base(a.root).localeCompare(base(b.root), "zh"));
+  }
+
+  groups() {
+    return this.groupsOf(spaces());
+  }
+
+  // 机器 -> 目录分组。本机与每台连着的服务器各占一层；还没列出/加载中的机器也留一行，
+  // 否则它上面的空间会凭空消失，也没地方在本机之外新建。
+  machinesView() {
+    const list = spaces();
+    const order = [];
+    for (const m of machines()) order.push({ name: m.name ?? null, state: m.layout });
+    for (const s of list) {
+      const n = s.machine ?? null;
+      if (!order.some((x) => (x.name ?? null) === n)) order.push({ name: n, state: "loading" });
+    }
+    order.sort((a, b) => (a.name === null ? -1 : b.name === null ? 1 : a.name.localeCompare(b.name, "zh")));
+    return order.map((m) => {
+      const mine = list.filter((s) => (s.machine ?? null) === (m.name ?? null));
+      return { name: m.name ?? null, state: m.state, spaces: mine, groups: this.groupsOf(mine), key: m.name ?? LOCAL };
+    });
   }
 
   // 一个智能体一行：状态点、名字、右侧「待处理 / 已完成」。
@@ -424,7 +410,7 @@ export default class Workbench extends View {
       .id(`wb-a-${a.address}`)
       .h(26)
       .flex_none()
-      .pl(38)
+      .pl(38 + IND)
       .pr(8)
       .gap(6)
       .items_center()
@@ -449,165 +435,6 @@ export default class Workbench extends View {
     run("agent.focus", { terminal: a.address });
   }
 
-  // —— Spaces 下面两块：NEED YOU / IN FLIGHT ——
-  // 分区头：箭头 + 标题 + 计数。标题用与「Spaces」同一套字（默认 UI 字体、粗体、墨色），
-  // 只把字号收到小一号；颜色只留在计数 pill 上，不再给标题上色。
-  flowHead(key, label, n, color, t, open, cx) {
-    return h_flex()
-      .id(`wb-flow-${key}`)
-      .h(30)
-      .flex_none()
-      .px(8)
-      .gap(6)
-      .items_center()
-      .rounded(6)
-      .cursor_pointer()
-      .hover((s) => s.bg(PAPER(t) ? "#f8dc4c26" : t.hover))
-      .tooltip(open ? `收起 ${label}` : `展开 ${label}`)
-      .accessibility_label(`${label} ${n}`)
-      .on_click(() => this.toggleFlow(key, cx))
-      .child(svg(open ? "mods/inkstone-chrome/chevron-down.svg" : "mods/inkstone-chrome/chevron-right.svg").size(10).flex_none().text_color(t.dim))
-      .child(div().flex_none().text_size(PAPER(t) ? 13 : 15).line_height(PAPER(t) ? "15px" : "17px").font_bold().text_color(color).child(label))
-      .when(n > 0, (el) => el.child(div().flex_none().px(5).rounded(8).bg(PAPER(t) ? tint(color, "22") : t.raised).text_size(10.5).text_color(PAPER(t) ? color : t.muted).child(String(n))))
-      .child(div().flex_1());
-  }
-
-  // 分区下没有任务时的那一行灰字。
-  flowEmpty(label, t) {
-    return div().h(20).px(14).flex_none().flex().items_center().text_size(11).text_color(t.dim).child(label);
-  }
-
-  // Spaces 与下面两块之间的分界：非纸用组间那条 1px 线；纸感用铅笔线（与项目头同一颜色）。
-  flowDivider(t) {
-    return div().flex_none().mx(8).my(6).h(1).bg(PAPER(t) ? tint(t.rule, "b8") : t.border);
-  }
-
-  toggleFlow(key, cx) {
-    const open = { needs: true, flight: true, ...(shared("inkstone.flow.open") ?? {}) };
-    open[key] = !open[key];
-    setShared("inkstone.flow.open", open);
-    cx.notify();
-  }
-
-  // 空间名 chip：颜色跟上面的空间行同源（spaceColors + 明暗档），不做哈希着色，
-  // 免得同一个空间在两处是两个颜色。
-  spaceChip(name, id, t, colors) {
-    const c = this.fill(t, colors[id] ?? 0);
-    return div().flex_none().max_w(110).truncate().px(5).py(1).rounded(3)
-      .bg(tint(c, PAPER(t) ? "1f" : "26"))
-      .text_size(11)
-      .text_color(c)
-      .child(name);
-  }
-
-  // 等你处理：一个卡住的智能体一张卡片——卡在哪、哪个空间、卡了多久、在问什么。
-  askCard(a, t, asks, colors) {
-    const name = clean(a.title) || a.program?.name || a.app || a.address;
-    const space = clean(a.space_name) || a.address;
-    const q = asks[a.address] ?? "";
-    const icon = progIcon(a.program, 12, t.muted);
-    const accent = FLOW_YELLOW(t);
-    return v_flex()
-      .id(`wb-ask-${a.address}`)
-      .flex_none()
-      .mx(2)
-      .mb(6)
-      .px(8)
-      .py(6)
-      .gap(3)
-      .rounded(8)
-      .bg(t.raised)
-      .border(1)
-      .border_color(tint(accent, PAPER(t) ? "55" : "44"))
-      .cursor_pointer()
-      .hover((s) => s.bg(tint(accent, PAPER(t) ? "12" : "1a")))
-      .tooltip(q ? `${name}\n${q}` : name)
-      .accessibility_label(`${name} 待处理`)
-      .on_click(() => this.openAgent(a))
-      .child(h_flex()
-        .gap(6)
-        .items_center()
-        .child(div().size(7).flex_none().rounded_full().bg(accent).loop("opacity", { from: 0.35, to: 1, period: 900 }))
-        .child(div().flex_1().min_w(0).truncate().text_size(13).font_weight(600).text_color(inkOf(t, "ink", "foreground")).child(name))
-        .child(div().flex_none().text_size(10).text_color(t.dim).child(ago(sinceOf(a), this.now ?? Date.now()))))
-      .child(h_flex()
-        .pl(13)
-        .gap(6)
-        .items_center()
-        .when(Boolean(icon), (el) => el.child(icon))
-        .child(this.spaceChip(space, a.space, t, colors))
-        .child(div().flex_none().text_size(11).font_weight(600).text_color(accent).child("asks you"))
-        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(a.program?.name ?? a.app ?? "")))
-      .when(Boolean(q), (el) => el.child(div().pl(13).text_size(11).text_color(inkOf(t, "pencil", "muted")).truncate().child(q)));
-  }
-
-  // 进行中 / 已完成共用的一行：在干什么 / 在哪个空间、什么程序、跑了多久。
-  // accent 与状态词由调用方给：in flight 用绿 + running，concluded 按 done/idle 走绿或灰。
-  flightRow(a, t, colors, accent = FLOW_GREEN(t), word = "running") {
-    const name = clean(a.title) || a.program?.name || a.app || a.address;
-    const space = clean(a.space_name) || a.address;
-    const icon = progIcon(a.program, 12, t.muted);
-    return v_flex()
-      .id(`wb-fly-${a.address}`)
-      .flex_none()
-      .px(8)
-      .py(4)
-      .gap(2)
-      .rounded(6)
-      .cursor_pointer()
-      .when(a.focused, (el) => swipeOn(t, el))
-      .when(!a.focused, (el) => swipeHover(t, el))
-      .tooltip(`${name}\n${statusLabel(a.status)} · ${a.tab_name ?? ""} · ${a.address}`)
-      .accessibility_label(`${name} ${word}`)
-      .on_click(() => this.openAgent(a))
-      .child(h_flex()
-        .gap(6)
-        .items_center()
-        .child(this.flowMark(a, t, accent))
-        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(name))
-        .child(div().flex_none().text_size(10).text_color(t.dim).child(ago(sinceOf(a), this.now ?? Date.now()))))
-      .child(h_flex()
-        .pl(18)
-        .gap(6)
-        .items_center()
-        .when(Boolean(icon), (el) => el.child(icon))
-        .child(this.spaceChip(space, a.space, t, colors))
-        .child(div().flex_none().text_size(11).text_color(accent).child(word))
-        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(a.program?.name ?? a.app ?? "")));
-  }
-
-  // 行首状态标记：在跑转圈、已完成打勾、空闲空心圈。
-  flowMark(a, t, accent) {
-    if (a.status === "done") return svg("mods/inkstone-chrome/circle-check.svg").size(12).flex_none().text_color(accent);
-    if (a.status === "working") return svg("mods/inkstone-chrome/spinner.svg").size(12).flex_none().text_color(accent).spin(900);
-    return div().size(12).flex_none().flex().items_center().justify_center().child(div().size(7).rounded_full().border(1).border_color(accent));
-  }
-
-  // 卡住的智能体在问什么：每 5 秒抓一次，结果进 shared，重绘时直接用。
-  pollAsks(cx) {
-    if (checking()) return;
-    const blocked = agents().filter((a) => a.status === "blocked").map((a) => a.address);
-    const stored = shared("inkstone.asks") ?? {};
-    if (!blocked.length) {
-      if (Object.keys(stored).length) setShared("inkstone.asks", {});
-      return;
-    }
-    if (this.asking) return;
-    this.asking = true;
-    cx.spawn(async () => {
-      const next = {};
-      for (const address of blocked) {
-        try {
-          next[address] = await askedText(address);
-        } catch {
-          next[address] = "";
-        }
-      }
-      this.asking = false;
-      if (JSON.stringify(next) !== JSON.stringify(stored)) setShared("inkstone.asks", next);
-    });
-  }
-
   // 没跑智能体的终端也要有自己一行：否则徽章上的 tab 数在下面找不到对应的行。
   termRow(s, c, t) {
     const ps = panes();
@@ -618,7 +445,7 @@ export default class Workbench extends View {
       .id(`wb-tab-${c.id}`)
       .h(26)
       .flex_none()
-      .pl(38)
+      .pl(38 + IND)
       .pr(8)
       .gap(6)
       .items_center()
@@ -644,7 +471,7 @@ export default class Workbench extends View {
       .h(26)
       .flex_none()
       .relative()
-      .ml(20)
+      .ml(20 + IND)
       .pl(6)
       .pr(8)
       .gap(6)
@@ -658,7 +485,7 @@ export default class Workbench extends View {
         .child(image("mods/inkstone-chrome/ink/rule-v.svg").absolute().left(-12).top(-12 - n * 33).w(26).h(2424))))
       .cursor_pointer()
       .tooltip(`${w.folder}\n未打开 · 点一下在此工作树中新建空间`)
-      .on_click(() => run("space.new", { folder: w.folder, name: base(w.folder) }))
+      .on_click(() => run("space.new", { folder: w.folder, name: base(w.folder), machine: w.on ?? "" }))
       .child(svg("mods/workspace-chrome/git-branch.svg").size(11).flex_none().text_color(t.dim))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(base(w.folder)))
       .child(div().flex_none().text_size(10).text_color(t.dim).child(w.branch ?? ""));
@@ -676,7 +503,7 @@ export default class Workbench extends View {
       .id(`wb-s-${s.id}`)
       .h(30)
       .flex_none()
-      .pl(10)
+      .pl(10 + IND)
       .pr(8)
       .gap(6)
       .items_center()
@@ -755,6 +582,63 @@ export default class Workbench extends View {
       .when(g.behind > 0, (el) => el.child(div().flex_none().font_semibold().text_color(inkOf(t, "down", "blocked")).child(`↓${g.behind}`)));
   }
 
+  // 机器层：This computer / 机器名，压在所有目录之上。左侧图标，右侧「在这台机器新建空间」、
+  // 连接状态点、折叠箭头——只有这一层不缩进，目录与空间都往下让一档。
+  machineRow(m, t, cx) {
+    const folded = this.foldM.has(m.key);
+    const open = m.spaces.length;
+    const tone = m.state === "unavailable" ? t.blocked : m.state === "ready" ? t.accent : t.dim;
+    const stateWord = m.state === "unavailable" ? "连不上" : m.state === "ready" ? "已连接" : "加载中";
+    return h_flex()
+      .id(`wb-m-${m.key}`)
+      .h(26)
+      .flex_none()
+      .pl(8)
+      .pr(8)
+      .gap(6)
+      .items_center()
+      .rounded(6)
+      .cursor_pointer()
+      .hover((h) => h.bg(PAPER(t) ? "#f8dc4c4d" : t.hover))
+      .tooltip(`${m.name ?? "本机"} · ${stateWord}`)
+      .accessibility_label(`${m.key} ${open} 个空间`)
+      .on_click((_e, c) => this.toggleMachine(m, c))
+      .child(svg(m.name ? "mods/inkstone-chrome/server.svg" : "mods/inkstone-chrome/monitor.svg").size(13).flex_none().text_color(t.muted))
+      .child(div()
+        .flex_1()
+        .min_w(0)
+        .truncate()
+        .cursor_pointer()
+        .text_size(12.5)
+        .font_semibold()
+        .text_color(inkOf(t, "ink", "muted"))
+        .on_click((_e, c) => {
+          c.stop_propagation();
+          this.toggleMachine(m, c);
+        })
+        .child(m.key))
+      .child(div().flex_none().cursor_pointer().text_size(10).text_color(t.dim).child(String(open)))
+      .child(div()
+        .id(`wb-mn-${m.key}`)
+        .size(18)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(4)
+        .cursor_pointer()
+        .hover((h) => h.bg(PAPER(t) ? "#f8dc4c4d" : t.hover))
+        .tooltip(m.name ? `在 ${m.key} 上新建空间` : "在本机新建空间")
+        .accessibility_label(`在 ${m.key} 上新建空间`)
+        .on_click((_e, c) => {
+          c.stop_propagation();
+          this.newSpace(m.name);
+        })
+        .child(svg("mods/workspace-chrome/plus.svg").size(12).flex_none().text_color(t.muted)))
+      .child(div().size(6).flex_none().rounded_full().bg(tone))
+      .child(svg(folded ? "mods/workspace-chrome/chevron-right.svg" : "mods/workspace-chrome/chevron-down.svg").size(10).flex_none().text_color(t.dim));
+  }
+
   // 目录层用「文件夹图标 + 深色粗体名」，空间层用「标记 + 彩色名」——
   // 两层靠符号形状区分；纸感下项目头下面一条铅笔线，组与组之间不再另加灰线。
   projectRow(g, t, fill) {
@@ -764,7 +648,8 @@ export default class Workbench extends View {
       .id(`wb-p-${g.root}`)
       .h(27)
       .flex_none()
-      .px(8)
+      .pl(8 + IND)
+      .pr(8)
       .gap(6)
       .items_center()
       .rounded(6)
@@ -835,7 +720,7 @@ export default class Workbench extends View {
     else if (!g.scanned) text = "正在扫描工作树…";
     else if (g.trees.length <= 1) text = "没有其他工作树 · 右键项目新建";
     if (!text) return null;
-    return div().pl(30).pr(8).py(2).text_size(11).text_color(t.dim).child(text);
+    return div().pl(30 + IND).pr(8).py(2).text_size(11).text_color(t.dim).child(text);
   }
 
   // 新建空间的墨线纸片：一张手绘方片，悬停换描深一档（Looseleaf 的 ib-c）。
@@ -851,7 +736,7 @@ export default class Workbench extends View {
         this.newLit = h;
         cx.notify();
       })
-      .on_click(() => run("space.new"))
+      .on_click(() => this.newSpace(null))
       .tooltip("新建空间")
       .accessibility_label("新建空间")
       .child(image(`mods/inkstone-chrome/ink/ib-c${lit ? "-on" : ""}.svg`).absolute().left(-12).top(-12).w(52).h(52))
@@ -861,6 +746,7 @@ export default class Workbench extends View {
   render(cx) {
     const t = theme();
     const groups = this.groups();
+    const buckets = this.machinesView();
     const colors = this.colors();
     const art = this.sprites();
     const total = agents().length;
@@ -869,17 +755,29 @@ export default class Workbench extends View {
     const narrow = rail();
     const mark = markMode();
     const paper = PAPER(t) && !narrow;
-    for (const [gi, g] of groups.entries()) {
-      const head = g.spaces.find((x) => x.space)?.space.id;
-      const fill = head ? this.fill(t, colors[head] ?? 0) : null;
-      if (narrow) {
+    if (narrow) {
+      for (const g of groups) {
+        const head = g.spaces.find((x) => x.space)?.space.id;
+        const fill = head ? this.fill(t, colors[head] ?? 0) : null;
         rows.push(this.railProject(g, t, fill));
         if (this.fold.has(g.root)) continue;
         for (const item of g.spaces) {
           if (item.space) rows.push(this.railSpace(item.space, t, this.fill(t, colors[item.space.id] ?? 0), art[item.space.id] ?? "slime", colors[item.space.id] ?? 0, mark));
         }
-        continue;
       }
+    } else {
+      // 机器层：本机与每台服务器各一段，目录分组收在它下面——新建空间时不会再
+      // 悄悄建在最后一次点过的远程空间那台机器上。
+      for (const m of buckets) {
+        rows.push(this.machineRow(m, t, cx));
+        if (this.foldM.has(m.key)) continue;
+        if (!m.groups.length) {
+          rows.push(div().pl(18 + IND).pr(8).py(2).text_size(11).text_color(t.dim).child(m.state === "unavailable" ? "连不上这台机器" : "这台机器上还没有空间"));
+          continue;
+        }
+        for (const [gi, g] of m.groups.entries()) {
+          const head = g.spaces.find((x) => x.space)?.space.id;
+          const fill = head ? this.fill(t, colors[head] ?? 0) : null;
       // 组与组之间一条细分隔线：目录是上一层边界，不是又一行空间。纸感下改由项目头的铅笔线承担。
       if (gi > 0 && !PAPER(t)) rows.push(div().h(1).flex_none().mx(8).my(6).bg(t.border));
       rows.push(this.projectRow(g, t, fill));
@@ -899,7 +797,7 @@ export default class Workbench extends View {
         // 普通终端显示程序名——这样徽章上的 tab 数在下面都数得出来。
         const tabs = s.tabs ?? [];
         if (!tabs.length) {
-          rows.push(div().pl(38).pr(8).py(2).text_size(11).text_color(t.dim).child("还没有终端"));
+          rows.push(div().pl(38 + IND).pr(8).py(2).text_size(11).text_color(t.dim).child("还没有终端"));
           continue;
         }
         const list = agents();
@@ -910,38 +808,7 @@ export default class Workbench extends View {
         }
       }
     }
-    // Spaces 下面：等你的与在跑的智能体。追加进同一个滚动列表，不改动上面的空间行。
-    if (!narrow) {
-      const list = agents();
-      const asks = shared("inkstone.asks") ?? {};
-      const open = shared("inkstone.flow.open") ?? {};
-      const waiting = list.filter((a) => a.status === "blocked").sort((a, b) => b.seq - a.seq);
-      const running = list.filter((a) => a.status === "working").sort((a, b) => b.seq - a.seq);
-      rows.push(this.flowDivider(t));
-      // 两栏的标题常驻：下面没有任务时也占一行，用空态文案代替卡片。
-      const showNeeds = open.needs !== false;
-      rows.push(this.flowHead("needs", "Needs you", waiting.length, FLOW_YELLOW(t), t, showNeeds, cx));
-      if (showNeeds) {
-        if (!waiting.length) rows.push(this.flowEmpty("all clear", t));
-        else for (const a of waiting) rows.push(this.askCard(a, t, asks, colors));
-      }
-      const showFlight = open.flight !== false;
-      rows.push(this.flowHead("flight", "In flight", running.length, FLOW_GREEN(t), t, showFlight, cx));
-      if (showFlight) {
-        if (!running.length) rows.push(this.flowEmpty("nothing running", t));
-        else for (const a of running) rows.push(this.flightRow(a, t, colors));
-      }
-      // 已收工的空闲会话：done 打勾走绿，idle 空心圈走灰，标题固定用灰，免得跟上面两栏抢注意力。
-      const concluded = list.filter((a) => a.status === "done" || a.status === "idle").sort((a, b) => b.seq - a.seq);
-      const showEnded = open.concluded !== false;
-      rows.push(this.flowHead("concluded", "Concluded", concluded.length, t.dim, t, showEnded, cx));
-      if (showEnded) {
-        if (!concluded.length) rows.push(this.flowEmpty("nothing yet", t));
-        else for (const a of concluded) {
-          const done = a.status === "done";
-          rows.push(this.flightRow(a, t, colors, done ? t.done : t.dim, done ? "done" : "idle"));
-        }
-      }
+    }
     }
     const inner = v_flex()
       .size_full()
@@ -950,10 +817,13 @@ export default class Workbench extends View {
       .text_size(13)
       .child(narrow
         ? v_flex()
+          .size_full()
+          .min_h(0)
+          .overflow_hidden()
           .py(4)
           .gap(2)
           .items_center()
-          .when(window()?.platform === "macos", (el) => el.child(div()
+          .child(div()
             .id("inkstone-sidebar-unfold")
             .size(24)
             .flex_none()
@@ -969,7 +839,7 @@ export default class Workbench extends View {
               setShared("sidebar.collapsed", false);
               run("layout.resize", { id: "sidebar", px: shared("sidebar.width") ?? 272 });
             })
-            .child(svg("mods/inkstone-chrome/chevron-right.svg").size(14))))
+            .child(svg("mods/inkstone-chrome/chevron-right.svg").size(14)))
           .child(div()
             .id("inkstone-space-new")
             .size(24)
@@ -982,7 +852,7 @@ export default class Workbench extends View {
             .hover((s) => s.bg(t.hover).text_color(t.foreground))
             .tooltip("新建空间")
             .accessibility_label("新建空间")
-            .on_click(() => run("space.new"))
+            .on_click(() => this.newSpace(null))
             .child(svg("mods/workspace-chrome/plus.svg").size(14)))
         : h_flex()
           .h(44)
@@ -1042,7 +912,7 @@ export default class Workbench extends View {
                 .hover((s) => s.bg(t.hover).text_color(t.foreground))
                 .tooltip("新建空间")
                 .accessibility_label("新建空间")
-                .on_click(() => run("space.new"))
+                .on_click(() => this.newSpace(null))
                 .child(svg("mods/workspace-chrome/plus.svg").size(14)))))
       .child(v_flex()
         .flex_1()

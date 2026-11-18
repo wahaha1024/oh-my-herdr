@@ -87,7 +87,7 @@ function spaceFill(t, id) {
 
 // 右侧抽屉的页容器：新布局是一个 stack（切页 = 一条 layout.select）；
 // 老布局是三块互斥 block（只能靠 hidden 开关来"选页"）。两套都认。
-const PANELS = ["files", "changes", "sessions", "favorites", "cockpit"];
+const PANELS = ["files", "sessions", "favorites", "cockpit"];
 
 function pageStack(panel) {
   if (panel?.type === "stack" && (panel.children ?? []).some((c) => PANELS.includes(c.id))) return panel;
@@ -344,10 +344,10 @@ export default class Tabs extends View {
       : 10;
     const panel = find(root, "panel");
     // 右侧抽屉的页：文件 / 变更 / 会话 / 收藏 / 驾驶舱。
-    // Git 关掉时「变更」面板没有内容，按钮一并收起（在 OMH 偏好里开「Git 工作树」才出现）。
-    const enabled = shared("inkstone.git") === true ? PANELS : PANELS.filter((id) => id !== "changes");
-    const icons = { files: "mods/files/file.svg", changes: "mods/changes/changes.svg", sessions: "mods/inkstone-chrome/terminal.svg", favorites: "mods/inkstone-chrome/pin.svg", cockpit: "mods/workspace-chrome/layers.svg" };
-    const names = { files: "文件", changes: "变更", sessions: "会话", favorites: "收藏", cockpit: "驾驶舱" };
+    // inkstone-changes 自己判断仓库与改动，不受「Git 工作树」开关影响，按钮常驻。
+    const enabled = PANELS;
+    const icons = { files: "mods/files/file.svg", sessions: "mods/inkstone-chrome/terminal.svg", favorites: "mods/inkstone-chrome/pin.svg", cockpit: "mods/workspace-chrome/layers.svg" };
+    const names = { files: "文件", sessions: "会话", favorites: "收藏", cockpit: "驾驶舱" };
     this.syncPanel(space, panel, enabled);
     // 图标按钮固定在右侧：点已激活的页收起抽屉，点别的页切过去。
     // 用图标而非文字：中文词会挤掉标签页的位置（靠 tooltip 与无障碍名说明）。

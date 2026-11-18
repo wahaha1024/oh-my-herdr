@@ -1,13 +1,13 @@
 // 代码审查：状态栏一个「审查」按钮，点开是全屏差异对话框。
 // 取自 AkaraChen/2code 的 Full-screen Diff & Review Dialog：统一 / 分栏两种视图、
-// 左侧变更文件导航、每文件 +N −N。
+// 左侧改动文件导航、每文件 +N −N；本轮（OMP 会话日志）碰过的文件置顶并加粗。
 // 差异读 `git diff HEAD`（工作区 + 暂存区），与 shipped 的 changes 模块一样关掉
 // fsmonitor 与 index 自动刷新，避免读操作把目录监听搅得反复刷新。
 // 长行按宽度截断，悬停看整行——对话框里不做横向滚动，省掉一套滚动条状态。
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { panes, spaces, focused, exec, props, closeOverlay, openOverlay, theme, settings } from "herdr";
+import { panes, spaces, focused, exec, readTextFile, home, props, closeOverlay, openOverlay, theme, settings } from "herdr";
 
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
 const MAX_ROWS = 800;
@@ -93,6 +93,91 @@ function parseDiff(text) {
   return files;
 }
 
+// —— 本轮改动 ——
+// 从 OMP 会话日志尾部找最后一条 user 消息，收集其后 edit/write 的路径；再由路径反查仓库。
+// readTextFile 只到 1 MiB，会话文件常有几 MB，所以用 exec 取尾部若干行。
+const normPath = (p) => String(p ?? "").replace(/\\/g, "/").toLowerCase();
+
+function sessionKey(cwd) {
+  return `--${String(cwd).replace(/[:\\/]/g, "-")}--`;
+}
+
+const homes = new Map();
+async function homeDir(on) {
+  const k = on ?? "";
+  if (homes.has(k)) return homes.get(k);
+  const r = on
+    ? await exec("sh", ["-lc", 'printf %s "$HOME"'], { on }).catch(() => null)
+    : await exec("powershell", ["-NoProfile", "-Command", "$env:USERPROFILE"], {}).catch(() => null);
+  const v = r?.code === 0 ? r.stdout.trim() : "";
+  if (v) homes.set(k, v);
+  return v || null;
+}
+
+async function newestSession(dir, on) {
+  const r = on
+    ? await exec("sh", ["-lc", `ls -t ${JSON.stringify(dir)}/*.jsonl 2>/dev/null | head -1`], { on }).catch(() => null)
+    : await exec("powershell", ["-NoProfile", "-Command", `Get-ChildItem -LiteralPath '${dir.replace(/'/g, "''")}' -Filter *.jsonl -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName`], {}).catch(() => null);
+  const p = r?.code === 0 ? r.stdout.trim() : "";
+  return p || null;
+}
+
+async function fileStamp(path, on) {
+  const r = on
+    ? await exec("sh", ["-lc", `stat -c '%s|%Y' ${JSON.stringify(path)} 2>/dev/null`], { on }).catch(() => null)
+    : await exec("powershell", ["-NoProfile", "-Command", `$f=Get-Item -LiteralPath '${path.replace(/'/g, "''")}' -ErrorAction SilentlyContinue; if($f){"$($f.Length)|$($f.LastWriteTimeUtc.Ticks)"}`], {}).catch(() => null);
+  return r?.code === 0 ? r.stdout.trim() : "";
+}
+
+async function tailLines(file, on, n) {
+  const r = on
+    ? await exec("sh", ["-lc", `tail -n ${n} -- ${JSON.stringify(file)} 2>/dev/null`], { on }).catch(() => null)
+    : await exec("powershell", ["-NoProfile", "-Command", `Get-Content -LiteralPath '${file.replace(/'/g, "''")}' -Tail ${n} -ErrorAction SilentlyContinue`], {}).catch(() => null);
+  return r?.code === 0 ? r.stdout : "";
+}
+
+// 找不到 user 边界说明这一段比尾部窗口更早，调用方加大行数重试。
+function turnPaths(text) {
+  const lines = String(text ?? "").split(/\r?\n/);
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (line.indexOf('"role"') < 0) continue;
+    let rec;
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (rec?.type === "message" && rec.message?.role === "user") {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return { boundary: false, paths: [] };
+  const out = new Map();
+  for (let i = start; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.indexOf("tool_execution_start") < 0) continue;
+    let rec;
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (rec?.type !== "custom" || rec.customType !== "tool_execution_start") continue;
+    const d = rec.data ?? {};
+    if (!["edit", "write", "apply_patch"].includes(d.toolName)) continue;
+    const p = d.args?.path ?? d.args?.file_path ?? d.args?.filePath ?? null;
+    if (typeof p === "string" && p) out.set(p, d.toolName);
+  }
+  return { boundary: true, paths: [...out.keys()] };
+}
+
+function baseOf(path) {
+  return (path ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path || "~";
+}
+
 export default class Review extends View {
   init(_p, cx) {
     this.files = [];
@@ -101,6 +186,10 @@ export default class Review extends View {
     this.loading = false;
     this.error = "";
     this.cwd = null;
+    this.repos = [];
+    this.turnCount = 0;
+    this.reposCache = new Map();
+    this.turnCache = { key: null, stamp: "", paths: [] };
     this.at = 0;
     this.filesScroll = ScrollHandle.new();
     this.diffScroll = ScrollHandle.new();
@@ -117,19 +206,17 @@ export default class Review extends View {
     this.loading = true;
     cx.spawn(async (cx) => {
       try {
-        let r = await exec("git", [...READ, "diff", "HEAD", "--no-color", "--no-ext-diff", "-U3"], { cwd, on, timeout: 20000 }).catch(() => null);
-        if (r && r.code !== 0) {
-          // 还没有第一次提交：HEAD 不存在，退回工作区差异。
-          r = await exec("git", [...READ, "diff", "--no-color", "--no-ext-diff", "-U3"], { cwd, on, timeout: 20000 }).catch(() => null);
-        }
-        if (!r || r.code !== 0) throw new Error((r?.stderr || r?.stdout || "git diff 失败").trim().split("\n")[0] || "git diff 失败");
-        this.files = parseDiff(r.stdout ?? "");
-        if (!this.files.some((f) => f.path === this.open)) this.open = this.files[0]?.path ?? null;
-        this.cwd = cwd;
-        this.error = "";
+        const { files, repos, turn } = await this.collect(cwd, on);
+        this.files = files;
+        this.repos = repos;
+        this.turnCount = turn.paths.length;
+        if (!this.files.some((f) => f.key === this.open)) this.open = this.files[0]?.key ?? null;
+        this.cwd = repos[0] ?? cwd;
+        this.error = this.files.length ? "" : (repos.length ? "没有未提交的改动" : "当前目录不在 Git 仓库中");
       } catch (e) {
         this.error = String(e?.message ?? e);
         this.files = [];
+        this.repos = [];
       }
       this.loading = false;
       this.at = Date.now();
@@ -137,8 +224,85 @@ export default class Review extends View {
     });
   }
 
+  // 路径 -> 所属仓库根。缓存两分钟：翻文件时不该反复 rev-parse。
+  async repoOf(dir, on) {
+    if (!dir) return null;
+    this.reposCache = this.reposCache ?? new Map();
+    const key = `${on ?? ""}\u0000${dir}`;
+    const hit = this.reposCache.get(key);
+    if (hit && Date.now() - hit.at < 120000) return hit.repo;
+    const r = await exec("git", [...READ, "rev-parse", "--show-toplevel"], { cwd: dir, on }).catch(() => null);
+    const repo = r?.code === 0 ? r.stdout.trim() : null;
+    this.reposCache.set(key, { at: Date.now(), repo });
+    return repo;
+  }
+
+  // 本回合改过的文件路径（会话日志尾部；stamp 不变就复用）。
+  async turnEdits(cwd, on) {
+    this.turnCache = this.turnCache ?? { key: null, stamp: "", paths: [] };
+    const h = on ? await homeDir(on) : home();
+    if (!h) return { paths: [] };
+    const file = await newestSession(`${h}/.omp/agent/sessions/${sessionKey(cwd)}`, on);
+    if (!file) return { paths: [] };
+    const stamp = await fileStamp(file, on);
+    const key = `${on ?? ""}\u0000${file}`;
+    if (this.turnCache.key === key && this.turnCache.stamp === stamp && stamp) return { paths: this.turnCache.paths };
+    let paths = [];
+    for (const n of [1500, 8000, 30000]) {
+      const text = await tailLines(file, on, n);
+      const res = turnPaths(text);
+      if (res.boundary) {
+        paths = res.paths;
+        break;
+      }
+    }
+    this.turnCache = { key, stamp, paths };
+    return { paths };
+  }
+
+  // 汇总：本轮碰过的仓库 + 当前目录所属仓库，各自 git diff HEAD；未跟踪文件只收本轮碰过的。
+  async collect(cwd, on) {
+    const turn = await this.turnEdits(cwd, on);
+    const turnSet = new Set(turn.paths.map(normPath));
+    const repos = new Map();
+    for (const p of turn.paths) {
+      const dir = p.replace(/[\\/][^\\/]+$/, "");
+      const repo = await this.repoOf(dir, on);
+      if (repo) repos.set(repo, true);
+    }
+    const here = await this.repoOf(cwd, on);
+    if (here) repos.set(here, true);
+    const files = [];
+    for (const repo of repos.keys()) {
+      let r = await exec("git", [...READ, "diff", "HEAD", "--no-color", "--no-ext-diff", "-U3"], { cwd: repo, on, timeout: 20000 }).catch(() => null);
+      if (r && r.code !== 0) {
+        // 还没有第一次提交：HEAD 不存在，退回工作区差异。
+        r = await exec("git", [...READ, "diff", "--no-color", "--no-ext-diff", "-U3"], { cwd: repo, on, timeout: 20000 }).catch(() => null);
+      }
+      for (const f of r && r.code === 0 ? parseDiff(r.stdout ?? "") : []) {
+        f.repo = repo;
+        f.repoName = baseOf(repo);
+        f.key = `${repo}\u0000${f.path}`;
+        f.touched = turnSet.has(normPath(`${repo}/${f.path}`));
+        files.push(f);
+      }
+      const st = await exec("git", [...READ, "status", "--porcelain=v1", "-z", "-uall"], { cwd: repo, on }).catch(() => null);
+      for (const entry of String(st?.stdout ?? "").split("\u0000")) {
+        if (!entry.startsWith("?? ")) continue;
+        const rel = entry.slice(3);
+        if (!turnSet.has(normPath(`${repo}/${rel}`))) continue;
+        const text = await readTextFile(`${repo}/${rel}`, { on }).catch(() => null);
+        const lines = text == null ? [] : text.replace(/\r?\n$/, "").split(/\r?\n/).map((l) => `+${l}`);
+        const unified = unifiedRows(lines).slice(0, MAX_ROWS);
+        files.push({ path: rel, status: "U", add: lines.length, del: 0, lines, unified, split: splitRows(unified), repo, repoName: baseOf(repo), key: `${repo}\u0000${rel}`, touched: true });
+      }
+    }
+    files.sort((a, b) => (a.touched === b.touched ? (a.repo.localeCompare(b.repo) || a.path.localeCompare(b.path)) : a.touched ? -1 : 1));
+    return { files, repos: [...repos.keys()], turn };
+  }
+
   current() {
-    return this.files.find((f) => f.path === this.open) ?? null;
+    return this.files.find((f) => f.key === this.open) ?? null;
   }
 
   // 状态栏形态：一个「审查」按钮。
@@ -153,7 +317,7 @@ export default class Review extends View {
       .border_l(1)
       .border_color(t.border)
       .cursor_pointer()
-      .tooltip("全屏审查当前工作区差异")
+      .tooltip("审查本轮改动与工作区差异")
       .hover((s) => s.bg(t.hover))
       .on_click(() => openOverlay({ mod: "inkstone-review", kind: "dialog", width: 1240, height: 840, props: { review: true } }))
       .child(svg("mods/workspace-chrome/git-compare.svg").size(12).flex_none().text_color(t.muted))
@@ -161,10 +325,10 @@ export default class Review extends View {
   }
 
   fileRow(f, t, cx) {
-    const parts = f.path.split("/");
-    const name = parts.pop();
+    const multi = (this.repos?.length ?? 0) > 1;
+    const label = multi ? `${f.repoName}/${f.path}` : f.path;
     return h_flex()
-      .id(`rv-file-${f.path}`)
+      .id(`rv-file-${f.key}`)
       .h(28)
       .flex_none()
       .px(9)
@@ -172,15 +336,22 @@ export default class Review extends View {
       .items_center()
       .rounded(6)
       .cursor_pointer()
-      .when(f.path === this.open, (el) => el.bg(t.selected))
+      .when(f.key === this.open, (el) => el.bg(t.selected))
       .hover((s) => s.bg(t.hover))
-      .tooltip(f.path)
+      .tooltip(`${f.repoName}/${f.path}${f.touched ? "\n本轮修改过" : ""}`)
       .on_click((_e, cx) => {
-        this.open = f.path;
+        this.open = f.key;
         cx.notify();
       })
-      .child(div().w(10).flex_none().text_size(11).text_color(f.status === "A" ? t.done : f.status === "D" ? t.blocked : t.working).child(f.status))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(f.path === this.open ? t.foreground : t.muted).child(parts.length ? `${parts.join("/")}/${name}` : name))
+      .child(div().w(10).flex_none().text_size(11).text_color(f.status === "A" ? t.done : f.status === "D" ? t.blocked : f.status === "U" ? t.dim : t.working).child(f.status))
+      .child(div()
+        .flex_1()
+        .min_w(0)
+        .truncate()
+        .text_size(12)
+        .when(f.touched, (el) => el.font_weight(600))
+        .text_color(f.key === this.open ? t.foreground : f.touched ? t.foreground : t.muted)
+        .child(label))
       .when(f.add > 0, (el) => el.child(div().text_size(11).text_color(t.done).child(`+${f.add}`)))
       .when(f.del > 0, (el) => el.child(div().text_size(11).text_color(t.blocked).child(`−${f.del}`)));
   }
@@ -279,6 +450,8 @@ export default class Review extends View {
         .border_color(t.border)
         .child(svg("mods/workspace-chrome/git-compare.svg").size(15).flex_none().text_color(t.accent))
         .child(div().text_size(13).font_semibold().child("审查"))
+        .when((this.turnCount ?? 0) > 0, (el) => el
+          .child(div().h(18).px(5).flex().items_center().rounded(4).bg(t.accent + "22").text_size(11).text_color(t.accent).child(`本轮 ${this.turnCount}`)))
         .child(div().px(5).py(1).rounded(4).border(1).border_color(t.border).text_size(11).text_color(t.muted).child(`${files.length} 个文件`))
         .child(div().text_size(11).text_color(t.done).child(`+${add}`))
         .child(div().text_size(11).text_color(t.blocked).child(`−${del}`))
@@ -314,7 +487,7 @@ export default class Review extends View {
           .min_h(0)
           .border_r(1)
           .border_color(t.border)
-          .child(div().h(26).flex_none().px(10).flex().items_center().text_size(11).text_color(t.dim).child("变更文件"))
+          .child(div().h(26).flex_none().px(10).flex().items_center().text_size(11).text_color(t.dim).child("改动文件"))
           .child(v_flex()
             .id("rv-files")
             .flex_1()
@@ -356,7 +529,7 @@ export default class Review extends View {
         .border_color(t.border)
         .text_size(11)
         .text_color(t.dim)
-        .child(div().flex_1().truncate().child(this.cwd ? `git diff HEAD · ${this.cwd}` : ""))
+        .child(div().flex_1().truncate().child(this.repos?.length ? `git diff HEAD · ${this.repos.map(baseOf).join(" · ")}` : ""))
         .when(Boolean(this.error), (el) => el.child(div().text_color(t.blocked).truncate().child(this.error))));
   }
 
