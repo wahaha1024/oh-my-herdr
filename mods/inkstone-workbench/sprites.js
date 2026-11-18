@@ -182,6 +182,17 @@ export const FOLDER = [
   "........",
 ];
 
+// 工作台印章：侧栏+主屏+底座的微缩像素台，配在头部「工作台」左侧当辨识标。
+export const WORKBENCH = [
+  "xxxxxxxx",
+  "x.x....x",
+  "x.x.xx.x",
+  "x.x....x",
+  "xxxxxxxx",
+  "..x..x..",
+  ".xxxxxx.",
+];
+
 // Any 8-wide pattern as GPUI rectangles, `px` pixels per sprite pixel.
 export function glyph(rows, fill, { div, v_flex, h_flex }, px = 2) {
   const ink = { x: fill, o: "#ffffff", k: "#17181c" };
