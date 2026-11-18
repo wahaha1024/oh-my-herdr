@@ -134,8 +134,13 @@ export default class WorkspaceChrome extends View {
     // 标题行：纸感下是整页的上边缘，rail / 其他主题下是纯色条。
     const head = h_flex().size_full().pl(paper ? 4 : collapsed ? 6 : 14).pr(10).gap(4).items_center().text_size(13)
       .when(window()?.platform === "macos" && !window()?.fullscreen && !collapsed, el => el.pl(76))
-      .when(!collapsed, el => el.child(h_flex().flex_1().gap(8).items_center()
-        .child(div().font_weight(700).text_size(14).text_color(inkOf(t, "ink", "foreground")).child("Oh My Herdr"))))
+      .when(!collapsed, el => el.child(h_flex().flex_1().min_w(0).gap(7).items_center()
+        .child(div().size(24).flex_none().flex().items_center().justify_center().rounded(7)
+          .bg(paper ? t.mark : t.accent)
+          .child(svg("mods/inkstone-chrome/ink/mark.svg").size(16).flex_none().text_color(paper ? t.ink : t.accent_foreground)))
+        .child(v_flex().flex_1().min_w(0).gap(paper ? 0 : 1)
+          .child(div().min_w(0).truncate().font_weight(700).text_size(paper ? 15 : 16).line_height(paper ? "16px" : "17px").text_color(inkOf(t, "ink", "foreground")).child("Oh My Herdr"))
+          .child(svg("mods/inkstone-chrome/ink/squiggle.svg").w(56).h(6).ml(1).flex_none().text_color(paper ? t.down : t.accent)))))
       .when(!collapsed && paper, el => el
         .child(this.slip("search", svg("mods/inkstone-chrome/search.svg").size(15), () => run("mod.open", { name: "picker" }), "a"))
         .child(this.slip("sidebar-toggle", svg("mods/inkstone-chrome/sidebar.svg").size(15), toggleSidebar, "b")))
