@@ -283,7 +283,7 @@ export default class Workbench extends View {
     const detail = [statusLabel(a.status), a.tab_name, a.address].filter(Boolean).join(" · ");
     return h_flex()
       .id(`wb-a-${a.address}`)
-      .h(24)
+      .h(26)
       .flex_none()
       .pl(38)
       .pr(8)
@@ -302,9 +302,9 @@ export default class Workbench extends View {
         if (tb && !tb.active) run("tab.select", { id: a.tab });
         run("agent.focus", { terminal: a.address });
       })
-      .child(dot(t, a.status, 6))
-      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(a.status === "blocked" ? t.blocked : t.dim).child(name))
-      .child(div().flex_none().text_size(10).text_color(t.dim).child(a.status === "blocked" ? "待处理" : a.status === "done" ? "已完成" : ""));
+      .child(dot(t, a.status, 7))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(a.status === "blocked" ? t.blocked : t.foreground).child(name))
+      .child(div().flex_none().text_size(10.5).text_color(t.dim).child(a.status === "blocked" ? "待处理" : a.status === "done" ? "已完成" : ""));
   }
 
   // 没跑智能体的终端也要有自己一行：否则徽章上的 tab 数在下面找不到对应的行。
@@ -315,7 +315,7 @@ export default class Workbench extends View {
     const name = clean(c.name) || prog?.name || "终端";
     return h_flex()
       .id(`wb-tab-${c.id}`)
-      .h(24)
+      .h(26)
       .flex_none()
       .pl(38)
       .pr(8)
@@ -332,9 +332,9 @@ export default class Workbench extends View {
         if (!c.active) run("tab.select", { id: c.id });
       })
       .child(prog?.icon
-        ? (prog.tint ? svg(prog.icon).size(12).flex_none().text_color(t.dim) : image(prog.icon).size(16).flex_none())
-        : svg("mods/inkstone-chrome/terminal.svg").size(12).flex_none().text_color(t.dim))
-      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(name));
+        ? (prog.tint ? svg(prog.icon).size(13).flex_none().text_color(t.muted) : image(prog.icon).size(16).flex_none())
+        : svg("mods/inkstone-chrome/terminal.svg").size(13).flex_none().text_color(t.muted))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(name));
   }
 
   treeRow(w, t) {
