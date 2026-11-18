@@ -86,7 +86,7 @@ The palette exists twice — `mods/inkstone-workbench/main.js` and `mods/inkston
 
 `themes/qingci.json` (background `#e8f0ec`, foreground `#2b333e`, accent `#126e82`) and `themes/xuanmo.json` (background `#14131a`, foreground `#d4cec4`, accent `#619ac3`), each a full 16-colour ANSI set plus semantic slots. The layout declares `theme: { "light": "qingci", "dark": "xuanmo" }` and follows `appearance` in `settings.json`.
 
-`themes/zhi.json` (paper `#f8f5ee`, desk `#dad1bf`, ink `#2a2420`, highlighter `#f8dc4c`, blue-pencil bracket `#2c4f9e`) is an **optional third theme**, off by default: `herdr-app do app.theme '{"name":"zhi"}'`, or pick it in preferences. It adds 11 custom slots (`paper` / `desk` / `ink` / `pencil` / `rule` / `stroke` / `mark` / `bracket` / `up` / `down` / `seal`). Mods only test whether a `paper` slot exists — they never look at theme names — so any theme that defines `paper` gets the paper look, and themes that don't (qingci, xuanmo) fall back to plain GPUI geometry with no pale paper edges left behind.
+`themes/zhi.json` (paper `#f8f5ee`, desk `#dad1bf`, ink `#2a2420`, highlighter `#f8dc4c`, blue-pencil bracket `#2c4f9e`) is an **optional third theme**, off by default: `herdr-app do app.theme '{"name":"zhi"}'`, or pick it in preferences. It adds 11 custom slots (`paper` / `desk` / `ink` / `pencil` / `rule` / `stroke` / `mark` / `bracket` / `up` / `down` / `seal`). Mods only test whether a `paper` slot exists — they never look at theme names — so any theme that defines `paper` gets the paper look. The torn edge is the one extra layer: light qingci draws it too, using the same slices recoloured to its own `background` / `muted` (`mods/inkstone-edge/ink-qingci/`, no new colours); dark xuanmo skips it so no pale rim floats on the dark ground.
 
 The preview images are regenerated from `preview.svg` and the two theme files:
 
@@ -112,7 +112,7 @@ mkprev.py                    generates preview.png / preview-dark.png
 mods/inkstone-chrome         brand row + footer rows
 mods/inkstone-workbench      folder/space/terminal list, rail mode, 8×8 pixel critters (sprites.js)
 mods/inkstone-tabs           tabs + panel buttons + window buttons
-mods/inkstone-edge           torn-edge slices around the terminal (paper themes only)
+mods/inkstone-edge           torn-edge slices around the terminal (paper uses ink/, qingci uses ink-qingci/, dark draws none)
 mods/inkstone-pane           custom pane header: program, cwd, status badge, hover split/zoom/close
 mods/inkstone-files          file tree, path search, @path copy & jj/git marks
 mods/inkstone-sessions       multi-source sessions (search / filters / remote / copy cmd)

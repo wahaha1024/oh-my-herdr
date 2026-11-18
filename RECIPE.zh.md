@@ -71,7 +71,8 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 - 复制了 `gpui-kit.d.ts` 之外的全部资产；mod 目录里没有 `.d.ts` / `jsconfig.json`，编辑器里没有类型提示，运行不受影响。
 - `inkstone-edge` 的 `mod.json` 必须是 `{ "place": "none" }`：写别的值 Herdr 会把这块自动插进布局，删掉 mod 后布局就坏。
 - 纸感只由「主题里有没有 `paper` 槽」决定（`Boolean(theme().paper)`），mod 从不认主题名。`themes/zhi.json` 多带 11 个自定义槽（`paper` / `desk` / `ink` / `pencil` / `rule` / `stroke` / `mark` / `bracket` / `up` / `down` / `seal`）；没定义 `paper` 的主题自动走 fallback，不会留浅色纸边，也不会去取不存在的羊皮纸档（`nearest()` 取最近档，永不 404）。
-- 纸感资产约 2MB：`mods/inkstone-chrome/ink/`（39 个文件：羊皮纸 17 档、头像 11、墨线纸片 6、铅笔线 2、徽章 2、LICENSE）与 `mods/inkstone-edge/ink/`（8 片撕边 + LICENSE），都从 Looseleaf（MIT）搬来；`inkstone-pane` 另有 5 个 22px 图标。
+- 撕边比纸感宽一档：亮色主题（月白）也画四边毛边，用的是 `mods/inkstone-edge/ink-qingci/`——同一套切片把纸料换成青瓷的 `background`、墨线换成 `muted`，没引入任何新颜色；只有活动主题的这两个槽与烤进去的值一致时才用，深色主题一律不画（否则深底浮白边）。
+- 纸感与撕边资产合计约 3.2MB：`mods/inkstone-chrome/ink/`（39 个文件：羊皮纸 17 档、头像 11、墨线纸片 6、铅笔线 2、徽章 2、LICENSE）、`mods/inkstone-edge/ink/`（8 片撕边 + LICENSE）与 `mods/inkstone-edge/ink-qingci/`（同 8 片的青瓷配色版），都从 Looseleaf（MIT）搬来；`inkstone-pane` 另有 5 个 22px 图标。
 
 ## 装好了怎么验
 

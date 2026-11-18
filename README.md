@@ -86,7 +86,7 @@ Herdr 自带的 `changes`、`workspace-status`、`pane`（及 `mods/files/*.svg`
 
 `themes/qingci.json`（月白：底 `#e8f0ec`、字 `#2b333e`、强调 `#126e82`）和 `themes/xuanmo.json`（玄墨：底 `#14131a`、字 `#d4cec4`、强调 `#619ac3`），都是完整 16 色 ANSI + 语义色槽。布局里 `theme: { "light": "qingci", "dark": "xuanmo" }`，跟随 `settings.json` 的 `appearance` 自动选。
 
-`themes/zhi.json`（纸墨：纸底 `#f8f5ee`、桌面色 `#dad1bf`、墨字 `#2a2420`、荧光笔 `#f8dc4c`、蓝铅笔括号 `#2c4f9e`）是**可选的第三套**，默认不启用：`herdr-app do app.theme '{"name":"zhi"}'` 或在偏好里切。它多带 11 个自定义色槽（`paper` / `desk` / `ink` / `pencil` / `rule` / `stroke` / `mark` / `bracket` / `up` / `down` / `seal`），mod 只按「有没有 `paper` 槽」判断纸感，不认识主题名——所以任何主题只要定义了 `paper` 就能借用这套外观，没定义的（月白、玄墨）自动退回普通 GPUI 几何，不留浅色纸边。
+`themes/zhi.json`（纸墨：纸底 `#f8f5ee`、桌面色 `#dad1bf`、墨字 `#2a2420`、荧光笔 `#f8dc4c`、蓝铅笔括号 `#2c4f9e`）是**可选的第三套**，默认不启用：`herdr-app do app.theme '{"name":"zhi"}'` 或在偏好里切。它多带 11 个自定义色槽（`paper` / `desk` / `ink` / `pencil` / `rule` / `stroke` / `mark` / `bracket` / `up` / `down` / `seal`），mod 只按「有没有 `paper` 槽」判断纸感，不认识主题名——所以任何主题只要定义了 `paper` 就能借用这套外观。撕边是唯一额外的一层：亮色的月白也会画四边毛边，用的是同一套切片按它自己的 `background` / `muted` 重上色的一套（`mods/inkstone-edge/ink-qingci/`，不引入新颜色）；深色的玄墨不画，免得深底浮白边。
 
 `preview.png` / `preview-dark.png` 由 `preview.svg` + `mkprev.py` 按两个主题文件生成：
 
@@ -112,7 +112,7 @@ mkprev.py                    生成 preview.png / preview-dark.png
 mods/inkstone-chrome         品牌条 + 底部三行（footer props）
 mods/inkstone-workbench      目录/空间/终端列表，图标轨，8×8 像素图案（sprites.js）
 mods/inkstone-tabs           标签栏 + 面板按钮 + 窗口按钮
-mods/inkstone-edge           纸页四边的撕边切片（仅在定义了 paper 槽的主题下渲染）
+mods/inkstone-edge           纸页四边的撕边切片（纸感用 ink/，月白用 ink-qingci/，深色不画）
 mods/inkstone-pane           自绘窗格头：程序名 / 目录 / 状态徽章 / 悬停出分裂·缩放·关闭
 mods/inkstone-files          文件树、索引搜索、@path 引用与 jj/git 状态
 mods/inkstone-sessions       多源会话抽屉（搜索 / 筛选 / 远程 / 复制命令）
