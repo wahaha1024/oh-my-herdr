@@ -56,7 +56,7 @@ function duration(ms) {
   return `${Math.floor(h / 24)} 天`;
 }
 
-// —— 侧栏底部「待你处理 / 进行中」用到的纯函数 ——
+// —— 侧栏底部「NEED YOU / IN FLIGHT」用到的纯函数 ——
 // 相对时间：侧栏最窄只剩 200 多像素，放不下「3 分钟」，改成 3m / 2h / 1d。
 function ago(ms, now) {
   if (!ms) return "";
@@ -445,12 +445,13 @@ export default class Workbench extends View {
     run("agent.focus", { terminal: a.address });
   }
 
-  // —— Spaces 下面两块：待你处理 / 进行中 ——
-  // 分区头：字形箭头 + 标题 + 计数。折起来只收内容，标题与数字留着。
+  // —— Spaces 下面两块：NEED YOU / IN FLIGHT ——
+  // 分区头：箭头 + 标题 + 计数。标题用与「Spaces」同一套字（默认 UI 字体、粗体、墨色），
+  // 只把字号收到小一号；颜色只留在计数 pill 上，不再给标题上色。
   flowHead(key, label, n, color, t, open, cx) {
     return h_flex()
       .id(`wb-flow-${key}`)
-      .h(26)
+      .h(30)
       .flex_none()
       .px(8)
       .gap(6)
@@ -458,13 +459,23 @@ export default class Workbench extends View {
       .rounded(6)
       .cursor_pointer()
       .hover((s) => s.bg(PAPER(t) ? "#f8dc4c26" : t.hover))
-      .tooltip(open ? `收起${label}` : `展开${label}`)
+      .tooltip(open ? `收起 ${label}` : `展开 ${label}`)
       .accessibility_label(`${label} ${n}`)
       .on_click(() => this.toggleFlow(key, cx))
       .child(svg(open ? "mods/inkstone-chrome/chevron-down.svg" : "mods/inkstone-chrome/chevron-right.svg").size(10).flex_none().text_color(t.dim))
-      .child(div().flex_none().text_size(11).font_weight(700).text_color(color).child(label))
-      .child(div().flex_none().px(5).rounded(8).bg(PAPER(t) ? tint(color, "22") : t.raised).text_size(10).text_color(inkOf(t, "pencil", "muted")).child(String(n)))
+      .child(div().flex_none().text_size(PAPER(t) ? 13 : 15).line_height(PAPER(t) ? "15px" : "17px").font_bold().text_color(inkOf(t, "ink", "foreground")).child(label))
+      .when(n > 0, (el) => el.child(div().flex_none().px(5).rounded(8).bg(PAPER(t) ? tint(color, "22") : t.raised).text_size(10.5).text_color(PAPER(t) ? color : t.muted).child(String(n))))
       .child(div().flex_1());
+  }
+
+  // 分区下没有任务时的那一行灰字。
+  flowEmpty(label, t) {
+    return div().px(14).py(3).flex_none().text_size(11).text_color(t.dim).child(label);
+  }
+
+  // Spaces 与下面两块之间的分界：非纸用组间那条 1px 线；纸感用铅笔线（与项目头同一颜色）。
+  flowDivider(t) {
+    return div().flex_none().mx(8).my(6).h(1).bg(PAPER(t) ? tint(t.rule, "b8") : t.border);
   }
 
   toggleFlow(key, cx) {
@@ -520,7 +531,7 @@ export default class Workbench extends View {
         .items_center()
         .when(Boolean(icon), (el) => el.child(icon))
         .child(this.spaceChip(space, a.space, t, colors))
-        .child(div().flex_none().text_size(11).font_weight(600).text_color(t.blocked).child("等你处理"))
+        .child(div().flex_none().text_size(11).font_weight(600).text_color(t.blocked).child("asks you"))
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(a.program?.name ?? a.app ?? "")))
       .when(Boolean(q), (el) => el.child(div().pl(13).text_size(11).text_color(inkOf(t, "pencil", "muted")).truncate().child(q)));
   }
@@ -555,7 +566,7 @@ export default class Workbench extends View {
         .items_center()
         .when(Boolean(icon), (el) => el.child(icon))
         .child(this.spaceChip(space, a.space, t, colors))
-        .child(div().flex_none().text_size(11).text_color(t.working).child("运行中"))
+        .child(div().flex_none().text_size(11).text_color(t.working).child("running"))
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(a.program?.name ?? a.app ?? "")));
   }
 
@@ -893,17 +904,18 @@ export default class Workbench extends View {
       const open = shared("inkstone.flow.open") ?? {};
       const waiting = list.filter((a) => a.status === "blocked").sort((a, b) => b.seq - a.seq);
       const running = list.filter((a) => a.status === "working").sort((a, b) => b.seq - a.seq);
-      if (waiting.length) {
-        const showNeeds = open.needs !== false;
-        rows.push(div().h(10).flex_none());
-        rows.push(this.flowHead("needs", "待你处理", waiting.length, t.blocked, t, showNeeds, cx));
-        if (showNeeds) for (const a of waiting) rows.push(this.askCard(a, t, asks, colors));
+      rows.push(this.flowDivider(t));
+      // 两栏的标题常驻：下面没有任务时也占一行，用空态文案代替卡片。
+      const showNeeds = open.needs !== false;
+      rows.push(this.flowHead("needs", "Needs you", waiting.length, t.blocked, t, showNeeds, cx));
+      if (showNeeds) {
+        if (!waiting.length) rows.push(this.flowEmpty("all clear", t));
+        else for (const a of waiting) rows.push(this.askCard(a, t, asks, colors));
       }
       const showFlight = open.flight !== false;
-      rows.push(div().h(10).flex_none());
-      rows.push(this.flowHead("flight", "进行中", running.length, t.working, t, showFlight, cx));
+      rows.push(this.flowHead("flight", "In flight", running.length, t.working, t, showFlight, cx));
       if (showFlight) {
-        if (!running.length) rows.push(div().px(10).py(4).flex_none().text_size(11).text_color(t.dim).child("暂无运行中的智能体"));
+        if (!running.length) rows.push(this.flowEmpty("nothing running", t));
         else for (const a of running) rows.push(this.flightRow(a, t, colors));
       }
     }
