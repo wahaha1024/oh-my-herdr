@@ -57,6 +57,10 @@ function duration(ms) {
 }
 
 // —— 侧栏底部「NEED YOU / IN FLIGHT」用到的纯函数 ——
+// 两个分区标题的语义色：待你处理用琥珀黄，在跑的用绿。
+// 纸感直接取主题自带的 working / up（纸底上刚好压得住）；非纸用青瓷那支琥珀，深底也够亮。
+const FLOW_YELLOW = (t) => (PAPER(t) ? t.working : "#b78b26");
+const FLOW_GREEN = (t) => (PAPER(t) ? (t.up ?? t.done) : t.done);
 // 相对时间：侧栏最窄只剩 200 多像素，放不下「3 分钟」，改成 3m / 2h / 1d。
 function ago(ms, now) {
   if (!ms) return "";
@@ -463,14 +467,14 @@ export default class Workbench extends View {
       .accessibility_label(`${label} ${n}`)
       .on_click(() => this.toggleFlow(key, cx))
       .child(svg(open ? "mods/inkstone-chrome/chevron-down.svg" : "mods/inkstone-chrome/chevron-right.svg").size(10).flex_none().text_color(t.dim))
-      .child(div().flex_none().text_size(PAPER(t) ? 13 : 15).line_height(PAPER(t) ? "15px" : "17px").font_bold().text_color(inkOf(t, "ink", "foreground")).child(label))
+      .child(div().flex_none().text_size(PAPER(t) ? 13 : 15).line_height(PAPER(t) ? "15px" : "17px").font_bold().text_color(color).child(label))
       .when(n > 0, (el) => el.child(div().flex_none().px(5).rounded(8).bg(PAPER(t) ? tint(color, "22") : t.raised).text_size(10.5).text_color(PAPER(t) ? color : t.muted).child(String(n))))
       .child(div().flex_1());
   }
 
   // 分区下没有任务时的那一行灰字。
   flowEmpty(label, t) {
-    return div().px(14).py(3).flex_none().text_size(11).text_color(t.dim).child(label);
+    return div().h(20).px(14).flex_none().flex().items_center().text_size(11).text_color(t.dim).child(label);
   }
 
   // Spaces 与下面两块之间的分界：非纸用组间那条 1px 线；纸感用铅笔线（与项目头同一颜色）。
@@ -502,6 +506,7 @@ export default class Workbench extends View {
     const space = clean(a.space_name) || a.address;
     const q = asks[a.address] ?? "";
     const icon = progIcon(a.program, 12, t.muted);
+    const accent = FLOW_YELLOW(t);
     return v_flex()
       .id(`wb-ask-${a.address}`)
       .flex_none()
@@ -513,16 +518,16 @@ export default class Workbench extends View {
       .rounded(8)
       .bg(t.raised)
       .border(1)
-      .border_color(tint(t.blocked, PAPER(t) ? "55" : "44"))
+      .border_color(tint(accent, PAPER(t) ? "55" : "44"))
       .cursor_pointer()
-      .hover((s) => s.bg(tint(t.blocked, PAPER(t) ? "12" : "1a")))
+      .hover((s) => s.bg(tint(accent, PAPER(t) ? "12" : "1a")))
       .tooltip(q ? `${name}\n${q}` : name)
       .accessibility_label(`${name} 待处理`)
       .on_click(() => this.openAgent(a))
       .child(h_flex()
         .gap(6)
         .items_center()
-        .child(div().size(7).flex_none().rounded_full().bg(t.blocked).loop("opacity", { from: 0.35, to: 1, period: 900 }))
+        .child(div().size(7).flex_none().rounded_full().bg(accent).loop("opacity", { from: 0.35, to: 1, period: 900 }))
         .child(div().flex_1().min_w(0).truncate().text_size(13).font_weight(600).text_color(inkOf(t, "ink", "foreground")).child(name))
         .child(div().flex_none().text_size(10).text_color(t.dim).child(ago(sinceOf(a), this.now ?? Date.now()))))
       .child(h_flex()
@@ -531,7 +536,7 @@ export default class Workbench extends View {
         .items_center()
         .when(Boolean(icon), (el) => el.child(icon))
         .child(this.spaceChip(space, a.space, t, colors))
-        .child(div().flex_none().text_size(11).font_weight(600).text_color(t.blocked).child("asks you"))
+        .child(div().flex_none().text_size(11).font_weight(600).text_color(accent).child("asks you"))
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(a.program?.name ?? a.app ?? "")))
       .when(Boolean(q), (el) => el.child(div().pl(13).text_size(11).text_color(inkOf(t, "pencil", "muted")).truncate().child(q)));
   }
@@ -541,6 +546,7 @@ export default class Workbench extends View {
     const name = clean(a.title) || a.program?.name || a.app || a.address;
     const space = clean(a.space_name) || a.address;
     const icon = progIcon(a.program, 12, t.muted);
+    const accent = FLOW_GREEN(t);
     return v_flex()
       .id(`wb-fly-${a.address}`)
       .flex_none()
@@ -557,7 +563,7 @@ export default class Workbench extends View {
       .child(h_flex()
         .gap(6)
         .items_center()
-        .child(svg("mods/inkstone-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900))
+        .child(svg("mods/inkstone-chrome/spinner.svg").size(12).flex_none().text_color(accent).spin(900))
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(name))
         .child(div().flex_none().text_size(10).text_color(t.dim).child(ago(sinceOf(a), this.now ?? Date.now()))))
       .child(h_flex()
@@ -566,7 +572,7 @@ export default class Workbench extends View {
         .items_center()
         .when(Boolean(icon), (el) => el.child(icon))
         .child(this.spaceChip(space, a.space, t, colors))
-        .child(div().flex_none().text_size(11).text_color(t.working).child("running"))
+        .child(div().flex_none().text_size(11).text_color(accent).child("running"))
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(a.program?.name ?? a.app ?? "")));
   }
 
@@ -907,13 +913,13 @@ export default class Workbench extends View {
       rows.push(this.flowDivider(t));
       // 两栏的标题常驻：下面没有任务时也占一行，用空态文案代替卡片。
       const showNeeds = open.needs !== false;
-      rows.push(this.flowHead("needs", "Needs you", waiting.length, t.blocked, t, showNeeds, cx));
+      rows.push(this.flowHead("needs", "Needs you", waiting.length, FLOW_YELLOW(t), t, showNeeds, cx));
       if (showNeeds) {
         if (!waiting.length) rows.push(this.flowEmpty("all clear", t));
         else for (const a of waiting) rows.push(this.askCard(a, t, asks, colors));
       }
       const showFlight = open.flight !== false;
-      rows.push(this.flowHead("flight", "In flight", running.length, t.working, t, showFlight, cx));
+      rows.push(this.flowHead("flight", "In flight", running.length, FLOW_GREEN(t), t, showFlight, cx));
       if (showFlight) {
         if (!running.length) rows.push(this.flowEmpty("nothing running", t));
         else for (const a of running) rows.push(this.flightRow(a, t, colors));
