@@ -132,5 +132,4 @@ pixel-icons/codex.svg        the 8×8 Codex glyph OMP shows
 programs.json                program-table patch: omp → pixel-icons/codex.svg
 install.ps1 / install.sh     install (Windows / macOS·Linux)
 refresh.ps1                  reverse-sync (pull the latest files back)
-RECIPE.md                    brief for rebuilding it from scratch
 ```

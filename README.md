@@ -132,5 +132,4 @@ pixel-icons/codex.svg        OMP 用的 Codex 像素图标（8×8）
 programs.json                程序表补丁：omp → pixel-icons/codex.svg
 install.ps1 / install.sh     安装（Windows / macOS·Linux）
 refresh.ps1                  反向同步（把配置目录的最新文件抓回包）
-RECIPE.md                    从零重建的说明书（给你的 agent 用）
 ```
