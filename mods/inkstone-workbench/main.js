@@ -6,7 +6,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, agents, panes, run, openOverlay, exec, theme, shared, setShared, layout, window } from "herdr";
+import { spaces, agents, panes, run, openOverlay, exec, hc, checking, theme, shared, setShared, layout, window } from "herdr";
 import { sprite, glyph, assign, NAMES, FOLDER } from "./sprites.js";
 
 const git = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
@@ -54,6 +54,59 @@ function duration(ms) {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h} 小时`;
   return `${Math.floor(h / 24)} 天`;
+}
+
+// —— 侧栏底部「待你处理 / 进行中」用到的纯函数 ——
+// 相对时间：侧栏最窄只剩 200 多像素，放不下「3 分钟」，改成 3m / 2h / 1d。
+function ago(ms, now) {
+  if (!ms) return "";
+  const d = Math.max(0, now - ms);
+  if (d < 60000) return "刚刚";
+  if (d < 3600000) return `${Math.floor(d / 60000)}m`;
+  if (d < 86400000) return `${Math.floor(d / 3600000)}h`;
+  return `${Math.floor(d / 86400000)}d`;
+}
+
+// 这个智能体的标签从什么时候起在变：优先「开始干活」的时间，否则最后一次状态变化。
+function sinceOf(a) {
+  const tb = spaces().find((s) => s.id === a.space)?.tabs?.find((x) => x.id === a.tab);
+  return tb?.working_since ?? tb?.changed_at ?? null;
+}
+
+// 程序图标：单色 glyph 用 svg 上色，彩色图标用 image 原样贴。
+function progIcon(p, size, color) {
+  if (!p?.icon) return null;
+  return p.tint
+    ? svg(p.icon).size(size).flex_none().text_color(color)
+    : image(p.icon).w(size).h(size).flex_none();
+}
+
+// 被卡住的智能体在问什么：hc read 打出它的屏幕，取最后一条像问句的行。
+// 屏幕里混着框线、行号、状态栏、空提示符：先剥框线，再排除像代码的行（问句是自然语言）。
+// 只作卡片的一行说明，抓不到就留空串，不影响别的功能。
+const looksSentence = (l) => /\p{Script=Han}/u.test(l) || l.split(/\s+/).length >= 5;
+const looksCode = (l) => /[;{}<>]|=>|`|\breturn\b|\bconst\b|\bfunction\b|\bimport\b/.test(l);
+
+async function askedText(address) {
+  const r = await hc(["read", address]);
+  if (r.code !== 0 || !r.stdout) return "";
+  const lines = r.stdout.split("\n")
+    .map((l) => l
+      .replace(/^\s*\d+\s*[│┃|╎]\s*/u, "")
+      .replace(/^[\s│┃╭╰╮╯─━❯›>⎿⏺●•◆□☐✳*]+/u, "")
+      .replace(/[\s│┃╭╰╮╯─━]+$/u, "")
+      .trim())
+    .reverse();
+  const q = lines.find((l) =>
+    l.length >= 10
+    && /\p{L}/u.test(l)
+    && /[?？](\s|\)|。|$)/u.test(l)
+    && looksSentence(l)
+    && !looksCode(l)
+    && !l.startsWith("?")
+    && !/tok\/s|shortcuts/i.test(l));
+  if (!q) return "";
+  return q.length > 160 ? `${q.slice(0, 159)}…` : q;
 }
 
 // 每个空间一个固定的颜色：不同目录、不同空间靠名字就能分开。
@@ -159,6 +212,14 @@ export default class Workbench extends View {
     this.trees = {}; // 项目根 -> { at, list: [{ path, branch, main }] }
     this.refresh(cx);
     cx.timer.every(30000, (cx) => this.refresh(cx));
+    // 底部两块：相对时间的基准，以及被卡住智能体的提问原文（5 秒抓一次）。
+    this.now = Date.now();
+    this.asking = false;
+    cx.timer.every(30000, (cx) => {
+      this.now = Date.now();
+      cx.notify();
+    });
+    cx.timer.every(5000, (cx) => this.pollAsks(cx));
   }
 
   refresh(cx) {
@@ -368,17 +429,159 @@ export default class Workbench extends View {
       .hover((s) => s.bg(PAPER(t) ? "#f8dc4c4d" : t.hover))
       .tooltip(`${name}\n${detail}`)
       .accessibility_label(`${name} ${detail}`)
-      .on_click(() => {
-        // 只在确实要换空间/标签时才切换：每次切换都会重建终端视图并重放 scrollback。
-        const sp = spaces().find((s) => s.id === a.space);
-        if (sp && !sp.active) run("space.select", { id: a.space });
-        const tb = sp?.tabs?.find((x) => x.id === a.tab);
-        if (tb && !tb.active) run("tab.select", { id: a.tab });
-        run("agent.focus", { terminal: a.address });
-      })
+      .on_click(() => this.openAgent(a))
       .child(dot(t, a.status, 7))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(a.status === "blocked" ? t.blocked : t.foreground).child(name))
       .child(div().flex_none().text_size(10.5).text_color(t.dim).child(a.status === "blocked" ? "待处理" : a.status === "done" ? "已完成" : ""));
+  }
+
+  // 点智能体行/卡片：切到它的空间与标签，再把焦点给那个终端。
+  // 只在确实要换空间/标签时才切换：每次切换都会重建终端视图并重放 scrollback。
+  openAgent(a) {
+    const sp = spaces().find((s) => s.id === a.space);
+    if (sp && !sp.active) run("space.select", { id: a.space });
+    const tb = sp?.tabs?.find((x) => x.id === a.tab);
+    if (tb && !tb.active) run("tab.select", { id: a.tab });
+    run("agent.focus", { terminal: a.address });
+  }
+
+  // —— Spaces 下面两块：待你处理 / 进行中 ——
+  // 分区头：字形箭头 + 标题 + 计数。折起来只收内容，标题与数字留着。
+  flowHead(key, label, n, color, t, open, cx) {
+    return h_flex()
+      .id(`wb-flow-${key}`)
+      .h(26)
+      .flex_none()
+      .px(8)
+      .gap(6)
+      .items_center()
+      .rounded(6)
+      .cursor_pointer()
+      .hover((s) => s.bg(PAPER(t) ? "#f8dc4c26" : t.hover))
+      .tooltip(open ? `收起${label}` : `展开${label}`)
+      .accessibility_label(`${label} ${n}`)
+      .on_click(() => this.toggleFlow(key, cx))
+      .child(svg(open ? "mods/inkstone-chrome/chevron-down.svg" : "mods/inkstone-chrome/chevron-right.svg").size(10).flex_none().text_color(t.dim))
+      .child(div().flex_none().text_size(11).font_weight(700).text_color(color).child(label))
+      .child(div().flex_none().px(5).rounded(8).bg(PAPER(t) ? tint(color, "22") : t.raised).text_size(10).text_color(inkOf(t, "pencil", "muted")).child(String(n)))
+      .child(div().flex_1());
+  }
+
+  toggleFlow(key, cx) {
+    const open = { needs: true, flight: true, ...(shared("inkstone.flow.open") ?? {}) };
+    open[key] = !open[key];
+    setShared("inkstone.flow.open", open);
+    cx.notify();
+  }
+
+  // 空间名 chip：颜色跟上面的空间行同源（spaceColors + 明暗档），不做哈希着色，
+  // 免得同一个空间在两处是两个颜色。
+  spaceChip(name, id, t, colors) {
+    const c = this.fill(t, colors[id] ?? 0);
+    return div().flex_none().max_w(110).truncate().px(5).py(1).rounded(3)
+      .bg(tint(c, PAPER(t) ? "1f" : "26"))
+      .text_size(11)
+      .text_color(c)
+      .child(name);
+  }
+
+  // 等你处理：一个卡住的智能体一张卡片——卡在哪、哪个空间、卡了多久、在问什么。
+  askCard(a, t, asks, colors) {
+    const name = clean(a.title) || a.program?.name || a.app || a.address;
+    const space = clean(a.space_name) || a.address;
+    const q = asks[a.address] ?? "";
+    const icon = progIcon(a.program, 12, t.muted);
+    return v_flex()
+      .id(`wb-ask-${a.address}`)
+      .flex_none()
+      .mx(2)
+      .mb(6)
+      .px(8)
+      .py(6)
+      .gap(3)
+      .rounded(8)
+      .bg(t.raised)
+      .border(1)
+      .border_color(tint(t.blocked, PAPER(t) ? "55" : "44"))
+      .cursor_pointer()
+      .hover((s) => s.bg(tint(t.blocked, PAPER(t) ? "12" : "1a")))
+      .tooltip(q ? `${name}\n${q}` : name)
+      .accessibility_label(`${name} 待处理`)
+      .on_click(() => this.openAgent(a))
+      .child(h_flex()
+        .gap(6)
+        .items_center()
+        .child(div().size(7).flex_none().rounded_full().bg(t.blocked).loop("opacity", { from: 0.35, to: 1, period: 900 }))
+        .child(div().flex_1().min_w(0).truncate().text_size(13).font_weight(600).text_color(inkOf(t, "ink", "foreground")).child(name))
+        .child(div().flex_none().text_size(10).text_color(t.dim).child(ago(sinceOf(a), this.now ?? Date.now()))))
+      .child(h_flex()
+        .pl(13)
+        .gap(6)
+        .items_center()
+        .when(Boolean(icon), (el) => el.child(icon))
+        .child(this.spaceChip(space, a.space, t, colors))
+        .child(div().flex_none().text_size(11).font_weight(600).text_color(t.blocked).child("等你处理"))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(a.program?.name ?? a.app ?? "")))
+      .when(Boolean(q), (el) => el.child(div().pl(13).text_size(11).text_color(inkOf(t, "pencil", "muted")).truncate().child(q)));
+  }
+
+  // 进行中：两行——在干什么 / 在哪个空间、什么程序、跑了多久。
+  flightRow(a, t, colors) {
+    const name = clean(a.title) || a.program?.name || a.app || a.address;
+    const space = clean(a.space_name) || a.address;
+    const icon = progIcon(a.program, 12, t.muted);
+    return v_flex()
+      .id(`wb-fly-${a.address}`)
+      .flex_none()
+      .px(8)
+      .py(4)
+      .gap(2)
+      .rounded(6)
+      .cursor_pointer()
+      .when(a.focused, (el) => swipeOn(t, el))
+      .when(!a.focused, (el) => swipeHover(t, el))
+      .tooltip(`${name}\n${statusLabel(a.status)} · ${a.tab_name ?? ""} · ${a.address}`)
+      .accessibility_label(`${name} 运行中`)
+      .on_click(() => this.openAgent(a))
+      .child(h_flex()
+        .gap(6)
+        .items_center()
+        .child(svg("mods/inkstone-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900))
+        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(name))
+        .child(div().flex_none().text_size(10).text_color(t.dim).child(ago(sinceOf(a), this.now ?? Date.now()))))
+      .child(h_flex()
+        .pl(18)
+        .gap(6)
+        .items_center()
+        .when(Boolean(icon), (el) => el.child(icon))
+        .child(this.spaceChip(space, a.space, t, colors))
+        .child(div().flex_none().text_size(11).text_color(t.working).child("运行中"))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(a.program?.name ?? a.app ?? "")));
+  }
+
+  // 卡住的智能体在问什么：每 5 秒抓一次，结果进 shared，重绘时直接用。
+  pollAsks(cx) {
+    if (checking()) return;
+    const blocked = agents().filter((a) => a.status === "blocked").map((a) => a.address);
+    const stored = shared("inkstone.asks") ?? {};
+    if (!blocked.length) {
+      if (Object.keys(stored).length) setShared("inkstone.asks", {});
+      return;
+    }
+    if (this.asking) return;
+    this.asking = true;
+    cx.spawn(async () => {
+      const next = {};
+      for (const address of blocked) {
+        try {
+          next[address] = await askedText(address);
+        } catch {
+          next[address] = "";
+        }
+      }
+      this.asking = false;
+      if (JSON.stringify(next) !== JSON.stringify(stored)) setShared("inkstone.asks", next);
+    });
   }
 
   // 没跑智能体的终端也要有自己一行：否则徽章上的 tab 数在下面找不到对应的行。
@@ -681,6 +884,27 @@ export default class Workbench extends View {
           if (mine.length) for (const a of mine) rows.push(this.agentRow(a, t));
           else rows.push(this.termRow(s, c, t));
         }
+      }
+    }
+    // Spaces 下面：等你的与在跑的智能体。追加进同一个滚动列表，不改动上面的空间行。
+    if (!narrow) {
+      const list = agents();
+      const asks = shared("inkstone.asks") ?? {};
+      const open = shared("inkstone.flow.open") ?? {};
+      const waiting = list.filter((a) => a.status === "blocked").sort((a, b) => b.seq - a.seq);
+      const running = list.filter((a) => a.status === "working").sort((a, b) => b.seq - a.seq);
+      if (waiting.length) {
+        const showNeeds = open.needs !== false;
+        rows.push(div().h(10).flex_none());
+        rows.push(this.flowHead("needs", "待你处理", waiting.length, t.blocked, t, showNeeds, cx));
+        if (showNeeds) for (const a of waiting) rows.push(this.askCard(a, t, asks, colors));
+      }
+      const showFlight = open.flight !== false;
+      rows.push(div().h(10).flex_none());
+      rows.push(this.flowHead("flight", "进行中", running.length, t.working, t, showFlight, cx));
+      if (showFlight) {
+        if (!running.length) rows.push(div().px(10).py(4).flex_none().text_size(11).text_color(t.dim).child("暂无运行中的智能体"));
+        else for (const a of running) rows.push(this.flightRow(a, t, colors));
       }
     }
     const inner = v_flex()
