@@ -6,7 +6,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, agents, panes, run, openOverlay, exec, theme, shared, setShared, layout } from "herdr";
+import { spaces, agents, panes, run, openOverlay, exec, theme, shared, setShared, layout, window } from "herdr";
 
 const git = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
 const base = (path) => (path ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path || "~";
@@ -27,7 +27,7 @@ const statusLabel = (s) => STATUS[s] ?? "无状态";
 
 // 智能体状态点：形状与颜色一起编码，色弱也能分辨——
 // 待处理 = 方块，已完成 = 实心圆，运行中 = 圆环，空闲 / 无状态 = 空心圆。
-// 侧栏缩成 rail（44px）时宽度放不下名字：只留目录图标与空间徽章。
+// 侧栏缩成 rail（Windows/Linux 44px，macOS 76px）时宽度放不下名字：只留目录图标与空间徽章。
 function findNode(node, id) {
   if (node?.id === id) return node;
   for (const child of node?.children ?? []) {
@@ -539,21 +539,28 @@ export default class Workbench extends View {
       .min_h(0)
       .bg(t.chrome)
       .text_size(13)
-      .child(h_flex()
-        .h(32)
-        .pl(narrow ? 0 : 16)
-        .pr(narrow ? 0 : 10)
-        .items_center()
-        .justify_between()
-        .when(narrow, (el) => el.justify_center())
-        .text_size(12)
-        .text_color(t.dim)
-        .when(!narrow, (el) => el.child("工作台"))
-        .child(h_flex()
-          .gap(6)
+      .child(narrow
+        ? v_flex()
+          .py(4)
+          .gap(2)
           .items_center()
-          .when(!narrow && needs > 0, (el) => el.child(div().text_size(11).text_color(t.blocked).child(`${needs} 待处理`)))
-          .when(!narrow, (el) => el.child(div().text_size(11).child(`${total} 智能体`)))
+          .when(window()?.platform === "macos", (el) => el.child(div()
+            .id("inkstone-sidebar-unfold")
+            .size(24)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(6)
+            .cursor_pointer()
+            .hover((s) => s.bg(t.hover).text_color(t.foreground))
+            .tooltip("展开侧栏")
+            .accessibility_label("展开侧栏")
+            .on_click(() => {
+              setShared("sidebar.collapsed", false);
+              run("layout.resize", { id: "sidebar", px: shared("sidebar.width") ?? 272 });
+            })
+            .child(svg("mods/inkstone-chrome/chevron-right.svg").size(14))))
           .child(div()
             .id("inkstone-space-new")
             .size(24)
@@ -567,7 +574,35 @@ export default class Workbench extends View {
             .tooltip("新建空间")
             .accessibility_label("新建空间")
             .on_click(() => run("space.new"))
-            .child(svg("mods/workspace-chrome/plus.svg").size(14)))))
+            .child(svg("mods/workspace-chrome/plus.svg").size(14)))
+        : h_flex()
+          .h(32)
+          .pl(16)
+          .pr(10)
+          .items_center()
+          .justify_between()
+          .text_size(12)
+          .text_color(t.dim)
+          .child("工作台")
+          .child(h_flex()
+            .gap(6)
+            .items_center()
+            .when(needs > 0, (el) => el.child(div().text_size(11).text_color(t.blocked).child(`${needs} 待处理`)))
+            .child(div().text_size(11).child(`${total} 智能体`))
+            .child(div()
+              .id("inkstone-space-new")
+              .size(24)
+              .flex_none()
+              .flex()
+              .items_center()
+              .justify_center()
+              .rounded(6)
+              .cursor_pointer()
+              .hover((s) => s.bg(t.hover).text_color(t.foreground))
+              .tooltip("新建空间")
+              .accessibility_label("新建空间")
+              .on_click(() => run("space.new"))
+              .child(svg("mods/workspace-chrome/plus.svg").size(14)))))
       .child(v_flex()
         .flex_1()
         .min_h(0)

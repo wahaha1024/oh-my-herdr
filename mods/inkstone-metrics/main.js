@@ -1,12 +1,12 @@
 // 系统资源：状态栏显示 CPU 占用与内存，点开看总览和吃内存最多的进程。
-// 取自 VladTemp27/herdr-orca 的 System Resource Meter；上游读 macOS 的 sysctl / vm_stat，
-// 这里用 .NET 的 PerformanceCounter（比 WMI 快一倍）：
-//   Processor\% Processor Time\_Total、Memory\Available MBytes；
-// 物理内存总量只取一次（Win32_OperatingSystem），之后用「总量 - 可用」算占用。
+// 取自 VladTemp27/herdr-orca 的 System Resource Meter：
+//   - Windows：.NET PerformanceCounter + Win32_OperatingSystem；
+//   - macOS：sysctl hw.memsize + vm_stat + top + ps + kill；
+//   - Linux：/proc/stat + /proc/meminfo + ps + kill。
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { exec, props, closeOverlay, theme, run } from "herdr";
+import { exec, props, closeOverlay, theme, run, window } from "herdr";
 
 const SAMPLE = [
   "-NoProfile",
@@ -37,6 +37,32 @@ const PROCS = [
   "Get-Process -ErrorAction SilentlyContinue | Sort-Object WS -Descending | Select-Object -First 8 | ForEach-Object { \"$($_.ProcessName)|$($_.Id)|$([math]::Round($_.WS/1MB,1))\" }",
 ];
 
+const MAC_SAMPLE = [
+  "ps=$(pagesize 2>/dev/null || sysctl -n hw.pagesize 2>/dev/null || echo 16384)",
+  "mb=$(vm_stat | awk -v ps=\"$ps\" '",
+  "  /Pages active:/ { gsub(/\\./,\"\",$NF); a=$NF }",
+  "  /Pages wired down:/ { gsub(/\\./,\"\",$NF); w=$NF }",
+  "  /Pages occupied by compressor:/ { gsub(/\\./,\"\",$NF); c=$NF }",
+  "  END { printf \"%.0f\", ((a+w+c)*ps)/1048576 }",
+  "')",
+  "cpu=$(top -l 2 -n 0 -s 0 2>/dev/null | awk '/CPU usage:/ { line=$0 } END { n=split(line,f,/[ ,%]+/); for(i=1;i<=n;i++) if(f[i]==\"idle\" && i>1) { printf \"%d\", 100-f[i-1]; exit } }')",
+  "printf \"%s|%s\\n\" \"${cpu:-}\" \"${mb:-}\"",
+].join("\n");
+
+const LINUX_SAMPLE = [
+  "read -r _ u1 n1 s1 i1 w1 q1 sq1 _ < /proc/stat",
+  "sleep 0.3",
+  "read -r _ u2 n2 s2 i2 w2 q2 sq2 _ < /proc/stat",
+  "t1=$((u1+n1+s1+i1+w1+q1+sq1)); t2=$((u2+n2+s2+i2+w2+q2+sq2))",
+  "dt=$((t2-t1)); di=$((i2+w2-i1-w1))",
+  "cpu=\"\"; [ \"$dt\" -gt 0 ] && cpu=$(( (dt - di) * 100 / dt ))",
+  "mb=$(awk '/MemTotal:/ { t=$2 } /MemAvailable:/ { a=$2 } END { if (t>0) printf \"%.0f\", (t-a)/1024 }' /proc/meminfo)",
+  "printf \"%s|%s\\n\" \"$cpu\" \"$mb\"",
+].join("\n");
+
+const UNIX_PROCS = "ps -axo pid=,rss=,comm= 2>/dev/null | sort -k2 -nr | head -n 8 | awk '{ p=$1; r=$2; $1=\"\"; $2=\"\"; sub(/^ +/,\"\"); n=split($0,a,\"/\"); printf \"%s|%s|%.1f\\n\", a[n], p, r/1024 }'";
+const plat = () => window()?.platform ?? "windows";
+
 const ff = (n) => (n >= 10 ? n.toFixed(1) : n.toFixed(2));
 
 export default class Metrics extends View {
@@ -53,9 +79,16 @@ export default class Metrics extends View {
   }
 
   loadTotal(cx) {
+    const p = plat();
+    const cmd = p === "windows"
+      ? ["powershell", TOTAL]
+      : p === "macos"
+        ? ["sysctl", ["-n", "hw.memsize"]]
+        : ["sh", ["-c", "awk '/MemTotal:/ { printf \"%.1f\", $2/1048576 }' /proc/meminfo"]];
     cx.spawn(async (cx) => {
-      const r = await exec("powershell", TOTAL, { timeout: 15000 }).catch(() => null);
-      const n = Number((r?.stdout ?? "").trim());
+      const r = await exec(cmd[0], cmd[1], { timeout: 15000 }).catch(() => null);
+      const raw = Number((r?.stdout ?? "").trim());
+      const n = p === "macos" ? raw / 1073741824 : raw;
       if (r?.code === 0 && Number.isFinite(n) && n > 0) this.total = n;
       cx.notify();
     });
@@ -64,12 +97,21 @@ export default class Metrics extends View {
   sample(cx) {
     if (this.busy) return;
     this.busy = true;
+    const p = plat();
+    const cmd = p === "windows"
+      ? ["powershell", SAMPLE]
+      : ["sh", ["-c", p === "macos" ? MAC_SAMPLE : LINUX_SAMPLE]];
     cx.spawn(async (cx) => {
-      const r = await exec("powershell", SAMPLE, { timeout: 15000 }).catch(() => null);
+      const r = await exec(cmd[0], cmd[1], { timeout: 15000 }).catch(() => null);
       if (r?.code === 0) {
-        const [cpu, avail] = (r.stdout ?? "").trim().split("|").map(Number);
+        const [cpuText, memText] = (r.stdout ?? "").trim().split("|");
+        const cpu = cpuText === "" ? NaN : Number(cpuText);
+        const mem = memText === "" ? NaN : Number(memText);
         if (Number.isFinite(cpu)) this.cpu = Math.max(0, Math.min(100, cpu));
-        if (Number.isFinite(avail) && this.total) this.used = Math.max(0, this.total - avail / 1024);
+        if (Number.isFinite(mem)) {
+          if (p === "windows" && this.total) this.used = Math.max(0, this.total - mem / 1024);
+          else if (p !== "windows") this.used = Math.max(0, mem / 1024);
+        }
       }
       this.busy = false;
       cx.notify();
@@ -77,8 +119,10 @@ export default class Metrics extends View {
   }
 
   loadProcs(cx) {
+    const p = plat();
+    const cmd = p === "windows" ? ["powershell", PROCS] : ["sh", ["-c", UNIX_PROCS]];
     cx.spawn(async (cx) => {
-      const r = await exec("powershell", PROCS, { timeout: 15000 }).catch(() => null);
+      const r = await exec(cmd[0], cmd[1], { timeout: 15000 }).catch(() => null);
       this.procs = (r?.stdout ?? "")
         .split(/\r?\n/)
         .map((line) => line.trim())
@@ -93,7 +137,11 @@ export default class Metrics extends View {
   }
 
   stop(pid, cx) {
-    exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`])
+    const p = plat();
+    const job = p === "windows"
+      ? exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`])
+      : exec("kill", ["-9", String(pid)]);
+    job
       .catch(() => {})
       .then(() => {
         this.procs = this.procs.filter((x) => x.pid !== pid);

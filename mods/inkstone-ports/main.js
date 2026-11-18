@@ -1,22 +1,71 @@
 // 活跃端口：状态栏一个紧凑指示器，点开是端口 / 进程清单。
-// 取自 VladTemp27/herdr-orca 的 Live Ports 监视器；上游用 lsof（macOS / Linux），
-// Windows 上改成 PowerShell 的 Get-NetTCPConnection -State Listen + Get-Process 取名。
+// 取自 VladTemp27/herdr-orca 的 Live Ports 监视器：
+//   - Windows：PowerShell Get-NetTCPConnection -State Listen + Get-Process；
+//   - macOS：lsof -nP -iTCP -sTCP:LISTEN -F pcn + open + kill；
+//   - Linux：lsof（优先）或 ss -ltnp + xdg-open + kill。
 // 每一行可以「在浏览器中打开」或「停止服务」（结束对应进程）。
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { exec, run, props, closeOverlay, theme } from "herdr";
+import { exec, run, props, closeOverlay, theme, window } from "herdr";
+
+const plat = () => window()?.platform ?? "windows";
 
 const POWERSHELL = [
   "-NoProfile",
   "-NonInteractive",
   "-Command",
   [
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
     "$map = @{}",
     "Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $map[[int]$_.Id] = $_.ProcessName }",
     "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ port=[int]$_.LocalPort; pid=[int]$_.OwningProcess; name=$map[[int]$_.OwningProcess]; addr=[string]$_.LocalAddress } } | Sort-Object port -Unique | ConvertTo-Json -Compress",
   ].join("\n"),
 ];
+
+function parseLsof(text) {
+  const seen = new Set();
+  const out = [];
+  let pid = 0;
+  let name = "系统";
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    if (!line) continue;
+    const tag = line[0];
+    const val = line.slice(1);
+    if (tag === "p") { pid = Number(val) || 0; name = "系统"; }
+    else if (tag === "c") name = val || "系统";
+    else if (tag === "n") {
+      const idx = val.lastIndexOf(":");
+      if (idx <= 0) continue;
+      const port = Number(val.slice(idx + 1));
+      const addr = val.slice(0, idx).replace(/^\[|\]$/g, "") || "*";
+      if (port > 0 && !seen.has(port)) {
+        seen.add(port);
+        out.push({ port, pid, name, addr });
+      }
+    }
+  }
+  return out.sort((a, b) => a.port - b.port);
+}
+
+function parseSs(text) {
+  const seen = new Set();
+  const out = [];
+  for (const line of String(text ?? "").split(/\r?\n/).slice(1)) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 5) continue;
+    const local = parts[3];
+    const idx = local.lastIndexOf(":");
+    if (idx <= 0) continue;
+    const port = Number(local.slice(idx + 1));
+    if (!port || seen.has(port)) continue;
+    seen.add(port);
+    const addr = local.slice(0, idx).replace(/^\[|\]$/g, "") || "*";
+    const pm = /"([^"]+)",pid=(\d+)/.exec(line);
+    out.push({ port, pid: pm ? Number(pm[2]) : 0, name: pm ? pm[1] : "系统", addr });
+  }
+  return out.sort((a, b) => a.port - b.port);
+}
 
 export default class Ports extends View {
   init(_p, cx) {
@@ -31,22 +80,37 @@ export default class Ports extends View {
   refresh(cx) {
     if (this.busy) return;
     this.busy = true;
+    const p = plat();
+    const job = p === "windows"
+      ? exec("powershell", POWERSHELL, { timeout: 8000 })
+      : p === "macos"
+        ? exec("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"], { timeout: 8000 })
+        : exec("sh", ["-c", "if command -v lsof >/dev/null 2>&1; then lsof -nP -iTCP -sTCP:LISTEN -F pcn; else echo __SS__; ss -ltnp 2>/dev/null; fi"], { timeout: 8000 });
     cx.spawn(async (cx) => {
-      const r = await exec("powershell", POWERSHELL, { timeout: 8000 }).catch((e) => ({ code: -1, stdout: "", stderr: String(e) }));
+      const r = await job.catch((e) => ({ code: -1, stdout: "", stderr: String(e) }));
       let next = [];
-      if (r?.code === 0 && r.stdout.trim()) {
-        try {
-          const parsed = JSON.parse(r.stdout.trim());
-          next = (Array.isArray(parsed) ? parsed : [parsed])
-            .map((x) => ({ port: Number(x.port), pid: Number(x.pid), name: x.name || "系统", addr: x.addr || "*" }))
-            .filter((x) => x.port > 0)
-            .sort((a, b) => a.port - b.port);
-        } catch (e) {
-          console.warn(`inkstone-ports: JSON ${e}`);
+      const out = (r?.stdout ?? "").trim();
+      if (r?.code === 0 && out) {
+        if (p === "windows") {
+          try {
+            const parsed = JSON.parse(out);
+            next = (Array.isArray(parsed) ? parsed : [parsed])
+              .map((x) => ({ port: Number(x.port), pid: Number(x.pid), name: x.name || "系统", addr: x.addr || "*" }))
+              .filter((x) => x.port > 0)
+              .sort((a, b) => a.port - b.port);
+          } catch (e) {
+            console.warn(`inkstone-ports: JSON ${e}`);
+          }
+        } else if (out.startsWith("__SS__")) {
+          next = parseSs(out.slice(6).trim());
+        } else {
+          next = parseLsof(out);
         }
       }
       this.loaded = true;
-      if (next.length) this.failed = false;
+      // macOS 上没有任何进程监听时 lsof 返回退出码 1 且 stdout 为空，不算探测失败。
+      const emptyLsof = p === "macos" && r?.code === 1 && !out && !(r?.stderr ?? "").trim();
+      if (next.length || emptyLsof || r?.code === 0) this.failed = false;
       else if (r?.code !== 0) this.failed = true;
       this.list = next;
       this.busy = false;
@@ -55,11 +119,20 @@ export default class Ports extends View {
   }
 
   open(port) {
-    exec("cmd", ["/c", "start", "", `http://127.0.0.1:${port}`]).catch(() => {});
+    const url = `http://127.0.0.1:${port}`;
+    const p = plat();
+    if (p === "windows") exec("cmd", ["/c", "start", "", url]).catch(() => {});
+    else if (p === "macos") exec("open", [url]).catch(() => {});
+    else exec("xdg-open", [url]).catch(() => {});
   }
 
   stop(id, port, cx) {
-    exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${id} -Force -ErrorAction SilentlyContinue`])
+    if (!id) return;
+    const p = plat();
+    const job = p === "windows"
+      ? exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${id} -Force -ErrorAction SilentlyContinue`])
+      : exec("kill", ["-9", String(id)]);
+    job
       .catch(() => {})
       .then(() => {
         this.list = this.list.filter((x) => !(x.pid === id && x.port === port));
@@ -169,7 +242,7 @@ export default class Ports extends View {
         .track_scroll(this.scroll)
         .children(this.list.length
           ? this.list.map((x) => this.row(x, t, cx))
-          : [div().px(10).py(10).text_size(12).text_color(t.dim).child(this.failed ? "读取端口失败：需要 PowerShell 的 Get-NetTCPConnection。" : this.loaded ? "没有端口在监听。" : "正在扫描端口…")]));
+          : [div().px(10).py(10).text_size(12).text_color(t.dim).child(this.failed ? (plat() === "windows" ? "读取端口失败：需要 PowerShell 的 Get-NetTCPConnection。" : "读取端口失败：需要 lsof 或 ss 可用。") : this.loaded ? "没有端口在监听。" : "正在扫描端口…")]));
   }
 
   render(cx) {

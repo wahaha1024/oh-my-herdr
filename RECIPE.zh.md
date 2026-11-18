@@ -21,8 +21,8 @@
 
 - **空间颜色**：7 色调色板（浅色档 `#a84a50 #8a5619 #7d640c #357041 #34618f #5f5399 #805083`，深色档换亮版），新空间拿用得最少的那个。切深浅主题时色相不变，只换亮度档。存在 `shared("inkstone.spaceColors")`，值是序号。
 - **点击**：侧栏空间/终端行——已在显示的那个就不发命令（每次切换都会重建终端视图、重放 scrollback）；点智能体行会 `space.select` + `tab.select` + `agent.focus`。
-- **折叠侧栏**：拖到 44px 自动进入图标轨模式——空间只剩彩色数字徽章（tooltip 带名字、终端数、状态），目录只剩 folder 图标，点击照样能展开。
-- **会话抽屉**（`inkstone-sessions`）：列 `~/.omp/agent/sessions` 里的 omp 会话，点一条——**如果那个会话已经开在某个终端里（终端标题认出来），就切过去，不重新 `omp --resume`**，避免整段历史重渲染。正在跑的行右边有绿色「已打开」。同一标题多条记录时只认最新的那条。
+- **折叠侧栏**：拖到 44px 自动进入图标轨模式——空间只剩彩色数字徽章（tooltip 带名字、终端数、状态），目录只剩 folder 图标，点击照样能展开；macOS 下品牌条让位给交通灯，轨顶部会自动竖排多出一个「展开侧栏」按钮。
+- **会话抽屉**（`inkstone-sessions`）：无需 Python，按平台用 PowerShell（Windows）或 `sh` + `awk`（macOS / Linux）扫本机 OMP / Codex / Claude Code / Pi 四个会话目录（各取最新 30 条合并取前 60），行左带来源徽章，副标题列时间、目录名与 6 位短 ID。点一条——**如果那个会话已经开在某个终端里（终端标题认出来），就切过去，不重新 resume**，避免整段历史重渲染。正在跑的行右边有绿色「已打开」。同一标题多条记录时只认最新的那条。
 - **收藏抽屉**（`inkstone-favorites`）：`shared("inkstone.favorites")` 是 `[{name, folder}]`；「收藏当前」取当前空间的目录，行上「已打开」表示该目录正有空间开着。
 - **待处理**（`inkstone-inbox`）：状态栏 84px 紧凑块 + 400×320 overlay，列出 `blocked` 的智能体。
 - **右键即粘贴**：`terminal_menu: "inkstone-paste"`，终端里右键不弹菜单，直接把剪贴板打进被右键的终端（先 `pane.focus` 交回焦点，再 `terminal.paste`，最后关掉自己的 overlay）。`init()` 开头 `if (checking()) return`，所以 `herdr-app check` 不会碰剪贴板。
@@ -39,8 +39,13 @@
 ## 装法
 
 ```powershell
-.\install.ps1 -DryRun   # 先看会写什么
+.\install.ps1 -DryRun   # Windows：先看会写什么
 .\install.ps1           # 不覆盖已有文件；keys.json 只加缺的键，冲突会列出来
+```
+
+```sh
+./install.sh --dry-run  # macOS / Linux / WSL
+./install.sh
 ```
 
 装完：
@@ -53,11 +58,11 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 ## 用到的东西
 
 - **布局节点**：root `row`（`titlebar: "none"`、`traffic_lights: [12,16]`、`theme: {light:"qingci",dark:"xuanmo"}`、`terminal_menu: "inkstone-paste"`、`preview`）→ `sidebar`（column，272，min 44，max 420）+ `work`（column：42px `inkstone-tabs` 块 + body row + 28px 状态栏 row）。body 里 `panel-body` 是 `{tab:"active"}` 的 block，`panel` 是 380px 的 column（`stack` id `panel-stack`，子页 files/changes/cockpit/inkstone-sessions/inkstone-favorites）。
-- **自己的 mod**（12 个）：`inkstone-chrome`（品牌条 + footer）、`inkstone-workbench`（列表）、`inkstone-tabs`（标签 + 窗口按钮 + 面板按钮）、`inkstone-sessions`、`inkstone-favorites`、`inkstone-inbox`、`inkstone-metrics`、`inkstone-ports`、`inkstone-review`、`inkstone-settings`、`inkstone-paste`（右键即粘贴）、`cockpit`。
+- **自己的 mod**（13 个）：`inkstone-chrome`（品牌条 + footer）、`inkstone-workbench`（列表）、`inkstone-tabs`（标签 + 窗口按钮 + 面板按钮）、`inkstone-sessions`、`inkstone-favorites`、`inkstone-inbox`、`inkstone-metrics`、`inkstone-ports`、`inkstone-review`、`inkstone-settings`、`inkstone-paste`（右键即粘贴）、`inkstone-menu`（工作台与可选右键菜单）、`cockpit`。
 - **用到的 Herdr 自带 mod**：`files`、`changes`、`workspace-status`。
 - **herdr 函数**：`theme()`、`spaces()`、`panes()`、`terminals()`、`keys()`、`shared()` / `setShared()`、`layout()`、`exec()`、`run()`、`notify()`、`openOverlay()` / `closeOverlay()`、`props()`。
 - **命令**：`space.select`、`tab.select`、`tab.new`、`pane.focus`、`pane.split`、`pane.close`、`pane.zoom`、`agent.focus`、`terminal.open`、`terminal.kill`、`terminal.copy` / `terminal.paste`、`layout.select` / `layout.show` / `layout.hide` / `layout.resize`、`mod.open`、`app.theme`、`window.*`。
-- **读的外部数据**：`~/.omp/agent/sessions/*/*.jsonl`（会话标题与 cwd，用 python 读头两行）；`hc` / `git` 通过 `exec`。
+- **读的外部数据**：OMP（`~/.omp/agent/sessions`）、Codex（`~/.codex/sessions`）、Claude Code（`~/.claude/projects`）、Pi（`~/.pi/agent/sessions`）的 `.jsonl` 头 25 行（Windows 用 PowerShell，macOS / Linux 用 `sh` + `awk`，不依赖 Python）；系统指标与监听端口在 Windows 走 PowerShell，在 macOS 走 `vm_stat`/`top`/`sysctl`/`lsof`/`open`/`kill`，在 Linux 走 `/proc`、`lsof`/`ss`、`xdg-open`/`kill`；`hc` / `git` 通过 `exec`。
 
 ## 注意
 
