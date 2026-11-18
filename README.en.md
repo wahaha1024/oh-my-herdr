@@ -16,7 +16,7 @@ A workbench layout for [Herdr](https://herdr.dev): spaces grouped by folder in t
 - **Spaces grouped by folder.** Group headers (folder icon, count, rule), space rows, terminal rows — three levels of indent. Spaces carry a coloured number badge and a coloured name; colours are assigned automatically and remembered, and switching themes only swaps the light/dark step, not the hue.
 - **Sidebar folds to 44px** into a rail of coloured badges, and back.
 - **Top bar reworked.** Tabs are 30px tall; the panel buttons carry names; a small dot on the left shows the current space's colour.
-- **Five drawer pages** — files, changes, cockpit, sessions, favourites — all closed by default. The sessions drawer needs no Python and scans local OMP / Codex / Claude Code / Pi sessions; one that is already running in some terminal is marked "open", and clicking it switches there instead of replaying history through a fresh resume.
+- **Five drawer pages** — files (`inkstone-files`), changes, cockpit, sessions, favourites — all closed by default. The files drawer adds fast path search (`git ls-files` / `jj file list` first), one-click `@path` copying in rows and previews, and `jj`/`git` status marks; the sessions drawer needs no Python and adds live search, source pills, current-folder & remote-machine scanning, and one-click resume-command copying, switching to live sessions instead of replaying history.
 - **Status bar**: CPU and memory, listening port count, agents waiting on you (click for the list), review entry.
 - **Right-click pastes** in terminals, no menu.
 
@@ -37,13 +37,13 @@ A workbench layout for [Herdr](https://herdr.dev): spaces grouped by folder in t
 ./install.sh --target=DIR # install somewhere else
 ```
 
-Only `install.sh` needs `python3` (or `python`) to merge `keys.json`; without one it prints the keys to add by hand. The layout and all 13 mods have zero runtime Python dependency.
+Only `install.sh` needs `python3` (or `python`) to merge `keys.json`; without one it prints the keys to add by hand. The layout and all 14 mods have zero runtime Python dependency.
 
 ### On a second machine
 
 Clone the repo and run the right script on another machine (Windows / macOS / Linux) — layout, mods and themes come out identical. Three things are deliberately **not** in the repo: space colours and favourites (they live in `shared.json`), fonts and appearance (`settings.json`, not shipped), and each machine's own spaces and sessions (`view.json`, `~/.omp` / `~/.codex` / `~/.claude` / `~/.pi`). So on a second machine spaces get their colours assigned afresh and favourites start empty; the behaviour is unaffected.
 
-Each machine needs Herdr's shipped `files` / `changes` / `workspace-status` mods (they come with Herdr), `git` for the branch labels, and whichever agent CLIs (`omp` / `codex` / `claude` / `pi`) you resume from the sessions drawer.
+Each machine needs Herdr's shipped `changes` / `workspace-status` / `pane` mods (plus `mods/files/*.svg` icons), `git` (or optional `jj`) for branch/status labels, and whichever agent CLIs (`omp` / `codex` / `claude` / `pi` / `opencode`) you resume from the sessions drawer.
 
 ### By hand
 
@@ -62,7 +62,7 @@ Back is `ctrl-shift-l`; to undo, delete the files.
 
 ### Requirements
 
-Herdr's shipped `files`, `changes` and `workspace-status` mods; `inkstone-sessions` uses PowerShell on Windows or `sh` + `awk` on macOS/Linux to scan OMP / Codex / Claude Code / Pi session directories (missing dirs are ignored); `inkstone-metrics` reads OS CPU/memory counters; `inkstone-ports` uses `Get-NetTCPConnection` on Windows and `lsof` (or `ss`) on macOS/Linux. Everything runs locally, no network, no Python at runtime.
+Herdr's shipped `changes`, `workspace-status`, `pane` mods (and `mods/files/*.svg` icons); `inkstone-files` uses `git` (or optional `jj`) plus PowerShell/`sh`; `inkstone-sessions` uses PowerShell on Windows or `sh` + `awk` on macOS/Linux/remote machines to scan OMP / Codex / Claude Code / Pi / project-local archives (plus OpenCode when `sqlite3` is available); `inkstone-metrics` reads OS CPU/memory counters; `inkstone-ports` uses `Get-NetTCPConnection` on Windows and `lsof` (or `ss`) on macOS/Linux. Everything runs locally or over Herdr's configured remote machine, no extra network, no Python at runtime.
 
 ## Keys
 
@@ -104,7 +104,7 @@ python mkprev.py    # reads themes/*.json, redraws both previews
 
 - Sidebar width, drawer state and the folded rail are runtime state (`layouts/.state/`); they may not survive a restart. The 272/380 in the layout file are starting values.
 - The four status blocks are fixed width — changing their content length means editing the `px` values in `layouts/oh-my-herdr.json`.
-- Session matching goes through the terminal title (omp writes the session title into the OSC title). Rename the title by hand and it won't match, so a new session gets opened; sessions on other machines are out of scope.
+- Live session matching checks `argv`/`foreground.argv` for the session ID first, then falls back to the first 24 chars of the OSC terminal title plus cwd; manually renaming the title on an unflagged process won't match.
 - The cockpit page depends on the `cockpit` mod's own data shape; copying it out alone degrades.
 - Sidebar grouping is inferred from cwd prefixes; deep directories get merged.
 
@@ -118,7 +118,8 @@ mkprev.py                    generates preview.png / preview-dark.png
 mods/inkstone-chrome         brand row + footer rows
 mods/inkstone-workbench      folder/space/terminal list, rail mode
 mods/inkstone-tabs           tabs + panel buttons + window buttons
-mods/inkstone-sessions       multi-source session drawer (OMP / Codex / Claude / Pi)
+mods/inkstone-files          file tree, path search, @path copy & jj/git marks
+mods/inkstone-sessions       multi-source sessions (search / filters / remote / copy cmd)
 mods/inkstone-favorites      favourites drawer
 mods/inkstone-inbox          waiting block + overlay
 mods/inkstone-metrics        CPU/memory block

@@ -5,7 +5,7 @@
 //   左栏  · 主题：墨观 Inkstone 的六个变体 → app.theme + 写回布局的 theme
 //         · 终端右键：弹出菜单 / 直接粘贴 → 改布局的 terminal_menu 并重载
 //   右栏  · 界面：明暗 / 缩放 / 界面字体 / 连字 → 直接改 settings.json（Herdr 会热载）
-//         · 状态栏三块：系统资源 / 活跃端口 / 代码审查 → 改布局节点的 hidden
+//         · 状态栏四块：系统资源 / 活跃端口 / 待处理 / 代码审查 → 改布局节点的 hidden
 // 左栏两组写回 layouts/oh-my-herdr.json，右栏写回 settings.json，重启后都还在。
 
 import { View, div, svg } from "gpui-kit";
@@ -31,12 +31,12 @@ const THEMES = [
 const STATUS = [
   { id: "metrics", label: "系统资源", hint: "状态栏的 CPU / 内存" },
   { id: "ports", label: "活跃端口", hint: "状态栏的端口计数" },
+  { id: "inbox", label: "待处理提醒", hint: "状态栏的智能体等待提醒" },
   { id: "review", label: "代码审查", hint: "状态栏的审查按钮" },
 ];
 
-// 界面字体候选：本机已装且带等宽字形的一档。
-const FONTS = ["JetBrainsMono NF", "JetBrains Mono", "Cascadia Mono", "Fira Code"];
-
+// 界面字体候选：兼容 Windows 与 macOS 的常见等宽字体。
+const FONTS = ["JetBrainsMono NF", "JetBrains Mono", "SF Mono", "Menlo", "Cascadia Mono", "Fira Code"];
 const ZOOMS = [0.8, 0.9, 1, 1.1, 1.25, 1.4];
 
 // 深度查找布局树里的节点。
@@ -208,7 +208,7 @@ export default class InkstoneSettings extends View {
   left(t, cx) {
     const mode = this.rightClick();
     const current = this.currentTheme();
-    return v_flex().w(252).h_full().gap(12)
+    return v_flex().w(252).h_full().gap(10)
       .child(v_flex().w_full().gap(5)
         .child(this.heading(t, "主题", "墨观 Inkstone · 六个变体"))
         .child(h_flex().w_full().gap(6).flex_wrap().children(THEMES.map((x) => div().id(`th-${x.name}`).h(28).px(9).flex_none().flex().items_center().justify_center().rounded(6)
@@ -275,7 +275,7 @@ export default class InkstoneSettings extends View {
         .when(Boolean(this.err), (el) => el.child(div().text_size(11).text_color(t.blocked).child(this.err))));
   }
 
-  render() {
+  render(cx) {
     const t = theme();
     if (!this.doc) {
       return v_flex().w(720).h(500).bg(t.popover).p(16).gap(8)
@@ -292,8 +292,8 @@ export default class InkstoneSettings extends View {
           .on_click(() => closeOverlay(props()?.overlay))
           .child(svg("mods/inkstone-chrome/x.svg").size(12))))
       .child(h_flex().w_full().flex_1().min_h(0).gap(16).items_start()
-        .child(this.left(t))
+        .child(this.left(t, cx))
         .child(div().w(1).h_full().flex_none().bg(t.border))
-        .child(this.right(t)));
+        .child(this.right(t, cx)));
   }
 }

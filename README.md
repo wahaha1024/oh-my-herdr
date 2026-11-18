@@ -16,7 +16,7 @@
 - **侧栏按目录分组**：组头（文件夹图标 + 计数 + 分隔线）、空间行、终端行三层缩进。空间带彩色数字徽章和彩色名字，颜色自动分配并记住，切主题只换明暗不换色相。
 - **侧栏可折叠**：拖到 44px 变成图标轨，只剩彩色徽章；拖回来恢复。
 - **顶栏重排**：标签放大到 30px 高；右侧面板按钮带中文名；左侧一个小色点标出当前空间的颜色。
-- **五个抽屉页**：文件、变更、驾驶舱、会话、收藏，默认收起。会话页无需 Python，自动扫描 OMP / Codex / Claude Code / Pi 四种本机会话；已经在终端跑着的标「已打开」，点一下切过去，不会重新 `--resume` 把历史重放一遍。
+- **五个抽屉页**：文件（`inkstone-files`）、变更、驾驶舱、会话、收藏，默认收起。文件页支持关键字检索（`git ls-files` / `jj file list` 优先）、行尾与预览顶栏一键复制 `@path`、以及 `jj` / `git` 变更标记；会话页无需 Python，支持关键字搜索、来源筛选药丸、当前目录直扫、远程机器扫描与一键复制恢复命令，已在终端跑着的标「已打开」，点一下直接切过去。
 - **状态栏**：CPU 与内存、监听端口数、等你处理的智能体数（点开名单）、审查入口。
 - **终端右键直接粘贴**：不弹菜单。
 
@@ -37,13 +37,13 @@
 ./install.sh --target=DIR # 装到别的配置目录
 ```
 
-仅 `install.sh` 在自动合并 `keys.json` 时需要 `python3`（或 `python`）；没有时它会把要加的键直接打印出来，你手动加。布局和 13 个 mod 本身运行时不依赖 Python。
+仅 `install.sh` 在自动合并 `keys.json` 时需要 `python3`（或 `python`）；没有时它会把要加的键直接打印出来，你手动加。布局和 14 个 mod 本身运行时不依赖 Python。
 
 ### 多台电脑
 
 同一个仓库装到第二台机器（Windows / macOS / Linux）：clone 下来跑对应脚本就行，布局、mod、主题完全一致。**不随仓库走的**有三样——空间配色与收藏（在 `shared.json`）、字体和外观（在 `settings.json`，本包不带）、以及每台机器自己的空间与会话记录（`view.json`、`~/.omp` / `~/.codex` / `~/.claude` / `~/.pi`）。所以第二台机器上空间会重新分配颜色、收藏是空的，功能本身不受影响。
 
-每台机器需要的是：Herdr 自带的 `files`/`changes`/`workspace-status` 三个 mod（安装 Herdr 就有）、`git`（显示分支），以及你用到的对话 CLI（`omp` / `codex` / `claude` / `pi` 在 `PATH` 中，点击历史会话时才会用到）。
+每台机器需要的是：Herdr 自带的 `changes` / `workspace-status` / `pane` 基础 mod（安装 Herdr 就有，另复用 `mods/files/*.svg` 图标）、`git`（或可选 `jj`，显示分支与改动），以及你用到的对话 CLI（`omp` / `codex` / `claude` / `pi` / `opencode` 在 `PATH` 中，点击历史会话时才会用到）。
 
 ### 手动
 
@@ -62,7 +62,7 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 
 ### 依赖
 
-Herdr 自带的 `files`、`changes`、`workspace-status` 三个 mod；`inkstone-sessions` 用 PowerShell（Windows）或 `sh` + `awk`（macOS / Linux）扫本机 OMP / Codex / Claude Code / Pi 会话目录（哪个不存在就跳过，不报错）；`inkstone-metrics` 用系统自带计数器；`inkstone-ports` 在 Windows 用 `Get-NetTCPConnection`，在 macOS / Linux 用 `lsof`（或 `ss`）。全部只在本机跑，不联网，不依赖 Python。
+Herdr 自带的 `changes`、`workspace-status`、`pane`（及 `mods/files/*.svg` 图标）；`inkstone-files` 用 `git`（或可选 `jj`）加 PowerShell / `sh` 列目录并建索引；`inkstone-sessions` 用 PowerShell（Windows）或 `sh` + `awk`（macOS / Linux / 远程机器）扫 OMP / Codex / Claude Code / Pi / 项目归档（有 `sqlite3` 时附带 OpenCode）会话目录（哪个不存在就跳过，不报错）；`inkstone-metrics` 用系统自带计数器；`inkstone-ports` 在 Windows 用 `Get-NetTCPConnection`，在 macOS / Linux 用 `lsof`（或 `ss`）。全部只在本机或已连远程机器跑，不额外联网，不依赖 Python。
 
 ## 快捷键
 
@@ -104,7 +104,7 @@ python mkprev.py    # 读 themes/*.json，重画两张预览图
 
 - 侧栏宽度、抽屉开合、折叠状态是运行态（`layouts/.state/`），重启不一定保留；布局文件里的 272/380 是初始值。
 - 状态栏四块是固定宽度，改内容长度要同步改 `layouts/oh-my-herdr.json` 里的 `px`。
-- 会话识别靠终端标题（omp 把会话标题写进 OSC 标题）。手动改掉标题就认不出，会当成新会话开一个；跨机器的会话不在识别范围内。
+- 会话实况识别优先匹配启动参数（`argv` / `foreground.argv`）里的会话 ID，其次用终端 OSC 标题前 24 字与目录匹配；若标题被手动改写且未带参数启动，会当成新会话开一个。
 - 抽屉的「驾驶舱」页依赖 `cockpit` mod 自己的数据结构，单独拷走会退化。
 - 侧栏分组按 cwd 前缀推出来，目录很深时会合并显示。
 
@@ -118,7 +118,8 @@ mkprev.py                    生成 preview.png / preview-dark.png
 mods/inkstone-chrome         品牌条 + 底部三行（footer props）
 mods/inkstone-workbench      目录/空间/终端列表，图标轨
 mods/inkstone-tabs           标签栏 + 面板按钮 + 窗口按钮
-mods/inkstone-sessions       多源会话抽屉（OMP / Codex / Claude / Pi）
+mods/inkstone-files          文件树、索引搜索、@path 引用与 jj/git 状态
+mods/inkstone-sessions       多源会话抽屉（搜索 / 筛选 / 远程 / 复制命令）
 mods/inkstone-favorites      收藏抽屉
 mods/inkstone-inbox          待处理状态块 + overlay
 mods/inkstone-metrics        CPU/内存块

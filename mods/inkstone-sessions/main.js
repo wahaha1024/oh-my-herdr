@@ -1,19 +1,20 @@
 // 会话：把本机各编程助手的会话列出来，点一条在它原来的目录里恢复。
-// 数据源（都不依赖 python，Windows 走 PowerShell，macOS/Linux 走 sh + awk）：
+// 数据源（不依赖 Python；Windows 走 PowerShell，macOS/Linux 走 sh + awk）：
 //   - OMP：~/.omp/agent/sessions/<编码目录>/<时间戳>_<uuid>.jsonl
-//          第 1 行 {"type":"title","title":...}，第 2 行 {"type":"session","id","cwd","timestamp"}
-//   - Codex CLI：~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl，第 1 行 type=session_meta，
-//          字段在 payload.id / payload.cwd / payload.timestamp（该行含 base_instructions，约 19KB）
-//   - Claude Code：~/.claude/projects/<slug>/<sessionId>.jsonl，行内带 sessionId / cwd / timestamp
-//   - Pi：~/.pi/agent/sessions/*.jsonl，第 1 行 type=session（版本 3 起）
-// 恢复命令：omp --resume <id> / codex resume <id> / claude --resume <id> / pi --resume <id>。
+//   - Codex CLI：~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl（首行 type=session_meta）
+//   - Claude Code：~/.claude/projects/<slug>/<sessionId>.jsonl
+//   - Pi：~/.pi/agent/sessions/*.jsonl（首行 type=session）
+//   - 本地归档：<当前空间>/.herdr/conversations/*.jsonl|*.json
+//   - OpenCode（可选）：仅在本机已有 sqlite3 与 opencode.db 时只读查询
+// 恢复命令：omp --resume <id> / codex resume <id> / claude --resume <id> / pi --session <id> / opencode --session <id>。
 // 会话已经在某个终端里开着时不新起进程，直接切过去——新进程会把整段历史重渲染一遍。
 
 import { View, div, svg } from "gpui-kit";
-import { h_flex, v_flex } from "gpui-base";
-import { exec, run, theme, spaces, notify, terminals, window } from "herdr";
+import { h_flex, v_flex, InputState, Input } from "gpui-base";
+import { exec, run, theme, spaces, panes, notify, terminals, window, checking } from "herdr";
 
 const MAX_PER = 30;
+const MAX_CODEX = 50;
 const SEP = "\u001f";
 const plat = () => window()?.platform ?? "windows";
 
@@ -21,94 +22,179 @@ const SOURCES = {
   omp: { label: "OMP", dir: ".omp/agent/sessions", bin: "omp", argv: (id) => ["--resume", id] },
   codex: { label: "Codex", dir: ".codex/sessions", bin: "codex", argv: (id) => ["resume", id] },
   claude: { label: "Claude", dir: ".claude/projects", bin: "claude", argv: (id) => ["--resume", id] },
-  pi: { label: "Pi", dir: ".pi/agent/sessions", bin: "pi", argv: (id) => ["--resume", id] },
+  pi: { label: "Pi", dir: ".pi/agent/sessions", bin: "pi", argv: (id) => ["--session", id] },
+  opencode: { label: "OpenCode", bin: "opencode", argv: (id) => ["--session", id] },
+  local: { label: "本地", bin: null, argv: null },
 };
 
-const PS_SCAN = [
-  "-NoProfile",
-  "-NonInteractive",
-  "-Command",
-  [
+const SOURCE_ORDER = ["omp", "codex", "claude", "pi", "opencode", "local"];
+
+function buildPsScan(target) {
+  const esc = String(target ?? "").replace(/['‘’‚‛]/g, "$&$&");
+  const body = [
+    "param([string]$target)",
     "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
     "$SEP = [string][char]31",
+    "$seen = @{}",
     "$rows = New-Object System.Collections.Generic.List[string]",
     "function Parse($line) { try { return ($line | ConvertFrom-Json) } catch { return $null } }",
-    "function Scan($src, $root, $limit) {",
-    "  if (-not (Test-Path -LiteralPath $root)) { return }",
-    "  $files = Get-ChildItem -LiteralPath $root -Recurse -Filter *.jsonl -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First $limit",
-    "  foreach ($f in $files) {",
-    "      $id = ''; $ti = ''; $cwd = ''; $ts = ''; $fu = ''",
-    "      $lines = Get-Content -LiteralPath $f.FullName -TotalCount 25 -Encoding UTF8 -ErrorAction SilentlyContinue",
-    "      foreach ($ln in $lines) {",
-    "        if (-not $ln) { continue }",
-    "        $o = Parse $ln",
-    "        if ($null -eq $o) { continue }",
-    "        if (-not $id) {",
-    "          if ($o.type -eq 'session' -and $o.id) { $id = [string]$o.id; $cwd = [string]$o.cwd; $ts = [string]$o.timestamp }",
-    "          elseif ($o.type -eq 'session_meta' -and $o.payload.id) { $id = [string]$o.payload.id; $cwd = [string]$o.payload.cwd; $ts = [string]$o.payload.timestamp }",
-    "          elseif ($o.sessionId) { $id = [string]$o.sessionId }",
-    "        }",
-    "        if (-not $cwd -and $o.cwd) { $cwd = [string]$o.cwd }",
-    "        if ($o.type -eq 'title' -and $o.title) { $ti = [string]$o.title }",
-    "        if ($o.type -eq 'title_change' -and $o.title) { $ti = [string]$o.title }",
-    "        if ($o.type -eq 'custom-title' -and $o.customTitle) { $ti = [string]$o.customTitle }",
-    "        if ($o.type -eq 'ai-title' -and $o.aiTitle) { $ti = [string]$o.aiTitle }",
-    "        if (-not $fu) {",
-    "          $txt = $null",
-    "          if ($o.type -eq 'message' -and $o.message.role -eq 'user') { $c = @($o.message.content); if ($c.Count) { $txt = [string]$c[0].text } }",
-    "          elseif ($o.type -eq 'response_item' -and $o.payload.role -eq 'user') { $c = @($o.payload.content); if ($c.Count) { $txt = [string]$c[0].text } }",
-    "          elseif ($o.type -eq 'user' -and $o.message.role -eq 'user') { $c = @($o.message.content); if ($c.Count) { $txt = [string]$c[0].text } }",
-    "          if ($txt) {",
-    "            $t2 = ($txt -replace '\\s+', ' ').Trim()",
-    "            if ($t2 -and -not $t2.StartsWith('<')) { $fu = $t2.Substring(0, [Math]::Min(80, $t2.Length)) }",
-    "          }",
-    "        }",
-    "      }",
-    "      if (-not $ti -and $fu) { $ti = $fu }",
-    "      if ($id) {",
-    "        $m = [int]([DateTimeOffset]$f.LastWriteTimeUtc).ToUnixTimeSeconds()",
-    "        $rows.Add(@($src, $m, $id, $ti, $cwd) -join $SEP)",
+    "function ReadJsonl($src, $f) {",
+    "  if ($seen.ContainsKey($f.FullName)) { return }",
+    "  $seen[$f.FullName] = $true",
+    "  $id = ''; $ti = ''; $cwd = ''; $fu = ''",
+    "  if ($f.Length -le 65536) {",
+    "    $lines = Get-Content -LiteralPath $f.FullName -Encoding UTF8 -ErrorAction SilentlyContinue",
+    "  } else {",
+    "    $head = @(Get-Content -LiteralPath $f.FullName -TotalCount 25 -Encoding UTF8 -ErrorAction SilentlyContinue)",
+    "    $tail = @(Get-Content -LiteralPath $f.FullName -Tail 25 -Encoding UTF8 -ErrorAction SilentlyContinue)",
+    "    $lines = $head + $tail",
+    "  }",
+    "  foreach ($ln in $lines) {",
+    "    if (-not $ln) { continue }",
+    "    $o = Parse $ln",
+    "    if ($null -eq $o) { continue }",
+    "    if (-not $id) {",
+    "      if ($o.type -eq 'session' -and $o.id) { $id = [string]$o.id; $cwd = [string]$o.cwd }",
+    "      elseif ($o.type -eq 'session_meta' -and $o.payload.id) { $id = [string]$o.payload.id; $cwd = [string]$o.payload.cwd }",
+    "      elseif ($o.sessionId) { $id = [string]$o.sessionId }",
+    "      elseif ($o.id) { $id = [string]$o.id }",
+    "    }",
+    "    if (-not $cwd -and $o.cwd) { $cwd = [string]$o.cwd }",
+    "    if ($o.type -eq 'title' -and $o.title) { $ti = [string]$o.title }",
+    "    elseif ($o.type -eq 'title_change' -and $o.title) { $ti = [string]$o.title }",
+    "    elseif ($o.type -eq 'custom-title' -and $o.customTitle) { $ti = [string]$o.customTitle }",
+    "    elseif ($o.type -eq 'ai-title' -and $o.aiTitle) { $ti = [string]$o.aiTitle }",
+    "    elseif (-not $ti -and $o.title) { $ti = [string]$o.title }",
+    "    elseif (-not $ti -and $o.name) { $ti = [string]$o.name }",
+    "    if (-not $fu) {",
+    "      $txt = $null",
+    "      if ($o.type -eq 'message' -and $o.message.role -eq 'user') { $c = @($o.message.content); if ($c.Count) { $txt = [string]$c[0].text } }",
+    "      elseif ($o.type -eq 'response_item' -and $o.payload.role -eq 'user') { $c = @($o.payload.content); if ($c.Count) { $txt = [string]$c[0].text } }",
+    "      elseif ($o.type -eq 'user' -and $o.message.role -eq 'user') { $c = @($o.message.content); if ($c.Count) { $txt = [string]$c[0].text } }",
+    "      elseif ($o.role -eq 'user' -and $o.text) { $txt = [string]$o.text }",
+    "      if ($txt) {",
+    "        $t2 = ($txt -replace '\\s+', ' ').Trim()",
+    "        if ($t2 -and -not $t2.StartsWith('<')) { $fu = $t2.Substring(0, [Math]::Min(80, $t2.Length)) }",
     "      }",
     "    }",
+    "  }",
+    "  if (-not $ti -and $fu) { $ti = $fu }",
+    "  if ($id) {",
+    "    $m = [int]([DateTimeOffset]$f.LastWriteTimeUtc).ToUnixTimeSeconds()",
+    "    $rows.Add(@($src, $m, $id, ($ti -replace '[\\r\\n]+', ' '), $cwd) -join $SEP)",
+    "  }",
     "}",
-    `Scan 'omp' (Join-Path $env:USERPROFILE '${SOURCES.omp.dir}') ${MAX_PER}`,
-    `Scan 'codex' (Join-Path $env:USERPROFILE '${SOURCES.codex.dir}') ${MAX_PER}`,
-    `Scan 'claude' (Join-Path $env:USERPROFILE '${SOURCES.claude.dir}') ${MAX_PER}`,
-    `Scan 'pi' (Join-Path $env:USERPROFILE '${SOURCES.pi.dir}') ${MAX_PER}`,
+    "function Scan($src, $root, $limit, $leaf) {",
+    "  if (-not (Test-Path -LiteralPath $root)) { return }",
+    "  $files = Get-ChildItem -LiteralPath $root -Recurse -Filter *.jsonl -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First $limit",
+    "  foreach ($f in $files) { ReadJsonl $src $f }",
+    "  if ($leaf -and $leaf.Length -ge 2) {",
+    "    $dirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like \"*$leaf*\" }",
+    "    foreach ($d in $dirs) {",
+    "      $hits = Get-ChildItem -LiteralPath $d.FullName -Recurse -Filter *.jsonl -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 20",
+    "      foreach ($f in $hits) { ReadJsonl $src $f }",
+    "    }",
+    "  }",
+    "}",
+    "$leaf = ''",
+    "if ($target) { $leaf = Split-Path ($target.TrimEnd('\\','/')) -Leaf }",
+    `Scan 'omp' (Join-Path $env:USERPROFILE '${SOURCES.omp.dir}') ${MAX_PER} $leaf`,
+    `Scan 'codex' (Join-Path $env:USERPROFILE '${SOURCES.codex.dir}') ${MAX_CODEX} ''`,
+    `Scan 'claude' (Join-Path $env:USERPROFILE '${SOURCES.claude.dir}') ${MAX_PER} $leaf`,
+    `Scan 'pi' (Join-Path $env:USERPROFILE '${SOURCES.pi.dir}') ${MAX_PER} $leaf`,
+    "if ($target) {",
+    "  $conv = Join-Path $target '.herdr\\conversations'",
+    "  if (Test-Path -LiteralPath $conv) {",
+    "    $lfiles = Get-ChildItem -LiteralPath $conv -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.jsonl', '.json' } | Sort-Object LastWriteTime -Descending | Select-Object -First 20",
+    "    foreach ($f in $lfiles) {",
+    "      if ($f.Extension -eq '.jsonl') { ReadJsonl 'local' $f }",
+    "      else {",
+    "        try {",
+    "          $raw = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue",
+    "          $o = $raw | ConvertFrom-Json",
+    "          $id = [string]($o.id, $o.session_id, $f.BaseName | Where-Object { $_ } | Select-Object -First 1)",
+    "          $ti = [string]($o.title, $o.name, $o.summary, $f.BaseName | Where-Object { $_ } | Select-Object -First 1)",
+    "          $cwd = [string]($o.cwd, $target | Where-Object { $_ } | Select-Object -First 1)",
+    "          $m = [int]([DateTimeOffset]$f.LastWriteTimeUtc).ToUnixTimeSeconds()",
+    "          if ($id) { $rows.Add(@('local', $m, $id, ($ti -replace '[\\r\\n]+', ' '), $cwd) -join $SEP) }",
+    "        } catch {}",
+    "      }",
+    "    }",
+    "  }",
+    "}",
+    "$sq = Get-Command sqlite3 -ErrorAction SilentlyContinue",
+    "if ($sq) {",
+    "  foreach ($db in @((Join-Path $env:LOCALAPPDATA 'opencode\\opencode.db'), (Join-Path $env:USERPROFILE '.local\\share\\opencode\\opencode.db'))) {",
+    "    if (Test-Path -LiteralPath $db) {",
+    "      try {",
+    "        $sql = \"SELECT 'opencode' || char(31) || CAST(CASE WHEN time_updated > 100000000000 THEN time_updated / 1000 ELSE time_updated END AS INTEGER) || char(31) || id || char(31) || replace(replace(COALESCE(title,''), char(10), ' '), char(13), ' ') || char(31) || COALESCE(directory,'') FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC LIMIT 30;\"",
+    "        & $sq.Source -readonly $db $sql 2>$null | ForEach-Object { if ($_) { $rows.Add($_) } }",
+    "      } catch {}",
+    "      break",
+    "    }",
+    "  }",
+    "}",
     "$rows | ForEach-Object { $_ }",
-  ].join("\n"),
-];
+  ].join("\n");
+  return ["-NoProfile", "-NonInteractive", "-Command", `& { ${body} } '${esc}'`];
+}
 
 // 每条 JSON 首个出现的 id / cwd / 标题就够用了：取前 25 行，避免读大文件的整段历史。
 const AWK = [
   'BEGIN { sep = sprintf("%c", 31); id = ""; cwd = ""; ti = ""; fu = "" }',
-  '{',
+  "{",
   '  if (id == "" && match($0, /"id"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "") id = s }',
   '  if (id == "" && match($0, /"sessionId"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "") id = s }',
   '  if (cwd == "" && match($0, /"cwd"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "") cwd = s }',
   '  if ($0 ~ /"type"[ \\t]*:[ \\t]*"(title|title_change|custom-title|ai-title)"/ && match($0, /"(title|customTitle|aiTitle)"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "") ti = s }',
+  '  if (ti == "" && match($0, /"title"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "") ti = s }',
   '  if (fu == "" && $0 ~ /"role"[ \\t]*:[ \\t]*"user"/ && match($0, /"text"[ \\t]*:[ \\t]*"[^"]*"/)) { s = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[ \\t]*"/, "", s); sub(/"$/, "", s); if (s != "" && substr(s, 1, 1) != "<") fu = substr(s, 1, 80) }',
-  '}',
+  "}",
   'END { if (ti == "" && fu != "") ti = fu; if (id != "") printf "%s%s%s%s%s%s%s%s%s\\n", src, sep, m, sep, id, sep, ti, sep, cwd }',
 ].join("\n");
 
 const SH_SCAN = [
+  "TARGET=$1",
   "SEP=$(printf '\\037')",
+  "LEAF=''",
+  'if [ -n "$TARGET" ]; then LEAF=$(basename "${TARGET%/}"); fi',
+  "scan_files() {",
+  "  src=$1; lim=$2",
+  '  sort -rn | head -n "$lim" | while IFS=$(printf "\\t") read -r m f; do',
+  '    { head -n 25 "$f"; tail -n 25 "$f"; } 2>/dev/null | awk -v src="$src" -v m="$m" -v sep="$SEP" "$AWK"',
+  "  done",
+  "}",
   "scan() {",
-  "  src=$1; root=$2; lim=$3",
+  "  src=$1; root=$2; lim=$3; use_leaf=$4",
   '  [ -d "$root" ] || return 0',
   '  find "$root" -type f -name "*.jsonl" 2>/dev/null | while IFS= read -r f; do',
   '    m=$(stat -c %Y "$f" 2>/dev/null) || m=$(stat -f %m "$f" 2>/dev/null) || m=0',
   '    printf "%s\\t%s\\n" "$m" "$f"',
-  '  done | sort -rn | head -n "$lim" | while IFS=$(printf "\\t") read -r m f; do',
-  '    head -n 25 "$f" 2>/dev/null | awk -v src="$src" -v m="$m" -v sep="$SEP" "$AWK"',
-  '  done',
+  '  done | scan_files "$src" "$lim"',
+  '  if [ "$use_leaf" = "1" ] && [ "${#LEAF}" -ge 2 ]; then',
+  '    find "$root" -mindepth 1 -maxdepth 1 -type d -name "*$LEAF*" 2>/dev/null | while IFS= read -r d; do',
+  '      find "$d" -type f -name "*.jsonl" 2>/dev/null | while IFS= read -r f; do',
+  '        m=$(stat -c %Y "$f" 2>/dev/null) || m=$(stat -f %m "$f" 2>/dev/null) || m=0',
+  '        printf "%s\\t%s\\n" "$m" "$f"',
+  "      done",
+  '    done | scan_files "$src" 20',
+  "  fi",
   "}",
   `AWK='${AWK}'`,
-  `scan omp "$HOME/${SOURCES.omp.dir}" ${MAX_PER}`,
-  `scan codex "$HOME/${SOURCES.codex.dir}" ${MAX_PER}`,
-  `scan claude "$HOME/${SOURCES.claude.dir}" ${MAX_PER}`,
-  `scan pi "$HOME/${SOURCES.pi.dir}" ${MAX_PER}`,
+  `scan omp "$HOME/${SOURCES.omp.dir}" ${MAX_PER} 1`,
+  `scan codex "$HOME/${SOURCES.codex.dir}" ${MAX_CODEX} 0`,
+  `scan claude "$HOME/${SOURCES.claude.dir}" ${MAX_PER} 1`,
+  `scan pi "$HOME/${SOURCES.pi.dir}" ${MAX_PER} 1`,
+  'if [ -n "$TARGET" ] && [ -d "$TARGET/.herdr/conversations" ]; then',
+  '  find "$TARGET/.herdr/conversations" -maxdepth 1 -type f -name "*.jsonl" 2>/dev/null | while IFS= read -r f; do',
+  '    m=$(stat -c %Y "$f" 2>/dev/null) || m=$(stat -f %m "$f" 2>/dev/null) || m=0',
+  '    printf "%s\\t%s\\n" "$m" "$f"',
+  '  done | scan_files local 20',
+  "fi",
+  'OC_DB="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db"',
+  'if [ -f "$OC_DB" ] && command -v sqlite3 >/dev/null 2>&1; then',
+  '  sqlite3 -readonly "$OC_DB" "SELECT \'opencode\' || char(31) || CAST(CASE WHEN time_updated > 100000000000 THEN time_updated / 1000 ELSE time_updated END AS INTEGER) || char(31) || id || char(31) || replace(replace(COALESCE(title,\'\'), char(10), \' \'), char(13), \' \') || char(31) || COALESCE(directory,\'\') FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC LIMIT 30;" 2>/dev/null || true',
+  "fi",
 ].join("\n");
 
 const ago = (sec) => {
@@ -121,6 +207,10 @@ const ago = (sec) => {
 };
 const base = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
 const norm = (p) => String(p ?? "").replace(/[\\/]+$/, "").toLowerCase();
+const inFolder = (cwd, dir) => {
+  const c = norm(cwd), h = norm(dir);
+  return Boolean(c && h && (c === h || c.startsWith(h + "\\") || c.startsWith(h + "/")));
+};
 
 export default class Sessions extends View {
   init(_p, cx) {
@@ -128,81 +218,136 @@ export default class Sessions extends View {
     this.loading = true;
     this.failed = false;
     this.all = false;
+    this.source = "all";
+    this.query = "";
+    this.copied = null;
     this.bins = {};
-    this.detect();
-    this.reload(cx);
+    this.resumed = new Set();
+    this.scannedKey = null;
+    this.handle = cx.focus_handle();
+    this.input = InputState.new({ placeholder: "搜索标题、目录或 ID…" });
+    this.input.on("change", (_e, cx) => {
+      this.query = this.input.value();
+      cx.notify();
+    });
+    this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
+    this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
+    if (!checking()) {
+      this.detect();
+      this.reload(cx);
+    } else {
+      this.loading = false;
+    }
     cx.timer.every(60000, (cx) => this.reload(cx));
   }
 
-  // 各家的可执行文件位置：点会话时用它开终端。
-  detect() {
-    const p = plat();
+  activeSpace() {
+    return spaces().find((s) => s.active) ?? null;
+  }
+
+  activeMachine(sp = this.activeSpace()) {
+    return sp?.machine || null;
+  }
+
+  activeFolder(sp = this.activeSpace()) {
+    if (!sp) return "";
+    if (sp.folder) return sp.folder;
+    const tabs = new Set((sp.tabs ?? []).map((c) => c.id));
+    return panes().find((p) => tabs.has(p.tab) && p.cwd)?.cwd || "";
+  }
+
+  // 各家的可执行文件位置：按机器分别探测，点会话时用它开终端。
+  detect(on = this.activeMachine()) {
+    const mkey = on || "local";
+    if (this.bins[mkey]) return;
+    this.bins[mkey] = {};
+    const useWin = !on && plat() === "windows";
     for (const [key, src] of Object.entries(SOURCES)) {
-      const job = p === "windows"
+      if (!src.bin) continue;
+      const job = useWin
         ? exec("where", [src.bin], { timeout: 5000 })
-        : exec("sh", ["-c", `command -v ${src.bin}`], { timeout: 5000 });
+        : exec("sh", ["-c", `command -v ${src.bin}`], { on, timeout: 5000 });
       job
         .then((r) => {
           const line = String(r?.stdout ?? "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-          if (line) this.bins[key] = line;
+          if (line) this.bins[mkey][key] = line;
         })
         .catch(() => {});
     }
   }
 
   reload(cx) {
-    const p = plat();
-    const job = p === "windows"
-      ? exec("powershell", PS_SCAN, { timeout: 25000 })
-      : exec("sh", ["-c", SH_SCAN], { timeout: 25000 });
+    if (this.reloading) return;
+    this.reloading = true;
+    const sp = this.activeSpace();
+    const on = this.activeMachine(sp);
+    const target = this.activeFolder(sp);
+    this.scannedKey = `${on ?? ""}|${target}`;
+    this.detect(on);
+    const useWin = !on && plat() === "windows";
+    const job = useWin
+      ? exec("powershell", buildPsScan(target), { timeout: 25000 })
+      : exec("sh", ["-c", SH_SCAN, "sh", target], { on, timeout: 25000 });
     job
       .then((r) => {
         if (r?.code !== 0) {
           this.failed = true;
           return;
         }
-        this.list = String(r?.stdout ?? "")
-          .split(/\r?\n/)
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .map((line) => {
-            const [src, m, id, t, cwd] = line.split(SEP);
-            // PowerShell 走过 ConvertFrom-Json，反斜杠已还原；awk 是裸取 JSON 字面量，
-            // 只剩 \\ 和 \" 两种转义需要还原（Windows 路径里 \n、\t 不是转义，别乱解）。
-            const un = p === "windows" ? (s) => s : (s) => String(s ?? "").replace(/\\(["\\])/g, "$1");
-            return { src, m: Number(m) || 0, id: un(id), t: un(t), cwd: un(cwd) };
-          })
-          .filter((x) => x.id && SOURCES[x.src])
-          .sort((a, b) => b.m - a.m)
-          .slice(0, MAX_PER * 2);
+        const un = useWin ? (s) => s : (s) => String(s ?? "").replace(/\\(["\\])/g, "$1");
+        const byKey = new Map();
+        for (const line of String(r?.stdout ?? "").split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          const [src, m, id, t, cwd] = trimmed.split(SEP);
+          const item = { src, m: Number(m) || 0, id: un(id), t: un(t), cwd: un(cwd) };
+          if (!item.id || !SOURCES[item.src]) continue;
+          const dedup = `${item.src}:${item.id}`;
+          const prev = byKey.get(dedup);
+          if (!prev || item.m > prev.m) byKey.set(dedup, item);
+        }
+        this.list = [...byKey.values()].sort((a, b) => b.m - a.m).slice(0, 120);
         this.failed = false;
       })
       .catch(() => {
         this.failed = true;
       })
       .finally(() => {
+        this.reloading = false;
         this.loading = false;
         cx.notify();
       });
   }
 
-  // 这个会话是不是已经开在某个终端里。各家都把会话标题写进了终端标题（OSC 0/2），
-  // 所以按标题认；认出来就切过去，别再 resume 一遍——新进程会把整段历史重新渲染。
+  // 三层识别实况会话：
+  // 1) 终端 argv / foreground.argv 直接包含会话 ID（对保留参数的工具最准）；
+  // 2) 终端 OSC 标题前 24 字 + 目录匹配（同一标题多记录只认最新那条）。
   live(s) {
+    const terms = terminals();
+    const byArgv = terms.find((x) => {
+      const a1 = Array.isArray(x.argv) ? x.argv.join(" ") : "";
+      const a2 = Array.isArray(x.foreground?.argv) ? x.foreground.argv.join(" ") : "";
+      return (a1 && a1.includes(s.id)) || (a2 && a2.includes(s.id));
+    });
+    if (byArgv) return byArgv;
     const head = String(s.t ?? "").trim().slice(0, 24);
     if (head.length < 4) return null;
     const cwd = norm(s.cwd);
-    // 同一标题可能有几条记录（恢复过一次就会多一条），终端标题分不出新旧：
-    // 只认最新的那条，别给旧记录也盖上「已打开」。
     const twins = this.list.filter((o) => norm(o.cwd) === cwd && String(o.t ?? "").trim().slice(0, 24) === head);
     if (twins.length > 1 && twins[0] !== s) return null;
-    return terminals().find((x) => {
+    return terms.find((x) => {
       if (!String(x.title ?? "").includes(head)) return false;
       return !cwd || !x.cwd || norm(x.cwd) === cwd;
     });
   }
 
-  resume(s) {
+  cmdString(s) {
+    const src = SOURCES[s.src];
+    if (!src?.bin || !src?.argv) return s.id;
+    return `${src.bin} ${src.argv(s.id).join(" ")}`;
+  }
+
+  resume(s, cx) {
     const up = this.live(s);
     if (up) {
       const labels = Array.isArray(up.labels)
@@ -221,30 +366,79 @@ export default class Sessions extends View {
       return;
     }
     const src = SOURCES[s.src];
-    const bin = this.bins[s.src] ?? src.bin;
+    if (!src.bin || !src.argv) {
+      cx.write_to_clipboard(s.id);
+      notify({ title: "本地对话归档", body: `已复制记录 ID：${s.id}`, level: "info" });
+      return;
+    }
+    const mkey = this.activeMachine() || "local";
+    const bin = this.bins[mkey]?.[s.src] ?? src.bin;
     const args = { argv: [bin, ...src.argv(s.id)], place: "tab" };
     if (s.cwd) args.folder = s.cwd;
+    this.resumed.add(s.id);
     run("terminal.open", args);
     notify({ title: `正在恢复 ${src.label} 会话`, body: s.t || s.id, level: "info" });
   }
 
-  shown() {
+  copyCmd(s, cx) {
+    const text = this.cmdString(s);
+    cx.write_to_clipboard(text);
+    this.copied = s.id;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      await new Promise((r) => setTimeout(r, 1800));
+      if (this.copied === s.id) {
+        this.copied = null;
+        cx.notify();
+      }
+    });
+  }
+
+  // 按「当前目录 / 全部」过滤后的列表（不含来源与关键字，用于计算来源药丸计数）。
+  scoped() {
     const all = this.list;
     if (this.all) return all;
-    const here = norm(spaces().find((s) => s.active)?.folder);
+    const here = this.activeFolder();
     if (!here) return all;
-    const hit = all.filter((s) => {
-      const c = norm(s.cwd);
-      return c && (c === here || c.startsWith(here + "\\") || c.startsWith(here + "/"));
-    });
-    return hit.length ? hit : all;
+    return all.filter((s) => inFolder(s.cwd, here));
+  }
+
+  shown() {
+    let items = this.scoped();
+    if (this.source !== "all") items = items.filter((s) => s.src === this.source);
+    const q = this.query.trim().toLowerCase();
+    if (q) {
+      items = items.filter((s) => (
+        String(s.t ?? "").toLowerCase().includes(q)
+        || String(s.cwd ?? "").toLowerCase().includes(q)
+        || String(s.id ?? "").toLowerCase().includes(q)
+        || (SOURCES[s.src]?.label ?? "").toLowerCase().includes(q)
+      ));
+    }
+    return items;
+  }
+
+  badgeColor(src, t) {
+    if (src === "omp") return t.accent;
+    if (src === "codex") return t.done;
+    if (src === "claude") return t.working;
+    if (src === "pi") return t.ansi5;
+    if (src === "opencode") return t.ansi6;
+    return t.muted;
   }
 
   row(s, i, t) {
     const src = SOURCES[s.src];
+    const up = this.live(s);
+    const copied = this.copied === s.id;
+    const tip = up
+      ? `${s.cwd || "?"}\n这个会话正开着：点一下切过去，不重新加载`
+      : src.bin
+        ? `${s.cwd || "?"}\n点一下：${this.cmdString(s)}`
+        : `${s.cwd || "?"}\n本地归档记录（点一下复制 ID）`;
     return h_flex()
       .id(`ses-${i}`)
-      .h(44)
+      .h(46)
       .flex_none()
       .px(8)
       .gap(8)
@@ -252,20 +446,18 @@ export default class Sessions extends View {
       .rounded(6)
       .cursor_pointer()
       .hover((h) => h.bg(t.hover))
-      .tooltip(this.live(s)
-        ? `${s.cwd || "?"}\n这个会话正开着：点一下切过去，不重新加载`
-        : `${s.cwd || "?"}\n点一下：${src.bin} ${src.argv(s.id).join(" ")}`)
-      .on_click(() => this.resume(s))
-      .child(div().w(38).flex_none().flex().items_center().justify_center().rounded(5).h(18).bg(t.raised)
-        .child(div().text_size(9).text_color(s.src === "omp" ? t.accent : t.muted).child(src.label)))
+      .tooltip(tip)
+      .on_click((_e, cx) => this.resume(s, cx))
+      .child(div().w(44).flex_none().flex().items_center().justify_center().rounded(5).h(18).bg(t.raised)
+        .child(div().text_size(9).text_color(this.badgeColor(s.src, t)).child(src.label)))
       .child(v_flex()
         .flex_1()
         .min_w(0)
         .gap(0)
         .child(div().w_full().truncate().text_size(12).child(s.t || base(s.cwd) || String(s.id).slice(0, 8)))
-        .child(div().w_full().truncate().text_size(11).text_color(t.dim).tooltip(s.cwd || "")
+        .child(div().w_full().truncate().text_size(11).text_color(t.dim)
           .child(`${ago(s.m)} · ${base(s.cwd) || "?"} · ${String(s.id).slice(0, 6)}`)))
-      .when(this.live(s), (el) => el.child(div()
+      .when(up, (el) => el.child(div()
         .flex_none()
         .px(5)
         .py(1)
@@ -273,16 +465,61 @@ export default class Sessions extends View {
         .bg(t.raised)
         .text_size(9)
         .text_color(t.done)
-        .child("已打开")));
+        .child("已打开")))
+      .child(div()
+        .id(`ses-cp-${i}`)
+        .h(20)
+        .px(5)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(4)
+        .text_size(10)
+        .text_color(copied ? t.done : t.dim)
+        .cursor_pointer()
+        .tooltip(copied ? "已复制" : src.bin ? `复制恢复命令：${this.cmdString(s)}` : "复制 ID")
+        .accessibility_label("复制恢复命令")
+        .hover((h) => h.bg(t.raised).text_color(t.foreground))
+        .on_click((_e, cx) => {
+          cx.stop_propagation();
+          this.copyCmd(s, cx);
+        })
+        .child(copied ? "已复制" : "命令"));
   }
 
-  render(_cx) {
+  render(cx) {
     const t = theme();
+    const sp = this.activeSpace();
+    const on = this.activeMachine(sp);
+    const here = this.activeFolder(sp);
+    const key = `${on ?? ""}|${here}`;
+    if (!checking() && key !== this.scannedKey && !this.reloading) {
+      this.reload(cx);
+    }
+    const scoped = this.scoped();
+    const counts = {};
+    for (const s of scoped) counts[s.src] = (counts[s.src] ?? 0) + 1;
+    const activeSources = SOURCE_ORDER.filter((k) => counts[k] > 0);
+    if (this.source !== "all" && !counts[this.source] && scoped.length > 0) this.source = "all";
     const list = this.shown();
+    const hasFilter = Boolean(this.query.trim()) || this.source !== "all";
+
     return v_flex()
       .size_full()
       .min_h(0)
       .bg(t.chrome)
+      .track_focus(this.handle)
+      .on_key_down((e, cx) => {
+        if (e.key === "escape" && (this.typing || this.query)) {
+          this.query = "";
+          this.input.set_value("");
+          this.typing = false;
+          this.handle.focus();
+          cx.stop_propagation();
+          cx.notify();
+        }
+      })
       .child(h_flex()
         .h(34)
         .flex_none()
@@ -324,6 +561,49 @@ export default class Sessions extends View {
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click((_e, cx) => this.reload(cx))
           .child("刷新")))
+      .child(h_flex()
+        .h(32)
+        .flex_none()
+        .mx(8)
+        .mt(6)
+        .px(8)
+        .gap(6)
+        .items_center()
+        .rounded(6)
+        .bg(t.background)
+        .border(1)
+        .border_color(this.typing ? t.accent : t.border)
+        .cursor_text()
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .child(svg("mods/inkstone-chrome/search.svg").size(12).flex_none().text_color(t.dim))
+        .child(Input.new(this.input).flex_1().h_full().text_size(12).text_color(t.foreground))
+        .when(Boolean(this.query), (el) => el.child(div()
+          .id("ses-clear")
+          .size(16)
+          .flex_none()
+          .flex()
+          .items_center()
+          .justify_center()
+          .rounded(4)
+          .text_size(11)
+          .text_color(t.dim)
+          .cursor_pointer()
+          .tooltip("清空搜索")
+          .hover((h) => h.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => {
+            this.query = "";
+            this.input.set_value("");
+            cx.notify();
+          })
+          .child("✕"))))
+      .when(activeSources.length >= 2 || this.source !== "all", (el) => el.child(h_flex()
+        .flex_none()
+        .px(8)
+        .pt(6)
+        .gap(4)
+        .flex_wrap()
+        .child(this.pill(t, "all", `全部 ${scoped.length}`, cx))
+        .children(activeSources.map((k) => this.pill(t, k, `${SOURCES[k].label} ${counts[k]}`, cx)))))
       .child(v_flex()
         .flex_1()
         .min_h(0)
@@ -333,9 +613,93 @@ export default class Sessions extends View {
         .overflow_y_scrollbar()
         .children(list.length
           ? list.map((s, i) => this.row(s, i, t))
-          : [div().p(8).text_size(12).text_color(this.failed ? t.blocked : t.dim)
-            .child(this.failed
-              ? "读取会话失败：找不到 OMP / Codex / Claude / Pi 的会话目录。"
-              : this.loading ? "正在扫描会话…" : "这个目录还没有会话记录。")]));
+          : [this.emptyState(t, hasFilter, scoped.length, cx)]))
+      .child(h_flex()
+        .h(24)
+        .flex_none()
+        .px(10)
+        .items_center()
+        .justify_between()
+        .border_t(1)
+        .border_color(t.border)
+        .text_size(10)
+        .text_color(t.dim)
+        .child(div().truncate().child(activeSources.length
+          ? `来源：${activeSources.map((k) => SOURCES[k].label).join(" · ")}`
+          : "OMP / Codex / Claude / Pi / 本地"))
+        .child(div().flex_none().child("点行恢复 · Esc 清空搜索")));
+  }
+
+  pill(t, id, label, cx) {
+    const on = this.source === id;
+    return div()
+      .id(`ses-src-${id}`)
+      .h(20)
+      .px(7)
+      .flex_none()
+      .flex()
+      .items_center()
+      .rounded(5)
+      .text_size(10)
+      .cursor_pointer()
+      .bg(on ? t.selected : t.raised)
+      .text_color(on ? t.foreground : t.muted)
+      .hover((s) => s.bg(on ? t.selected : t.hover))
+      .on_click(() => {
+        this.source = id;
+        cx.notify();
+      })
+      .child(label);
+  }
+
+  emptyState(t, hasFilter, scopedCount, cx) {
+    if (this.failed) {
+      return div().p(10).text_size(12).text_color(t.blocked)
+        .child("扫描会话失败，点右上角「刷新」重试。");
+    }
+    if (this.loading) {
+      return div().p(10).text_size(12).text_color(t.dim).child("正在扫描会话…");
+    }
+    if (hasFilter) {
+      return v_flex().p(10).gap(8).items_start()
+        .child(div().text_size(12).text_color(t.dim).child("没有符合条件的会话。"))
+        .child(div()
+          .id("ses-reset-filter")
+          .px(8)
+          .py(4)
+          .rounded(5)
+          .bg(t.raised)
+          .text_size(11)
+          .text_color(t.foreground)
+          .cursor_pointer()
+          .hover((s) => s.bg(t.hover))
+          .on_click(() => {
+            this.query = "";
+            this.source = "all";
+            this.input.set_value("");
+            cx.notify();
+          })
+          .child("清除筛选"));
+    }
+    if (!this.all && scopedCount === 0 && this.list.length > 0) {
+      return v_flex().p(10).gap(8).items_start()
+        .child(div().text_size(12).text_color(t.dim).child("当前空间目录还没有会话记录。"))
+        .child(div()
+          .id("ses-show-all")
+          .px(8)
+          .py(4)
+          .rounded(5)
+          .bg(t.raised)
+          .text_size(11)
+          .text_color(t.foreground)
+          .cursor_pointer()
+          .hover((s) => s.bg(t.hover))
+          .on_click(() => {
+            this.all = true;
+            cx.notify();
+          })
+          .child(`查看全部目录 (${this.list.length})`));
+    }
+    return div().p(10).text_size(12).text_color(t.dim).child("还没有找到会话记录。");
   }
 }

@@ -154,7 +154,7 @@
                       "id": "files",
                       "type": "block",
                       "content": {
-                        "mod": "files"
+                        "mod": "inkstone-files"
                       }
                     },
                     {
