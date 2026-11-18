@@ -35,6 +35,17 @@
               "min": 120
             },
             {
+              "id": "board-panel",
+              "type": "block",
+              "content": {
+                "mod": "inkstone-board"
+              },
+              "size": {
+                "px": 260
+              },
+              "min": 96
+            },
+            {
               "id": "sidebar-footer",
               "type": "block",
               "content": {

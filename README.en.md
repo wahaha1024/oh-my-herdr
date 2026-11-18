@@ -22,7 +22,7 @@ Default is qingci (light). xuanmo (dark) and the optional zhi (paper) are bundle
 
 | Area | Stock | With this |
 |---|---|---|
-| Sidebar | One column of spaces, agents/terminals split below | Three levels of indent: folder, space, terminal, with counts on group headers. Each space leads with an 8×8 pixel critter (15 to pick from, Alt+click to cycle); colours are assigned and remembered. Dragged to 44px it becomes a rail of badges |
+| Sidebar | One column of spaces, agents/terminals split below | Three levels of indent: folder, space, terminal, with counts on group headers. Each space leads with an 8×8 pixel critter (15 to pick from, Alt+click to cycle); colours are assigned and remembered. At the bottom a Kanban block groups every tab by state (needs you / running / ready to merge / idle); click a row to jump to that terminal. Dragged to 44px it becomes a rail of badges |
 | Top bar | Tab strip | 30px tabs; named panel buttons at the right (files / sessions / favourites / cockpit / changes); a colour dot for the current space at the left; minimise / maximise / close folded into the same row, with no system title bar above it |
 | Terminal panes | Default pane header | Custom header: program icon, name, cwd, status (spinner while working, "waiting on you" badge, check when done), with split / zoom / close on hover |
 | Right drawer | Built-in panels | One 380px drawer switching between five pages: files, changes, cockpit, sessions, favourites |
@@ -35,6 +35,7 @@ Default is qingci (light). xuanmo (dark) and the optional zhi (paper) are bundle
 - **Files page** — keyword search (`git ls-files` / `jj file list` first), one-click `@path` copy from rows and the preview header, `jj` / `git` status marks.
 - **Sessions page** — scans OMP / Codex / Claude Code / Pi / project archives (OpenCode too when `sqlite3` is present), with search, source filters, current-folder and remote-machine scans, and one-click resume-command copy. A session already running in a terminal is marked open and clicking switches to it.
 - **Cockpit** — what each agent is doing, where it is stuck, and what it suggests next, on one page.
+- **Kanban** — a block at the bottom of the sidebar with four groups (needs you / running / ready to merge / idle), one row per tab. When the branch has a PR it shows `#number` and the check state; click a row to switch to that terminal. Fold the sidebar to 44px and it becomes a column of status dots.
 - **Favourites** — pin the spaces and terminals you keep coming back to.
 - **Remote spaces** — once a machine is connected, its folders, sessions and files list like local ones.
 
