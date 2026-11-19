@@ -80,37 +80,6 @@ Herdr 自带的 `changes` / `workspace-status` / `pane`（装好 Herdr 就有）
 
 已经装过的机器要更新，加 `-Force`（`./install.sh --force`）：脚本默认跳过同名文件，不加的话布局、mod、主题都还是旧版本——典型症状是终端四周没有纸质撕边、侧栏底部没有 NEED YOU / IN FLIGHT 两栏。
 
-## 排查
-
-装完发现某处不对（最典型：终端四周没有纸质撕边、侧栏底部没有 NEED YOU / IN FLIGHT），先在出问题的那台机器上跑这三条：
-
-```powershell
-$cfg = "$HOME\.config\herdr-app"
-# 1) 布局里有四条纸页边条 → 应为 4
-(Select-String -Path "$cfg\layouts\oh-my-herdr.json" -Pattern 'page-left|page-right|page-top|page-bottom').Count
-# 2) 撕边 mod 是含青瓷切片的新版 → 应大于 0（旧版里没有这个词）
-(Select-String -Path "$cfg\mods\inkstone-edge\main.js" -Pattern 'ink-qingci').Count
-# 3) 有没有 mod 加载错误 → 应为空
-(herdr-app status | ConvertFrom-Json).errors
-```
-
-macOS / Linux 等价写法（`jq` 可省，看第四行说明）：
-
-```sh
-cfg="$HOME/.config/herdr-app"
-grep -c 'page-left\|page-right\|page-top\|page-bottom' "$cfg/layouts/oh-my-herdr.json"
-grep -c 'ink-qingci' "$cfg/mods/inkstone-edge/main.js"
-herdr-app status | grep -o '"errors":\[[^]]*\]'
-```
-
-| 结果 | 原因 | 处置 |
-|---|---|---|
-| 1 不是 4，或 2 等于 0 | 之前装过旧版，脚本跳过了同名文件 | `.\install.ps1 -Force`（`./install.sh --force`），然后 `herdr-app do layout.switch '{"name":"oh-my-herdr"}'`，或重启 herdr-app |
-| 3 有内容 | herdr 低于 0.1.16，没有 `themes` 导出，撕边 mod 加载失败 | 升级 herdr |
-| 三条都正常、仍无撕边 | 当前主题不是亮色：深色主题（玄墨）不画浅色纸边 | `(Get-Content "$cfg\settings.json" -Raw \| ConvertFrom-Json).appearance` 应为 `light`，或直接 `herdr-app do app.theme '{"name":"qingci"}'` |
-
-改完配置要让它重新加载：`layout.switch` 切一次布局，或重启 herdr-app。
-
 ## 边界
 
 - 侧栏宽度、抽屉开合、折叠状态是运行态，重启后不一定保留。
