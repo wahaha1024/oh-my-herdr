@@ -17,7 +17,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
-import { panes, props, run, exec, hc, theme, themes, home, checking, shared, writeTextFile, closeOverlay, openOverlay, setShared, watchFolder } from "herdr";
+import { panes, props, run, exec, hc, theme, themes, home, appHome, checking, shared, readTextFile, writeTextFile, closeOverlay, openOverlay, setShared, watchFolder } from "herdr";
 
 const PAPER = (t) => Boolean(t.paper);
 const ink = (t, slot, fallback) => (PAPER(t) ? t[slot] : (t[fallback] ?? t.foreground));
@@ -77,6 +77,140 @@ const flat = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
 const PS = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; ";
 const HISTORY_LINES = "20000";
 
+// 解析会话 jsonl 改由 node 做：node 启动约 96ms，PowerShell 1.1–1.9s；
+// 而且进程内能用 fs 定位到字节偏移，只读上次之后新增的那几行
+// （活跃会话每 2 秒一次静默刷新，重扫 36MB 是最白花的一笔）。
+// 下面这段是子进程源码，判定顺序 / 字段名 / 截断长度必须与 readMessages 的 PowerShell 分支逐条一致。
+// 它是宿主模板字符串的内容，所以里面不能出现反引号和美元花括号。
+const NODE_SRC = `
+const fs = require("fs");
+const file = process.argv[1];
+const from = Number(process.argv[2]) || 0;
+const fd = fs.openSync(file, "r");
+const size = fs.fstatSync(fd).size;
+const start = (from > 0 && from <= size) ? from : 0;
+const span = Math.max(0, size - start);
+const buf = Buffer.allocUnsafe(span);
+let got = 0;
+while (got < span) { const n = fs.readSync(fd, buf, got, span - got, start + got); if (n <= 0) break; got += n; }
+fs.closeSync(fd);
+const text = buf.toString("utf8", 0, got);
+const nl = text.lastIndexOf("\\n");
+const body = nl >= 0 ? text.slice(0, nl + 1) : "";
+const seen = start + Buffer.byteLength(body, "utf8");
+const items = [];
+const lines = body.split("\\n");
+for (const line of lines) {
+  if (!line) continue;
+  if (line.indexOf('"type":"compaction"') >= 0) {
+    let o; try { o = JSON.parse(line); } catch (e) { continue; }
+    let tx = String(o.shortSummary || o.summary || "");
+    if (tx.length > 300) tx = tx.slice(0, 300);
+    items.push({ k: "c", ts: String(o.timestamp || ""), text: tx, before: Number(o.tokensBefore) || 0, after: Number(o.tokensAfter) || 0, first: String(o.firstKeptEntryId || "") });
+    continue;
+  }
+  if (line.indexOf('"type":"message"') < 0) continue;
+  let o; try { o = JSON.parse(line); } catch (e) { continue; }
+  const m = o.message; if (!m) continue;
+  if (m.role !== "user" && m.role !== "assistant") continue;
+  let s = ""; const tools = [];
+  const cs = Array.isArray(m.content) ? m.content : [];
+  for (const c of cs) {
+    if (c.type === "text" && c.text) { if (s) s += " "; s += c.text; continue; }
+    if (c.type === "image") { if (s) s += " "; s += "[图片]"; continue; }
+    if (c.type !== "toolCall") continue;
+    let ag = c.arguments;
+    if (typeof ag === "string") { try { ag = JSON.parse(ag); } catch (e) { ag = null; } }
+    let h = "";
+    if (ag) { if (ag.path) h = String(ag.path); else if (ag.command) h = String(ag.command).split("\\n")[0]; else if (ag.query) h = String(ag.query); }
+    let t = String(c.intent || c.name || "");
+    if (h) t = t + " " + h;
+    if (t.length > 120) t = t.slice(0, 120);
+    tools.push(t);
+  }
+  if (!s && tools.length === 0) continue;
+  if (s.length > 4000) s = s.slice(0, 4000);
+  items.push({ k: "m", id: String(o.id || ""), ts: String(o.timestamp || ""), role: m.role, text: s, tools: tools });
+}
+process.stdout.write(JSON.stringify({ from: start, seen: seen, items: items }));
+`;
+
+const NODE = { ok: null };      // null = 还没探测过；探测结果之后固定，不再每次试
+const PARSED = new Map();       // 文件绝对路径 -> { seen, at, items }，内存里最多 4 个会话
+const FOUND = new Map();        // `标题|cwd` -> { file, title, size, at }
+const CACHE_TTL = 120000;       // 会话文件查找结果的复用时长
+// readTextFile 只读得回 1 MiB，超了就解析失败、也就再也覆盖不回去：
+// 宁可这次不落盘（冷开退化成一次 node 全量解析，约 0.5 s），也不写一份读不回来的缓存。
+const CACHE_MAX = 900000;
+const CACHE_FILE = () => `${appHome()}/data/inkstone-history-cache.json`;
+
+async function nodeOk() {
+  if (NODE.ok !== null) return NODE.ok;
+  const r = await exec("node", ["-e", "1"], { timeout: 5000 }).catch(() => null);
+  NODE.ok = Boolean(r && r.code === 0);
+  return NODE.ok;
+}
+
+// 磁盘缓存：{ v:1, entries:{ [文件]: { seen, at, items } } }。
+// 只按 seen 与文件当前长度对齐（jsonl 只追加）；文件损坏/半写一律当空缓存，不报错。
+let diskMemo = null;
+let diskRaw = null;             // 上次读到的原文：writeTextFile 的 expected 必须与磁盘内容一致
+let saveDirty = false;
+let saving = false;
+let savedAt = 0;
+
+async function diskCache() {
+  if (diskMemo) return diskMemo;
+  let obj = { v: 1, entries: {} };
+  try {
+    const s = await readTextFile(CACHE_FILE());
+    diskRaw = s ?? null;
+    if (s) {
+      const o = JSON.parse(s);
+      if (o && o.v === 1 && o.entries && typeof o.entries === "object") obj = o;
+    }
+  } catch {
+    /* 半写或手改坏了：当空缓存，下次写回时覆盖 */
+  }
+  diskMemo = obj;
+  return obj;
+}
+
+async function saveCache() {
+  if (!saveDirty) return;
+  saveDirty = false;
+  savedAt = Date.now();
+  if (checking()) return; // `herdr-app check` 会真的跑 init，别在检查时写盘
+  try {
+    const db = await diskCache();
+    for (const [k, e] of PARSED) db.entries[k] = { seen: e.seen, at: e.at, items: e.items };
+    const rows = Object.entries(db.entries).filter(([, e]) => e && Array.isArray(e.items));
+    rows.sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+    const keep = {};
+    for (const [k, e] of rows.slice(0, 3)) keep[k] = e;
+    db.entries = keep;
+    const json = JSON.stringify(db);
+    if (json.length > CACHE_MAX) return;
+    // expected 传上次读到的原文：null 只在文件不存在时有效，文件已存在时会被拒。
+    await writeTextFile(CACHE_FILE(), json, diskRaw);
+    diskRaw = json;
+  } catch {
+    /* 写不进去只影响下次冷开的速度，面板本身不受影响 */
+  }
+}
+
+// 活跃会话每 2 秒刷新一次，没必要每次都落盘：5 秒一次就够，关窗时再补一次。
+// 用节流而不是 cx.timer.after：定时器只在第一次刷新时排一次，之后如果没真正触发，
+// 缓存会一直停在旧 seen 上（实测 12 分钟没更新），节流不依赖任何回调。
+function maybeSave() {
+  saveDirty = true;
+  if (saving || Date.now() - savedAt < 5000) return;
+  saving = true;
+  saveCache().finally(() => {
+    saving = false;
+  });
+}
+
 // 去掉开头的状态符号（π、⠧、图标字体私用区字符），留下标题本身。
 const bare = (s) => String(s ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
 
@@ -84,6 +218,71 @@ function hhmm(ts) {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return "";
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// 字号只这几档。以前从 11 到 12.5 都挤在一起，配上清一色的灰，什么都分不出来。
+// 不换 font_family：它要机器上真实存在的字形名（Consolas / Menlo 跨平台不一致），
+// 面板要在 Windows / macOS / Linux 上长得一样，层次只靠字号 + 字重 + 颜色 + 色块。
+const FS = {
+  title: 13.5,
+  sub: 10.5,
+  row: 12.5,
+  time: 10.5,
+  badge: 9.5,
+  label: 10.5,
+  body: 12,
+  readTitle: 15,
+  readBody: 13.5,
+  readMeta: 11,
+};
+
+// 段落标签：3px 色块 + 加粗小字，让「提问 / 回复 / 工具」一眼分开。
+function sectionLabel(t, text, color, size = FS.label) {
+  return h_flex()
+    .flex_none()
+    .items_center()
+    .gap(5)
+    .child(div().flex_none().w(3).h(size - 0.5).rounded(1).bg(color))
+    .child(div().flex_none().text_size(size).font_weight(700).text_color(color).child(text));
+}
+
+// 主操作（跳到终端）：实心 accent，和周围一圈描边小按钮分开，不用再找。
+function primaryButton(t, id, label, action) {
+  return div()
+    .id(id)
+    .h(22)
+    .px(9)
+    .flex()
+    .items_center()
+    .rounded(6)
+    .bg(t.accent)
+    .text_size(11)
+    .font_weight(600)
+    .text_color(t.accent_foreground ?? t.background)
+    .cursor_pointer()
+    .hover((h) => h.bg(t.solid ?? t.accent))
+    .on_click((_e, c) => {
+      c.stop_propagation();
+      action(c);
+    })
+    .child(label);
+}
+
+// 小徽标：会话轮数这类只需要「在那儿」的信息，不参与点击。
+function chip(t, label) {
+  return div()
+    .flex_none()
+    .h(18)
+    .px(6)
+    .flex()
+    .items_center()
+    .rounded(9)
+    .bg(t.surface)
+    .border(1)
+    .border_color(t.border)
+    .text_size(FS.sub)
+    .text_color(t.muted)
+    .child(label);
 }
 
 // 会话文件按 cwd 分目录存（E:\DSH → --E--DSH--），同一个 cwd 目录里通常只有一个在写的会话。
@@ -136,14 +335,67 @@ async function findSession(title, cwd) {
   return null;
 }
 
-// 读整个会话文件，返回 { items, seen }；seen 是文件字节数，用来判断有没有新内容。
-// items 按文件顺序混放两类记录：{k:"m"} 是 user/assistant 消息，{k:"c"} 是上下文压缩点。
-// 压缩点在 PowerShell 侧同一次扫描里顺手取出（只多一次 Contains 判断），不多起进程。
+// 同一会话每 2 秒刷新一次都要重新列目录 + 读 40 个文件首行，纯属重复劳动：
+// 标题和 cwd 没变就复用上次找到的文件（2 分钟内有效）。找不到不缓存——新会话的文件可能还没落盘。
+async function findSessionCached(title, cwd) {
+  const key = `${bare(title)}|${String(cwd ?? "")}`;
+  const hit = FOUND.get(key);
+  if (hit && Date.now() - (hit.at || 0) < CACHE_TTL) return hit;
+  const found = await findSession(title, cwd);
+  if (!found) return null;
+  const rec = { file: found.file, size: found.size, title: found.title, at: Date.now() };
+  FOUND.set(key, rec);
+  if (FOUND.size > 16) FOUND.delete(FOUND.keys().next().value);
+  return rec;
+}
+
+// 两套解析器共用一份规整：压缩点留四要素，消息统一成 { id, ts, role, text, tools }。
+function normItem(o) {
+  if (!o) return null;
+  if (o.k === "c") {
+    return {
+      k: "c",
+      ts: String(o.ts ?? ""),
+      text: String(o.text ?? ""),
+      before: Number(o.before) || 0,
+      after: Number(o.after) || 0,
+      first: String(o.first ?? ""),
+    };
+  }
+  const tt = o.tools;
+  return {
+    k: "m",
+    id: String(o.id ?? ""),
+    ts: String(o.ts ?? ""),
+    role: String(o.role ?? ""),
+    text: String(o.text ?? ""),
+    tools: (Array.isArray(tt) ? tt : tt ? [tt] : []).map(flat).filter(Boolean),
+  };
+}
+
+// 读会话文件，返回 { items, seen, from }：items 按文件顺序混放 {k:"m"} 与 {k:"c"}，
+// from 是这次实际开始解析的字节偏移（0 = 全量），seen 是「已完整解析到哪」——
+// 下次从 seen 续读就不会把正写到一半的那一行吃掉。
+// 有 node 走 node（启动快、能定位偏移）；没有就退回 PowerShell 全量扫，功能不变只是慢。
 // 不走 readTextFile：21 MB 的字符串过一遍 IPC 要十几秒，面板会一直停在「读取…」。
-// PowerShell 侧用 StreamReader 逐行读（21 MB / 4537 行约 400ms）；
-// 预筛只放行含 user / assistant 的行——toolResult 动辄几十 KB 却一个字都用不上，
-// 之前把它们也送进 ConvertFrom-Json 是白花的大头。
-async function readMessages(file) {
+async function readMessages(file, fromByte = 0) {
+  if (await nodeOk()) {
+    const nr = await exec("node", ["-e", NODE_SRC, file, String(fromByte)], { timeout: 30000 }).catch(() => null);
+    if (nr && nr.code === 0) {
+      let j = null;
+      try { j = JSON.parse(String(nr.stdout ?? "").trim()); } catch { j = null; }
+      if (j && Array.isArray(j.items)) {
+        const items = [];
+        for (const o of j.items) {
+          const it = normItem(o);
+          if (it) items.push(it);
+        }
+        return { items, seen: Number(j.seen) || 0, from: Number(j.from) || 0 };
+      }
+    }
+    // 输出都解析不了说明这台机器上的 node 不对劲，别每 2 秒再试一次。
+    NODE.ok = false;
+  }
   const cmd =
     PS +
     `$p='${sq(file)}'; $fs=[System.IO.File]::Open($p,'Open','Read','ReadWrite'); ` +
@@ -186,33 +438,15 @@ async function readMessages(file) {
       continue;
     }
     try {
-      const o = JSON.parse(line);
-      if (o.k === "c") {
-        items.push({
-          k: "c",
-          ts: String(o.ts ?? ""),
-          text: String(o.text ?? ""),
-          before: Number(o.before) || 0,
-          after: Number(o.after) || 0,
-          first: String(o.first ?? ""),
-        });
-        continue;
-      }
-      const tt = o.tools;
-      const tools = (Array.isArray(tt) ? tt : tt ? [tt] : []).map(flat).filter(Boolean);
-      items.push({
-        k: "m",
-        id: String(o.id ?? ""),
-        ts: String(o.ts ?? ""),
-        role: String(o.role ?? ""),
-        text: String(o.text ?? ""),
-        tools,
-      });
+      const it = normItem(JSON.parse(line));
+      if (it) items.push(it);
     } catch {
       /* 正写到一半的行 */
     }
   }
-  return { items, seen };
+  // PowerShell 分支永远全量：行边界的字节偏移在 PS 里算不划算（见计划里的取舍），
+  // 能跑 node 的机器（OMP 本身是 node 应用）都走上面的增量路径。
+  return { items, seen, from: 0 };
 }
 
 // 终端里一行会被折行、行尾会补空格，所以匹配放在「去掉全部空白的整段历史」上做，
@@ -372,6 +606,7 @@ export default class History extends View {
     this.raw = [];
     this.histLines = 0;
     this.alignedLines = -1;
+    this.alignTot = -1; // 上次对位时终端的 scroll.total，用来判断要不要重算
     this.busy = false;
     this.loading = true;
     this.note = "";
@@ -416,6 +651,8 @@ export default class History extends View {
   shut() {
     this.closed = true;
     this.release();
+    // 关窗时把还没落盘的解析结果写掉，下次冷开就能直接出列表。
+    if (saveDirty) saveCache();
     closeOverlay(this.oid);
   }
 
@@ -424,6 +661,7 @@ export default class History extends View {
   async close() {
     this.closed = true;
     this.release();
+    if (saveDirty) saveCache();
   }
 
   // 窗格 B 已经接管时，A 关窗不能顺手抹掉 B 的按钮状态——只有登记的仍是我才清。
@@ -437,9 +675,28 @@ export default class History extends View {
     return panes().find((p) => p.terminal === this.term) ?? null;
   }
 
+  // 把记录流摆到面板上：轮次、压缩点、选择、箭头。
+  // 缓存里先摆一次（冷开时第一屏不用等全量解析），拿到新增字节后再摆一次，所以抽成一处。
+  apply(raw, scroll) {
+    this.raw = raw;
+    // 轮次只在末尾追加，按 id 找回上一次选中的那条，否则每来一条新消息都把选择踢回最新。
+    const was = this.sel >= 0 ? this.messages[this.sel] : null;
+    const rr = rounds(raw);
+    this.messages = rr.rounds;
+    this.marks = rr.marks;
+    const at = was ? this.messages.findIndex((m) => m.id === was.id) : -1;
+    this.sel = at >= 0 ? at : this.messages.length - 1;
+    // 轮次只往后追加，所以上一次的对位仍然有效：沿用前缀、末尾补 -1，
+    // 否则每来一条新消息（活跃会话每几秒一次静默刷新）右侧的箭头就全被抹成暗点。
+    this.align = this.align.slice(0, this.messages.length);
+    while (this.align.length < this.messages.length) this.align.push(-1);
+    if (!was && scroll) this.scroll.scroll_to_item(0); // 只在首次打开时跳到最新一条，别把用户滚到的位置拽回去
+  }
+
   async load(cx, silent = false) {
     if (this.busy) return; // 目录事件和标题变化都可能同时调进来
     this.busy = true;
+    let file = "";
     if (!silent) {
       this.loading = true;
       this.note = "";
@@ -447,44 +704,56 @@ export default class History extends View {
     }
     try {
       const p = this.pane();
-      const found = p ? await findSession(p.title, p.cwd) : null;
+      // 已经认得文件就别再列目录：findSession 是 1.1–1.9s 的进程，而活跃会话每 2 秒刷新一次。
+      // 换会话由 checkTitle 把 this.file 清空来触发。
+      const found = this.file
+        ? { file: this.file, title: this.title }
+        : p ? await findSessionCached(p.title, p.cwd) : null;
       if (!found) {
         this.messages = [];
         this.marks = [];
         this.raw = [];
         this.align = [];
         this.histLines = 0;
+        this.alignedLines = -1;
         this.note = "没找到这个会话的记录";
         return;
       }
-      this.file = found.file;
-      this.size = found.size;
-      this.title = found.title;
-      const got = await readMessages(found.file);
+      file = found.file;
+      this.file = file;
+      if (found.title) this.title = found.title;
+      if (found.size) this.size = found.size;
+      // 1) 缓存里的列表先上屏（内存或上次落盘的），冷开不用干等一次全量解析。
+      const db = await diskCache();
+      const entry = PARSED.get(file) ?? db.entries[file] ?? null;
+      const cached = entry && Array.isArray(entry.items) && entry.items.length ? entry : null;
+      if (cached) {
+        this.apply(cached.items, true);
+        this.loading = false;
+        this.note = "同步中…";
+        cx.notify();
+      }
+      // 2) 只解析上次之后新增的字节；node 不可用时 from = 0，整份重来（等同改造前的行为）。
+      const from = (await nodeOk()) ? (cached?.seen ?? 0) : 0;
+      const got = await readMessages(file, from);
       if (!got) throw new Error("会话文件读不出来");
-      this.raw = got.items;
-      // 轮次只在末尾追加，按 id 找回上一次选中的那条，否则每来一条新消息都把选择踢回最新。
-      const was = this.sel >= 0 ? this.messages[this.sel] : null;
-      const rr = rounds(this.raw);
-      this.messages = rr.rounds;
-      this.marks = rr.marks;
-      const at = was ? this.messages.findIndex((m) => m.id === was.id) : -1;
-      this.sel = at >= 0 ? at : this.messages.length - 1;
-      // 先把列表放出去：解析完就画，对位（读 20000 行 + 从下往上匹配）留到后面补。
-      // 轮次只往后追加，所以上一次的对位仍然有效：沿用前缀、末尾补 -1，
-      // 否则每来一条新消息（活跃会话每几秒一次静默刷新）右侧的箭头就全被抹成暗点。
-      const prevAlign = this.align;
-      this.align = prevAlign.slice(0, this.messages.length);
-      while (this.align.length < this.messages.length) this.align.push(-1);
+      const items = got.from > 0 && cached ? cached.items.concat(got.items) : got.items;
+      PARSED.set(file, { seen: got.seen, at: Date.now(), items });
+      if (PARSED.size > 4) PARSED.delete(PARSED.keys().next().value);
+      this.apply(items, true);
+      this.note = "";
       this.loading = false;
       cx.notify();
-      if (!was) this.scroll.scroll_to_item(0); // 只在首次打开时跳到最新一条，别把用户滚到的位置拽回去
+      maybeSave();
       this.follow(cx);
       // 能不能跳回终端要对着终端现有的几千行算，算完给列表右侧的箭头用。
       await this.syncAlign(cx);
     } catch (e) {
       // 读文件/读终端任何一步失手都要把 loading 收掉，否则面板会一直停在「读取会话…」。
+      // 顺手把文件句柄和缓存都丢掉：下次重新按标题找，别对着一个坏路径重试。
       this.note = `读取失败：${e?.message ?? e}`;
+      this.file = "";
+      if (file) PARSED.delete(file);
     } finally {
       this.busy = false;
       this.loading = false;
@@ -492,13 +761,17 @@ export default class History extends View {
     }
   }
 
-  // 对位：哪一轮还在终端的保留区里、在第几行。强制读新（maxAge = 0），
-  // 因为刚换了会话/刚滚过终端，缓存很可能已经不对。
+  // 对位：哪一轮还在终端的保留区里、在第几行。
+  // 终端保留区不跟着新消息变，行数和对位长度都没动就直接复用上一次的结果。
   async syncAlign(cx) {
-    const h = await readHistory(this.term, 0);
+    const p = this.pane();
+    const tot = p?.scroll?.total ?? -1;
+    if (this.align.length === this.messages.length && this.histLines > 0 && this.alignTot === tot) return;
+    const h = await readHistory(this.term, 1500);
     this.histLines = h ? h.lines.length : 0;
     this.alignedLines = h ? h.lines.length : -1;
     this.align = h ? align(this.messages, h.lines) : [];
+    this.alignTot = tot;
     cx.notify();
   }
 
@@ -543,7 +816,11 @@ export default class History extends View {
   checkTitle(cx) {
     const p = this.pane();
     if (!p || !this.title) return;
-    if (bare(p.title) !== this.title) this.load(cx, this.messages.length > 0);
+    if (bare(p.title) !== this.title) {
+      // 标题变了 = 换了会话，认得的那个文件作废，让 load 重新按标题找。
+      this.file = "";
+      this.load(cx, this.messages.length > 0);
+    }
   }
 
   async jump(i, cx) {
@@ -640,17 +917,19 @@ export default class History extends View {
 
   row(t, m, i, cx) {
     const on = this.sel === i;
+    const hasReply = Boolean(m.reply);
+    const n = (m.tools || []).length;
     const text = flat(m.text).slice(0, 200) || "(空)";
     return div()
       .id(`hx-${m.id || i}`)
-      .h(28)
+      .h(30)
       .flex_none()
       .flex()
       .items_center()
       .gap(8)
-      .px(10)
+      .px(8)
       .when(on, (el) =>
-        PAPER(t) ? el.bg("#f8dc4c8f").rounded_tl(3).rounded_tr(8).rounded_br(4).rounded_bl(9) : el.bg(t.selected))
+        PAPER(t) ? el.bg("#f8dc4c8f").rounded_tl(3).rounded_tr(8).rounded_br(4).rounded_bl(9) : el.bg(tint(t.accent, "1f")))
       .on_click((e, cx) => {
         cx.stop_propagation();
         this.sel = i;
@@ -663,19 +942,66 @@ export default class History extends View {
         }
         cx.notify();
       })
-      .child(div().flex_none().w(40).text_size(11).text_color(t.dim).child(hhmm(m.ts)))
+      // 行首竖条：选中 = accent 实色，这轮 agent 有回复 = 绿条，还没回 = 不画（保持文字对齐）。
+      .child(
+        div()
+          .flex_none()
+          .w(3)
+          .h(16)
+          .rounded(2)
+          .when(on, (s) => s.bg(t.accent))
+          .when(!on && hasReply, (s) => s.bg(tint(t.done, "cc"))),
+      )
+      .child(
+        div()
+          .flex_none()
+          .w(36)
+          .text_size(FS.time)
+          .font_weight(500)
+          .text_color(on ? t.accent : t.dim)
+          .child(hhmm(m.ts)),
+      )
       .child(
         div()
           .flex_1()
           .min_w(0)
           .truncate()
-          .text_size(12)
+          .text_size(FS.row)
+          .when(on, (el) => el.font_weight(600))
           .text_color(on ? ink(t, "ink", "foreground") : t.foreground)
           .child(text),
       )
       // 工具步数：列表上就能分出「随口一句」和「真动了一轮」。
-      .when((m.tools || []).length > 0, (el) =>
-        el.child(div().flex_none().text_size(10).text_color(t.dim).child(`${m.tools.length} 步`)),
+      .when(n > 0, (el) =>
+        el.child(
+          div()
+            .flex_none()
+            .h(15)
+            .px(4)
+            .flex()
+            .items_center()
+            .rounded(4)
+            .bg(tint(t.working, "26"))
+            .text_size(FS.badge)
+            .text_color(t.working)
+            .child(`${n} 步`),
+        ),
+      )
+      // 「这轮 agent 回话了」本身就是最常筛的条件，给它一个绿徽标。
+      .when(hasReply, (el) =>
+        el.child(
+          div()
+            .flex_none()
+            .h(15)
+            .px(4)
+            .flex()
+            .items_center()
+            .rounded(4)
+            .bg(tint(t.done, "26"))
+            .text_size(FS.badge)
+            .text_color(t.done)
+            .child("回复"),
+        ),
       )
       .child(
         div()
@@ -690,9 +1016,9 @@ export default class History extends View {
             el
               .id(`hx-j-${i}`)
               .cursor_pointer()
-              .text_size(11)
-              .text_color(t.dim)
-              .hover((h) => h.text_color(t.accent))
+              .text_size(12)
+              .text_color(t.accent)
+              .hover((h) => h.text_color(t.foreground))
               .tooltip("跳到终端里的这一轮")
               .accessibility_label("跳到终端")
               .on_click((e, c) => {
@@ -701,7 +1027,7 @@ export default class History extends View {
               })
               .child("→"),
           )
-          .when(this.align[i] < 0, (el) => el.child(div().size(4).rounded_full().bg(t.dim))),
+          .when(this.align[i] < 0, (el) => el.child(div().size(4).rounded_full().bg(t.idle)))
       );
   }
 
@@ -714,24 +1040,29 @@ export default class History extends View {
     if (b || a) bits.push(`${b || "?"} → ${a || "?"} tokens`);
     if (mk.archived > 0) bits.push(`前 ${mk.archived} 轮已归档`);
     return h_flex()
-      .h(22)
+      .h(24)
       .flex_none()
-      .px(10)
+      .px(0)
       .gap(6)
       .items_center()
+      .bg(tint(t.accent, "12"))
       .border_t(1)
       .border_color(tint(PAPER(t) ? t.rule : t.border, "b8"))
-      .child(svg("mods/inkstone-chrome/archive.svg").size(12).flex_none().text_color(t.dim))
+      // 左侧竖条和普通行的竖条同宽，压缩点整条读起来像一个「分节」。
+      .child(div().flex_none().w(3).h_full().bg(tint(t.accent, "99")))
+      .child(svg("mods/inkstone-chrome/archive.svg").size(12).flex_none().text_color(t.accent))
       .child(
-        div()
-          .flex_1()
-          .min_w(0)
-          .truncate()
-          .text_size(10.5)
-          .text_color(t.dim)
-          .child(bits.length ? `上下文压缩 · ${bits.join(" · ")}` : "上下文压缩"),
+        h_flex()
+          .flex_none()
+          .items_center()
+          .gap(4)
+          .child(div().flex_none().text_size(10.5).font_weight(700).text_color(t.accent).child("上下文压缩"))
+          .when(bits.length > 0, (el) =>
+            el.child(div().flex_none().text_size(10).text_color(t.muted).child(`· ${bits.join(" · ")}`)),
+          ),
       )
-      .child(div().flex_none().text_size(10).text_color(t.dim).child(hhmm(mk.ts)));
+      .child(div().flex_1())
+      .child(div().flex_none().pr(8).text_size(10).text_color(t.dim).child(hhmm(mk.ts)));
   }
 
   // 复制走临时文件：exec 没有 stdin，中文直接拼进命令行会被引号和代码页吃掉。
@@ -757,19 +1088,24 @@ export default class History extends View {
     cx.notify();
   }
 
-  // 小文字按钮：复制、展开这类，跟 22px 的图标按钮分开。
+  // 次要操作：描边小按钮，和实心主按钮区分开 —— 以前四个按钮是同一个灰度，认不出主次。
   textButton(t, id, label, action) {
     const paper = PAPER(t);
     return div()
       .id(id)
-      .h(20)
+      .h(22)
       .px(8)
       .flex()
       .items_center()
+      .rounded(6)
+      .border(1)
+      .border_color(paper ? tint(t.rule, "cc") : tint(t.border, "cc"))
       .text_size(11)
       .text_color(ink(t, "pencil", "muted"))
-      .when(paper, (s) => s.hover((h) => h.bg("#f8dc4c4d")).rounded_tl(3).rounded_tr(8).rounded_br(4).rounded_bl(9))
-      .when(!paper, (s) => s.hover((h) => h.bg(t.hover)).rounded(6))
+      .when(paper, (s) => s.hover((h) => h.bg("#f8dc4c4d")))
+      .when(!paper, (s) =>
+        s.hover((h) => h.bg(t.hover).border_color(t.accent).text_color(t.accent)),
+      )
       .on_click((_e, c) => {
         c.stop_propagation();
         action(c);
@@ -785,12 +1121,13 @@ export default class History extends View {
     const text = m.text || "(空)";
     const reply = String(m.reply || "");
     const tools = m.tools || [];
-    // 面板宽 460，11.5px 一行约 38 字；按真实的换行分段估高，短代码块不会被压成两行。
-    const est = (s) => String(s).split("\n").reduce((n, seg) => n + Math.max(1, Math.ceil(seg.length / 38)), 0);
+    // 面板宽 460，12px 一行约 36 字；按真实的换行分段估高，短代码块不会被压成两行。
+    const est = (s) => String(s).split("\n").reduce((n, seg) => n + Math.max(1, Math.ceil(seg.length / 36)), 0);
     // 长提问会把工具和回复挤出面板，默认只露三行，点「全文」再看全部。
     const held = est(text);
     const shown = this.longText ? held : Math.min(held, 3);
-    const h = Math.min(320, 34 + shown * 17 + (held > 3 ? 16 : 0) + (tools.length ? 26 : 0) + (reply ? 24 + est(reply) * 17 : 0));
+    const LH = 18;
+    const h = Math.min(340, 36 + shown * LH + (held > 3 ? 18 : 0) + (tools.length ? 30 : 0) + (reply ? 26 + est(reply) * LH : 0));
     return v_flex()
       .flex_none()
       .h(h)
@@ -800,16 +1137,16 @@ export default class History extends View {
       .child(
         h_flex()
           .flex_none()
-          .h(30)
+          .h(32)
           .px(10)
           .gap(6)
           .items_center()
-          .child(div().flex_none().text_size(11).text_color(t.dim).child(hhmm(m.ts)))
+          .child(div().flex_none().text_size(11).font_weight(700).text_color(t.foreground).child(hhmm(m.ts)))
           .child(
             div()
               .flex_none()
-              .text_size(10.5)
-              .text_color(t.dim)
+              .text_size(FS.sub)
+              .text_color(can ? t.done : t.muted)
               .child(can ? "这一轮还在终端里" : `已滚出终端（仅留 ${this.histLines} 行）`),
           )
           .child(div().flex_1())
@@ -822,9 +1159,10 @@ export default class History extends View {
               }),
             ),
           )
-          .when(can, (el) => el.child(this.textButton(t, "hx-jump", "跳到终端", (c) => this.jump(i, c))))
           .child(this.textButton(t, "hx-copy-q", "复制原文", (c) => this.copy(text, c)))
-          .when(reply !== "", (el) => el.child(this.textButton(t, "hx-copy-a", "复制回复", (c) => this.copy(reply, c)))),
+          .when(reply !== "", (el) => el.child(this.textButton(t, "hx-copy-a", "复制回复", (c) => this.copy(reply, c))))
+          // 主操作实心 accent，放最右；其余四个是描边按钮，一眼分得出该点哪个。
+          .when(can, (el) => el.child(primaryButton(t, "hx-jump", "跳到终端", (c) => this.jump(i, c)))),
       )
       .child(
         v_flex()
@@ -835,14 +1173,15 @@ export default class History extends View {
           .pb(8)
           .gap(6)
           .overflow_y_scrollbar()
+          .child(sectionLabel(t, "提问", t.accent))
           .child(
             div()
               .w_full()
               .min_w(0)
-              .text_size(11.5)
-              .line_height("17px")
+              .text_size(FS.body)
+              .line_height(`${LH}px`)
               .text_color(ink(t, "ink", "foreground"))
-              .when(!this.longText, (s) => s.max_h(51).overflow_hidden())
+              .when(!this.longText, (s) => s.max_h(54).overflow_hidden())
               .child(text),
           )
           .when(tools.length > 0, (el) =>
@@ -858,7 +1197,7 @@ export default class History extends View {
                     .w_full()
                     .gap(6)
                     .items_center()
-                    .child(div().flex_none().text_size(10.5).text_color(t.dim).child(`工具 ${tools.length} 步`))
+                    .child(sectionLabel(t, `工具 ${tools.length} 步`, t.working))
                     .child(
                       div()
                         .flex_1()
@@ -896,13 +1235,13 @@ export default class History extends View {
                 .when(paper, (s) => s.border_t(1).border_color(tint(t.rule, "b8")))
                 .pt(5)
                 .gap(3)
-                .child(div().flex_none().text_size(10.5).text_color(t.dim).child("回复"))
+                .child(sectionLabel(t, "回复", t.done))
                 .child(
                   div()
                     .w_full()
                     .min_w(0)
-                    .text_size(11.5)
-                    .line_height("17px")
+                    .text_size(FS.body)
+                    .line_height(`${LH}px`)
                     .text_color(ink(t, "ink", "foreground"))
                     .child(reply),
                 ),
@@ -966,22 +1305,30 @@ export default class History extends View {
     const text = r.text || "(空)";
     const reply = String(r.reply || "");
     const tools = r.tools || [];
-    const para = (s) =>
-      div().w_full().min_w(0).text_size(13).line_height("21px").text_color(ink(t, "ink", "foreground")).child(s);
-    const label = (s) =>
+    const para = (s, size = FS.readBody, lh = "22px") =>
+      div().w_full().min_w(0).text_size(size).line_height(lh).text_color(ink(t, "ink", "foreground")).child(s);
+    // 段落标签：色块区分「提问 / 回复 / 工具」，右边一条细线把这一节圈出来。
+    const label = (s, color) =>
       h_flex().flex_none().w_full().items_center().gap(8)
-        .child(div().flex_none().text_size(10.5).font_weight(700).text_color(t.dim).child(s))
+        .child(sectionLabel(t, s, color, 11))
         .child(div().flex_1().h(1).bg(tint(paper ? t.rule : t.border, "b8")));
     const head = h_flex()
       .flex_none()
-      .h(34)
+      .h(38)
       .px(12)
       .gap(8)
       .items_center()
       .border_b(1).border_color(tint(paper ? t.rule : t.border, "b8"))
       .child(svg("mods/inkstone-history/history.svg").size(15).flex_none().text_color(ink(t, "pencil", "muted")))
-      .child(div().flex_none().text_size(12.5).font_weight(700).text_color(ink(t, "ink", "foreground")).child(`${hhmm(r.ts)} 这一轮`))
-      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(flat(String(text)).slice(0, 120)))
+      .child(
+        div()
+          .flex_none()
+          .text_size(FS.readTitle)
+          .font_weight(700)
+          .text_color(ink(t, "ink", "foreground"))
+          .child(`${hhmm(r.ts)} 这一轮`),
+      )
+      .child(div().flex_1().min_w(0).truncate().text_size(FS.sub).text_color(t.muted).child(flat(String(text)).slice(0, 120)))
       .child(this.iconButton(t, "hx-r-close", "mods/inkstone-pane/close.svg", () => this.shut()));
     const foot = h_flex()
       .flex_none()
@@ -990,10 +1337,20 @@ export default class History extends View {
       .gap(6)
       .items_center()
       .border_t(1).border_color(tint(paper ? t.rule : t.border, "b8"))
-      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(this.tip || (r.can ? "这一轮还在终端里" : `已滚出终端（仅留 ${r.lines} 行）`)))
+      .child(
+        div()
+          .flex_1()
+          .min_w(0)
+          .truncate()
+          .text_size(FS.sub)
+          .text_color(this.tip ? t.done : r.can ? t.muted : t.dim)
+          .child(this.tip || (r.can ? "这一轮还在终端里" : `已滚出终端（仅留 ${r.lines} 行）`)),
+      )
+      .child(this.textButton(t, "hx-r-copy-q", "复制原文", (c) => this.copy(text, c)))
+      .when(reply !== "", (el) => el.child(this.textButton(t, "hx-r-copy-a", "复制回复", (c) => this.copy(reply, c))))
       .when(r.can, (el) =>
         el.child(
-          this.textButton(t, "hx-r-jump", "跳到终端", (c) => {
+          primaryButton(t, "hx-r-jump", "跳到终端", (c) => {
             run("pane.focus", { terminal: r.term });
             run("terminal.scroll", { terminal: r.term, to: "top" });
             run("terminal.scroll", { terminal: r.term, lines: Math.max(0, r.top) });
@@ -1001,9 +1358,7 @@ export default class History extends View {
             c.notify();
           }),
         ),
-      )
-      .child(this.textButton(t, "hx-r-copy-q", "复制原文", (c) => this.copy(text, c)))
-      .when(reply !== "", (el) => el.child(this.textButton(t, "hx-r-copy-a", "复制回复", (c) => this.copy(reply, c))));
+      );
     const inner = v_flex()
       .size_full()
       .min_h(0)
@@ -1027,13 +1382,13 @@ export default class History extends View {
           .overflow_y_scrollbar()
           .mode("always")
           .track_scroll(this.scroll)
-          .child(label("提问"))
+          .child(label("提问", t.accent))
           .child(para(text))
-          .when(reply !== "", (el) => el.child(label("回复")).child(para(reply)))
+          .when(reply !== "", (el) => el.child(label("回复", t.done)).child(para(reply, 13, "21px")))
           .when(tools.length > 0, (el) =>
             el.child(
               h_flex().flex_none().w_full().items_center().gap(8)
-                .child(div().flex_none().text_size(10.5).font_weight(700).text_color(t.dim).child(`工具 ${tools.length} 步`))
+                .child(sectionLabel(t, `工具 ${tools.length} 步`, t.working, 11))
                 .child(div().flex_1().h(1).bg(tint(paper ? t.rule : t.border, "b8")))
                 .child(
                   this.textButton(t, "hx-r-tools", this.toolsOpen ? "收起" : "展开", (c) => {
@@ -1043,10 +1398,26 @@ export default class History extends View {
                 ),
             )
               .when(!this.toolsOpen, (s) =>
-                s.child(div().w_full().min_w(0).truncate().text_size(11.5).text_color(t.dim).child(tools.join(" · "))),
+                s.child(
+                  div()
+                    .w_full()
+                    .min_w(0)
+                    .truncate()
+                    .text_size(FS.readMeta)
+                    .text_color(t.muted)
+                    .child(tools.join(" · ")),
+                ),
               )
               .when(this.toolsOpen, (s) =>
-                s.child(div().w_full().min_w(0).text_size(11.5).line_height("18px").text_color(t.dim).child(tools.map((x, k) => `${k + 1}. ${x}`).join("\n"))),
+                s.child(
+                  div()
+                    .w_full()
+                    .min_w(0)
+                    .text_size(FS.readMeta)
+                    .line_height("18px")
+                    .text_color(t.muted)
+                    .child(tools.map((x, k) => `${k + 1}. ${x}`).join("\n")),
+                ),
               ),
           ),
       )
@@ -1078,19 +1449,36 @@ export default class History extends View {
     }
     const head = h_flex()
       .flex_none()
-      .h(34)
+      .h(40)
       .px(10)
       .gap(8)
       .items_center()
       .border_b(1).border_color(tint(paper ? t.rule : t.border, "b8"))
       .child(svg("mods/inkstone-history/history.svg").size(15).flex_none().text_color(ink(t, "pencil", "muted")))
-      .child(div().flex_none().text_size(12.5).font_weight(700).text_color(ink(t, "ink", "foreground")).child("历史发言"))
-      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(this.title || (p?.title ?? "")))
+      .child(
+        div()
+          .flex_none()
+          .text_size(FS.title)
+          .font_weight(700)
+          .text_color(ink(t, "ink", "foreground"))
+          .child("历史发言"),
+      )
+      .child(
+        div()
+          .flex_1()
+          .min_w(0)
+          .truncate()
+          .text_size(FS.sub)
+          .text_color(t.muted)
+          .child(this.title || (p?.title ?? "")),
+      )
+      // 轮数常驻在头部；搜索时的命中数放在搜索框右侧，避免同一行里写两遍。
+      .when(this.messages.length > 0, (el) => el.child(chip(t, `${this.messages.length} 轮`)))
       .child(this.iconButton(t, "hx-close", "mods/inkstone-pane/close.svg", () => this.shut()));
 
     // 搜索条只在有轮次时出现：会话还没解析完时点它也没东西可筛。
     const searchRow = h_flex()
-      .h(30)
+      .h(32)
       .flex_none()
       .mx(8)
       .mt(6)
@@ -1098,7 +1486,8 @@ export default class History extends View {
       .gap(6)
       .items_center()
       .rounded(6)
-      .bg(t.background)
+      // zhi 的 input 槽是深灰（给终端里的输入框用），纸上应该用更浅的一层。
+      .bg(paper ? (t.popover ?? t.surface) : t.input)
       .border(1)
       .border_color(this.typing ? t.accent : t.border)
       .cursor_text()
@@ -1161,13 +1550,14 @@ export default class History extends View {
           .child("回到最新"),
       );
 
+    const hint = (s) => div().px(12).py(12).text_size(FS.body).text_color(t.dim).child(s);
     const body = this.loading && !this.messages.length
-      ? [div().px(12).py(12).text_size(12).text_color(t.dim).child("读取会话…")]
-      : this.messages.length
-        ? rows.length
-          ? rows
-          : [div().px(12).py(12).text_size(12).text_color(t.dim).child("没有匹配的发言")]
-        : [div().px(12).py(12).text_size(12).text_color(t.dim).child(this.note || "这个会话还没有发言")];
+      ? [hint("读取会话…")]
+      : !this.messages.length
+        ? [hint(this.note || "这个会话还没有发言")]
+        : this.query.trim() && !vis.length
+          ? [hint("没有匹配的发言")]
+          : rows;
 
     const inner = v_flex()
       .size_full()
