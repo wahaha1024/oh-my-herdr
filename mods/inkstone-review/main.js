@@ -117,7 +117,7 @@ async function homeDir(on) {
 async function newestSession(dir, on) {
   const r = on
     ? await exec("sh", ["-lc", `ls -t ${JSON.stringify(dir)}/*.jsonl 2>/dev/null | head -1`], { on }).catch(() => null)
-    : await exec("powershell", ["-NoProfile", "-Command", `Get-ChildItem -LiteralPath '${dir.replace(/'/g, "''")}' -Filter *.jsonl -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName`], {}).catch(() => null);
+    : await exec("powershell", ["-NoProfile", "-Command", `[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-ChildItem -LiteralPath '${dir.replace(/'/g, "''")}' -Filter *.jsonl -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName`], {}).catch(() => null);
   const p = r?.code === 0 ? r.stdout.trim() : "";
   return p || null;
 }
@@ -129,10 +129,15 @@ async function fileStamp(path, on) {
   return r?.code === 0 ? r.stdout.trim() : "";
 }
 
+// 会话文件常有十几 MB，而 exec 只给 8 MiB：整段 tail 在长会话里会被截断，
+// 丢掉的正是尾部（也就是本轮），于是「本轮」永远为空。只把 user 消息与工具调用
+// 两类行取回来，体积从 MB 降到几十 KB，顺序不变。
+const KEEP = '"role":"user"|tool_execution_start';
+
 async function tailLines(file, on, n) {
   const r = on
-    ? await exec("sh", ["-lc", `tail -n ${n} -- ${JSON.stringify(file)} 2>/dev/null`], { on }).catch(() => null)
-    : await exec("powershell", ["-NoProfile", "-Command", `Get-Content -LiteralPath '${file.replace(/'/g, "''")}' -Tail ${n} -ErrorAction SilentlyContinue`], {}).catch(() => null);
+    ? await exec("sh", ["-lc", `tail -n ${n} -- ${JSON.stringify(file)} 2>/dev/null | grep -E ${JSON.stringify(KEEP)}`], { on }).catch(() => null)
+    : await exec("powershell", ["-NoProfile", "-Command", `[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Content -LiteralPath '${file.replace(/'/g, "''")}' -Tail ${n} -ErrorAction SilentlyContinue | Where-Object { $_ -match '${KEEP}' }`], {}).catch(() => null);
   return r?.code === 0 ? r.stdout : "";
 }
 
