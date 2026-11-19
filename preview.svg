@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="715" viewBox="0 0 1200 715" font-family="Segoe UI, Inter, system-ui, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="750" viewBox="0 0 1200 750" font-family="Segoe UI, Inter, system-ui, sans-serif">
   <!-- window -->
-  <rect width="1200" height="715" fill="#e8f0ec"/>
+  <rect width="1200" height="750" fill="#e8f0ec"/>
 
   <!-- ===== sidebar ===== -->
-  <rect width="237" height="715" fill="#e1eae4"/>
+  <rect width="237" height="750" fill="#e1eae4"/>
 
   <!-- brand -->
   <text x="14" y="26" font-size="13" font-weight="600" fill="#2b333e">Oh My Herdr</text>
@@ -83,14 +83,14 @@
 
   <!-- sidebar footer -->
   <g font-size="10.5" fill="#5f6b67">
-    <text x="34" y="622">Preferences</text>
-    <text x="34" y="654">Herdr settings</text>
-    <text x="34" y="686">Add machine</text>
+    <text x="34" y="657">Preferences</text>
+    <text x="34" y="689">Herdr settings</text>
+    <text x="34" y="721">Add machine</text>
   </g>
   <g stroke="#5f6b67" stroke-width="1.3" fill="none">
-    <circle cx="18" cy="618" r="4"/>
-    <rect x="14" y="646" width="8" height="8" rx="1.5"/>
-    <path d="M18 678 v8 M14 682 h8"/>
+    <circle cx="18" cy="653" r="4"/>
+    <rect x="14" y="681" width="8" height="8" rx="1.5"/>
+    <path d="M18 713 v8 M14 717 h8"/>
   </g>
 
   <!-- ===== top bar ===== -->
@@ -119,7 +119,7 @@
   </g>
 
   <!-- ===== terminal ===== -->
-  <rect x="245" y="45" width="616" height="638" rx="9" fill="#e8f0ec" stroke="#afcdd0"/>
+  <rect x="245" y="45" width="616" height="673" rx="9" fill="#e8f0ec" stroke="#afcdd0"/>
   <!-- terminal header line -->
   <text x="262" y="68" font-size="9.5" fill="#646c73">~/acme/web — pnpm dev</text>
   <g font-family="Consolas, ui-monospace, monospace" font-size="10.5">
@@ -135,12 +135,16 @@
     <text x="262" y="308" fill="#2b333e"> ✓ src/lib/format.test.ts (12)</text>
     <text x="262" y="330" fill="#2b333e"> ✓ src/lib/api.test.ts (7)</text>
     <text x="262" y="352" fill="#1a6840"> Tests  19 passed (19)</text>
-    <text x="262" y="382" fill="#5f6b67">$</text>
+    <text x="262" y="382" fill="#5f6b67">$ git log --oneline -3</text>
+    <text x="262" y="404" fill="#646c73">a1f2c3d feat: hero section</text>
+    <text x="262" y="426" fill="#646c73">9b8e7a2 fix: nav spacing</text>
+    <text x="262" y="448" fill="#646c73">4c7d110 chore: vite 5.4</text>
+    <text x="262" y="482" fill="#5f6b67">$</text>
   </g>
-  <rect x="276" y="374" width="6" height="12" fill="#126e82"/>
+  <rect x="276" y="474" width="6" height="12" fill="#126e82"/>
 
   <!-- ===== drawer ===== -->
-  <rect x="869" y="45" width="331" height="638" fill="#e1eae4"/>
+  <rect x="869" y="45" width="331" height="673" fill="#e1eae4"/>
   <text x="884" y="68" font-size="10.5" font-weight="600" fill="#2b333e">Files</text>
   <g font-size="10" fill="#5f6b67">
     <text x="884" y="96">▾ web</text>
@@ -163,11 +167,11 @@
   </g>
 
   <!-- ===== status bar ===== -->
-  <rect x="237" y="691" width="963" height="24" fill="#e1eae4"/>
-  <text x="250" y="707" font-size="9.5" fill="#5f6b67">server-a</text>
-  <text x="296" y="707" font-size="9.5" fill="#646c73">main · 2 agents</text>
-  <text x="950" y="707" font-size="9.5" fill="#646c73">CPU 12% · 8.1 GB</text>
-  <text x="1046" y="707" font-size="9.5" fill="#646c73">3</text>
-  <text x="1070" y="707" font-size="9.5" fill="#1a6840">1 waiting</text>
-  <text x="1136" y="707" font-size="9.5" fill="#646c73">Review</text>
+  <rect x="237" y="726" width="963" height="24" fill="#e1eae4"/>
+  <text x="250" y="742" font-size="9.5" fill="#5f6b67">server-a</text>
+  <text x="296" y="742" font-size="9.5" fill="#646c73">main · 2 agents</text>
+  <text x="950" y="742" font-size="9.5" fill="#646c73">CPU 12% · 8.1 GB</text>
+  <text x="1046" y="742" font-size="9.5" fill="#646c73">3</text>
+  <text x="1070" y="742" font-size="9.5" fill="#1a6840">1 waiting</text>
+  <text x="1136" y="742" font-size="9.5" fill="#646c73">Review</text>
 </svg>

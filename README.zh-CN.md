@@ -1,0 +1,57 @@
+# Oh My Herdr
+**少翻终端，多看结果。** Oh My Herdr 是一套给 [Herdr 桌面版](https://herdr.dev/) 用的中文工作台布局：空间按目录归组，智能体按谁在等你排序，文件、会话和改动收在一个抽屉里。
+
+Herdr 桌面版 0.1.16+ · Windows / macOS / Linux · MIT · [English](README.md) · 简体中文
+
+![](screenshot.png)
+
+## 安装
+
+让智能体装：
+
+```
+Read ~/.config/herdr-app/AGENTS.md, then add this layout: github.com/wahaha1024/oh-my-herdr
+```
+
+或自己跑脚本：
+
+```sh
+git clone https://github.com/wahaha1024/oh-my-herdr
+cd oh-my-herdr && ./install.ps1 -Force        # macOS / Linux 用 ./install.sh --force
+herdr-app do layout.switch '{"name":"oh-my-herdr"}'
+```
+
+`-Force` 会用包里的版本覆盖布局、mod 和主题；`-DryRun` 只打印会改什么，不写文件。安装前先用 Herdr 打开一次，让 `~/.config/herdr-app` 里生成 `settings.json`。
+
+## 和 Herdr 默认布局比，日常操作哪里更顺手？
+| 你想做什么 | Herdr 默认布局 | Oh My Herdr |
+| --- | --- | --- |
+| 在多个项目间切换 | 从机器与空间列表进入终端 | 空间按目录归组，展开就能看到终端；同一空间的配色贯穿侧栏、标签和窗格，侧栏还能收成图标轨 |
+| 找出现在该处理谁 | 在侧栏和标签上看智能体状态 | 左侧独立列出待处理、运行中、已完成；点待处理项直接回到对应终端 |
+| 边看终端边找文件 | 使用内置文件和变更面板 | 中文抽屉按需展开，可切换文件、会话和收藏；文件支持搜索、只读预览和一键复制 `@相对路径` |
+| 一眼认出当前窗格 | 使用默认窗格头和主题 | 窗格头直接显示程序、目录和状态；月白、玄墨随系统明暗切换，也可换成带撕纸边和荧光笔选中效果的[纸墨主题](screenshot-paper.png) |
+
+
+## 不只是换主题：新增的工作流
++ **想找上一轮的回答？直接搜，不用往上翻。** OMP「历史发言」可搜索提问、回复和工具调用，按轮查看，并标出上下文压缩点。长回复可以在大窗口里读；只要那一轮还在终端回滚区，就能跳回原位。历史面板目前仅支持 Windows 上的本地 OMP 会话。
++ **不同智能体的旧会话，从同一个入口续聊。** 会话页汇总 OMP、Codex、Claude Code、CodeBuddy、Pi、项目归档以及可选的 OpenCode（需 `sqlite3`）。可按关键词和来源筛选，也可扫描已连接机器的会话。已经打开的就切回原终端，可恢复的旧会话直接续开或复制恢复命令。
++ **先审智能体这一轮碰过的文件。** 「审查」窗口读取当前 Git 改动，把从 OMP 本轮日志识别到的改动文件置顶。支持统一视图和左右对照，暂存区、工作区与未跟踪文件都能看。
++ **不用切出去查端口和资源。** 底栏直接看 CPU、内存和监听端口；点开端口列表，可以在浏览器打开本地服务。常用项目目录也能收藏，不必每次从侧栏重新找。
+
+## 主题
+
+月白跟随系统浅色、玄墨跟随深色，随布局一起安装。可选的[纸墨主题](screenshot-paper.png)会在窗格四周加撕纸边，选中文字用荧光笔效果。
+
+![](screenshot-paper.png)
+
+## 注意
+
+- 「历史发言」面板只读取 Windows 上的本地 OMP 会话。
+- OpenCode 的会话需要那台机器上有 `sqlite3`。
+- 安装脚本默认跳过已存在的文件，只有加 `-Force` / `--force` 才覆盖；它不会删掉旧版装过的主题。
+- 卸载：删掉 `layouts/oh-my-herdr.json`、`mods/` 下的 `inkstone-*` 目录、`inkstone-*` 与 `zhi` 主题，然后执行 `herdr-app do layout.switch '{"name":"main"}'`。
+
+## 许可证
+
+MIT
+

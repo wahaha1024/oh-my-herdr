@@ -1,7 +1,18 @@
 import json, os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+BROWSERS = [
+    os.environ.get("HERDR_PREVIEW_BROWSER", ""),
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+]
+BROWSER = next((p for p in BROWSERS if p and os.path.exists(p)), None)
+if not BROWSER:
+    sys.exit("no Chromium browser found; set HERDR_PREVIEW_BROWSER to one")
 TPL = os.path.join(HERE, "preview.svg")
 
 LIGHT_PAL = ["#a84a50", "#8a5619", "#7d640c", "#357041", "#34618f", "#5f5399", "#805083"]
@@ -70,20 +81,20 @@ def render(svg_path, png_path):
     with open(html, "w", encoding="utf-8") as f:
         f.write(
             '<html><head><style>html,body{margin:0;padding:0}img{display:block}</style>'
-            '</head><body><img src="%s" width="1200" height="715"></body></html>'
+            '</head><body><img src="%s" width="1600" height="1000"></body></html>'
             % os.path.basename(svg_path)
         )
     shot = os.path.join(HERE, "_shot.png")
     subprocess.run(
-        [EDGE, "--headless=new", "--disable-gpu", "--hide-scrollbars",
-         "--force-device-scale-factor=1", "--window-size=1200,900",
+        [BROWSER, "--headless=new", "--disable-gpu", "--hide-scrollbars",
+         "--force-device-scale-factor=1", "--window-size=1600,1000",
          "--screenshot=" + shot, "file:///" + html.replace("\\", "/")],
         check=True, capture_output=True,
     )
     ps = (
         "Add-Type -AssemblyName System.Drawing;"
         "$b=[System.Drawing.Bitmap]::FromFile('%s');"
-        "$r=New-Object System.Drawing.Rectangle(0,0,1200,715);"
+        "$r=New-Object System.Drawing.Rectangle(0,0,1600,1000);"
         "$c=$b.Clone($r,$b.PixelFormat);"
         "$c.Save('%s',[System.Drawing.Imaging.ImageFormat]::Png);"
         "$c.Dispose();$b.Dispose()" % (shot, png_path)
