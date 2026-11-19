@@ -8,14 +8,16 @@ set -e
 TARGET="${HERDR_CONFIG:-$HOME/.config/herdr-app}"
 FORCE=0
 
-for a in "$@"; do
-  case "$a" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --force) FORCE=1 ;;
     --dry-run) DRY=1 ;;
-    --target=*) TARGET="${a#--target=}" ;;
+    --target=*) TARGET="${1#--target=}" ;;
+    --target) shift; TARGET="$1" ;;
     -h|--help) sed -n '2,5p' "$0"; exit 0 ;;
-    *) echo "unknown argument: $a" >&2; exit 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 SRC=$(cd "$(dirname "$0")" && pwd)
@@ -27,10 +29,14 @@ if [ ! -f "$TARGET/settings.json" ]; then
 fi
 
 # 一个文件都没有时才复制；--force 时覆盖。
+# 跳过的会记到临时文件里，末尾整体提示一次——升级时最容易被这一点坑到。
+SKIPS="${TMPDIR:-/tmp}/oh-my-herdr-skip.$$"
+: > "$SKIPS"
 put() {
   from=$1; to=$2
   if [ -e "$to" ] && [ "$FORCE" = 0 ]; then
     echo "  skip $to"
+    echo x >> "$SKIPS"
     return 0
   fi
   mkdir -p "$(dirname "$to")"
@@ -114,7 +120,16 @@ else:
 PY
 fi
 
+SKIPPED=$(wc -l < "$SKIPS" | tr -d ' ')
+rm -f "$SKIPS"
+
 echo
+if [ "$SKIPPED" -gt 0 ] && [ "$FORCE" = 0 ] && [ -z "$DRY" ]; then
+  echo "note: $SKIPPED files were left as they were (old versions)."
+  echo "      if this machine already had Oh My Herdr, update it with --force:"
+  echo "        ./install.sh --force"
+  echo
+fi
 echo "done. switch to it:"
 echo "  herdr-app do layout.switch '{\"name\":\"oh-my-herdr\"}'"
 echo "back is ctrl-shift-l."

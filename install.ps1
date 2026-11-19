@@ -92,6 +92,12 @@ if (-not (Test-Path $progDst)) {
 
 Write-Host ""
 Write-Host ("完成：写入 $copied 个文件，跳过 $skipped 个。")
+if ($skipped -gt 0 -and -not $Force -and -not $DryRun) {
+  Write-Host ""
+  Write-Host "注意：跳过的文件还是旧版本。" -ForegroundColor Yellow
+  Write-Host "  之前装过的话，再跑一次并加 -Force，否则布局 / mod / 主题不会更新：" -ForegroundColor Yellow
+  Write-Host "    .\install.ps1 -Force" -ForegroundColor Yellow
+}
 if ($DryRun) {
   Write-Host "DryRun 结束，什么都没改。去掉 -DryRun 再跑一次。"
   return

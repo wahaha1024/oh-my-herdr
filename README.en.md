@@ -78,6 +78,8 @@ Herdr's own `changes` / `workspace-status` / `pane` mods (they ship with Herdr) 
 
 Clone the repo and run the matching script — layout, mods and themes come out identical. What does not travel is per-machine state: space colours and favourites, fonts and appearance, each machine's own spaces and session records. So spaces get their colours assigned afresh and favourites start empty; everything else works the same.
 
+To update a machine that already has it, add `-Force` (`./install.sh --force`): the scripts skip files that already exist, so without it the layout, mods and themes stay at the old version — the usual symptom is no torn paper edge around the terminal and no NEED YOU / IN FLIGHT sections at the bottom of the sidebar.
+
 ## Limits
 
 - Sidebar width, drawer state and the folded rail are runtime state and may not survive a restart.
