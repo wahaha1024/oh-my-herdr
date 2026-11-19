@@ -1,12 +1,56 @@
 # Oh My Herdr
 
-> **Dev-branch notes (`dev` only).** This file is tracked on `dev` so both machines can share code locations, change notes and troubleshooting steps. `main` never carries it — before merging `dev` into `main`, run `git rm --cached RECIPE.md RECIPE.zh.md` and commit that, so the notes stay out of the public repo. Never `git push` to `origin` after an edit — wait for explicit approval. The public repo carries only `mods/`, `themes/`, `layouts/`, `pixel-icons/`, `programs.json`, the install scripts, README and LICENSE.
+> **Dev-branch notes (`dev` only).** This file is tracked on `dev` so both machines can share code locations, change notes and troubleshooting steps. `main` carries a different, public `RECIPE.md` — that is the file the layout marketplace reads and renders as its layout page. The notes here never go there, and `RECIPE.zh.md` stays on `dev` alone; see *Merging into `main`* at the end of this file. Never `git push` to `origin` after an edit — wait for explicit approval. The public repo carries `mods/`, `themes/`, `layouts/`, `pixel-icons/`, `programs.json`, the install scripts, both READMEs, the public `RECIPE.md` and LICENSE.
 
 A Herdr layout with machines, folders, spaces and terminals on the left. A 380px drawer on the right holds Files, Sessions and Favourites; the 28px status bar holds CPU, memory, ports, pending agents and Review. Space colours carry across the UI, and the sidebar can collapse to an icon rail.
 
 [中文版 RECIPE](RECIPE.zh.md)
 
 ![Oh My Herdr](preview.png)
+
+## Next (2026-11-20)
+
+Starting points for the other machine, in priority order. Each item names the files it touches.
+
+### 1. UI language switching (zh / en)
+
+Every label is a Chinese literal, spread across 18 mods: `cockpit`, `inkstone-agents`, `inkstone-chrome`, `inkstone-favorites`, `inkstone-files`, `inkstone-history`, `inkstone-inbox`, `inkstone-menu`, `inkstone-metrics`, `inkstone-pane`, `inkstone-ports`, `inkstone-review`, `inkstone-sessions`, `inkstone-settings`, `inkstone-tabs`, `inkstone-workbench`, plus the `mod.json` titles. There is no built-in hook: `settings()` is typed `Record<string, unknown>` and gpui-kit exposes no UI locale (the `language` option in `EditorState` is a syntax mode).
+
+- **One setting, read everywhere.** `shared("inkstone.lang")` = `"zh" | "en"`, default `"zh"`. Write it from the preferences overlay in `inkstone-settings`; every mod reads it. Mods cannot import each other, so each one keeps its own table at the top of `main.js`.
+- **Table shape.** `const STR = { zh: {…}, en: {…} }; const L = () => STR[shared("inkstone.lang") ?? "zh"] ?? STR.zh;` Keys stay stable; a missing key must fall back to `zh`, never render `undefined`.
+- **Translate:** status words (`待处理 / 运行中 / 已完成 / 空闲`, `等你决定 / 全部就绪`), screen titles (`驾驶舱`, `系统资源`, `待处理`, `目录收藏`, `文件`, `历史发言`, `偏好`, `审查`, `会话`, `收藏`), empty states, tooltips, `accessibility_label` strings, `notify()` titles, the right-click items in `inkstone-menu`, relative time (`刚刚 / 分钟 / 小时 / 天`), and `待你处理` in the pane header.
+- **Do not translate:** anything from the app or the agent — space and agent titles, Git output, file paths — and the labels Herdr itself draws.
+- **Width, after translating.** English is longer. Re-check the 268px sidebar, the 380px drawer, the 84px inbox block and `inkstone-menu`'s 248px overlay; use `truncate()` instead of widening a fixed block.
+- **Verify.** Set `en`, restart, then walk the sidebar, status bar, all three drawer pages, right-click menu, preferences, inbox, metrics, cockpit, review, sessions. Switch back and confirm nothing stayed English.
+
+### 2. The public surface after the gallery listing
+
+- `main` now carries a public `RECIPE.md`; the marketplace renders it as the layout page. Anything a visitor must know belongs there as well as in the README.
+- `preview.png` is 1600×1000 because the gallery card crops to 16:10 with `object-fit: cover`. After editing `preview.svg`, regenerate with `python mkprev.py` (it finds Edge or Chrome, or takes `HERDR_PREVIEW_BROWSER`) and copy the result over `layouts/oh-my-herdr.png`.
+- `screenshot.png` and `screenshot-paper.png` predate the Agents panel and the history button. Retake both before the next release so the README matches the app.
+- The repository description is capped at 350 characters by GitHub; the gallery `blurb` is that description, truncated.
+- `OiAnthony/oh-my-herdr` is a different layout with the same repository name. If the two stay hard to tell apart in the gallery, rename ours and update the README, `RECIPE.md` and the install snippets.
+
+### 3. Known gaps
+
+- History reads local OMP sessions on Windows only; `hc read` is the undocumented dependency, and macOS/Linux paths are untested.
+- OpenCode sessions need `sqlite3` on the machine that holds them.
+- The installers never delete themes from an earlier install, so old `inkstone-*` copies survive an upgrade. A `-Clean` switch is open work; until then the README tells people to delete by hand.
+- `inkstone-settings` only draws the paper card when opened with `props().framed`; the built-in Settings page has no edge by design.
+
+### Merging into `main`
+
+`main` keeps the public `RECIPE.md` and must not receive `RECIPE.zh.md`:
+
+```sh
+git switch main
+git merge --no-commit dev
+git checkout --ours RECIPE.md     # keep the public one
+git rm -f RECIPE.zh.md            # notes stay on dev
+git commit
+```
+
+`.gitignore` on both branches ignores `RECIPE.zh.md` only; `RECIPE.md` is tracked everywhere now.
 
 ## 2026-11-19 development handoff
 

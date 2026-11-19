@@ -1,5 +1,5 @@
 # Oh My Herdr
-> **开发分支专用（`dev`）**：本文件随 `dev` 分支跟踪，用来让两台电脑共享关键代码位置、改动记录与排查步骤；`main` 分支不含它——合并 `dev → main` 前必须 `git rm --cached RECIPE.md RECIPE.zh.md` 再提交，别把开发笔记带上公开仓库。改完后**不要自动 push 到 **`origin`，等口头同意再推。公开仓库只放 `mods/`、`themes/`、`layouts/`、`pixel-icons/`、`programs.json`、安装脚本、README 与 LICENSE。
+> **开发分支专用（`dev`）**：本文件随 `dev` 分支跟踪，用来让两台电脑共享关键代码位置、改动记录与排查步骤。`main` 上另有一份**公开版** `RECIPE.md`——那是布局商店读取并整页渲染的配方；这里的内容不进 `main`，`RECIPE.zh.md` 也只留在 `dev`。合并方式见文末「合并到 main」。改完后**不要自动 push 到 `origin`**，等口头同意再推。公开仓库放 `mods/`、`themes/`、`layouts/`、`pixel-icons/`、`programs.json`、安装脚本、中英 README、公开 `RECIPE.md` 与 LICENSE。
 >
 
 一扇给自己用的工作台：左边按「机器 → 目录 → 空间 → 终端」分层，终端右侧有 380px 抽屉（文件、会话、收藏），底部是 28px 状态栏。默认亮色月白（qingci），另带玄墨（xuanmo）与可选的纸墨（zhi）。
@@ -7,6 +7,50 @@
 ![](preview.png)
 
 [English RECIPE](RECIPE.md)
+
+## 下一步（2026-11-20）
+
+给另一台电脑接手用，按优先级排；每条都写清要动的文件。
+
+### 1. 界面中英文切换
+
+现在的文案是写死的中文，散在 18 个 mod 里：`cockpit`、`inkstone-agents`、`inkstone-chrome`、`inkstone-favorites`、`inkstone-files`、`inkstone-history`、`inkstone-inbox`、`inkstone-menu`、`inkstone-metrics`、`inkstone-pane`、`inkstone-ports`、`inkstone-review`、`inkstone-sessions`、`inkstone-settings`、`inkstone-tabs`、`inkstone-workbench`，外加各 `mod.json` 的 `title`。平台没有现成钩子：`settings()` 的类型是 `Record<string, unknown>`，gpui-kit 不暴露界面语言（`EditorState` 的 `language` 是语法高亮模式）。
+
+- **一处存、处处读。** `shared("inkstone.lang")` = `"zh" | "en"`，默认 `"zh"`；在 `inkstone-settings` 的偏好浮层里切换，其余 mod 只读。mod 之间不能互相 import，所以每个 mod 在 `main.js` 顶部自带一张表。
+- **表的结构。** `const STR = { zh: {…}, en: {…} }; const L = () => STR[shared("inkstone.lang") ?? "zh"] ?? STR.zh;` 键名固定；缺键一律回落到中文，不能渲染出 `undefined`。
+- **要翻的：** 状态词（`待处理 / 运行中 / 已完成 / 空闲`、`等你决定 / 全部就绪`）、面板标题（`驾驶舱`、`系统资源`、`待处理`、`目录收藏`、`文件`、`历史发言`、`偏好`、`审查`、`会话`、`收藏`）、空态、tooltip、`accessibility_label`、`notify()` 标题、`inkstone-menu` 的右键菜单项、相对时间（`刚刚 / 分钟 / 小时 / 天`）、窗格头的 `待你处理`。
+- **不要翻的：** 来自 app 或智能体的内容——空间名、智能体标题、Git 输出、文件路径，以及 Herdr 自己画的标签。
+- **翻完改宽度。** 英文更长，重新看 268px 侧栏、380px 抽屉、84px 待处理块、`inkstone-menu` 的 248px 浮层；用 `truncate()` 截断，别去撑大固定宽度的块。
+- **验收。** 切 `en` → 重启 → 依次走侧栏、状态栏、三个抽屉页、右键菜单、偏好、待处理、系统资源、驾驶舱、审查、会话；切回 `zh` 确认没有残留英文。
+
+### 2. 上架后的公开面
+
+- `main` 上已有公开 `RECIPE.md`，布局商店把它当详情页整页渲染；访客需要知道的事要同时写在它和 README 里。
+- `preview.png` 是 1600×1000，因为商店卡片按 16:10 + `object-fit: cover` 裁切。改完 `preview.svg` 用 `python mkprev.py` 重新生成（脚本自动找 Edge/Chrome，也可设 `HERDR_PREVIEW_BROWSER`），再把结果复制到 `layouts/oh-my-herdr.png`。
+- `screenshot.png` 与 `screenshot-paper.png` 早于「智能体栏」和窗格头的历史按钮，发版前在本机重拍，让 README 与实机一致。
+- 仓库 description 上限 350 字符（GitHub 限制），画廊卡片摘要就是它截断后的结果。
+- `OiAnthony/oh-my-herdr` 是另一个布局，仓库名撞车。若画廊里两者仍难区分，就改我们的仓库名，并同步 README、`RECIPE.md` 与安装命令。
+
+### 3. 已知缺口
+
+- 历史发言只读 Windows 本地 OMP 会话；`hc read` 是未公开的依赖，macOS/Linux 路径没测过。
+- OpenCode 会话需要那台机器上有 `sqlite3`。
+- 安装脚本从不删旧主题，升级后旧的 `inkstone-*` 会留下。加一个 `-Clean` 开关是待办；在那之前 README 里教人手动删。
+- `inkstone-settings` 只有 `props().framed` 为真时才画纸卡，内置设置页没有边是设计。
+
+### 合并到 main
+
+`main` 保留公开版 `RECIPE.md`，且不能收到 `RECIPE.zh.md`：
+
+```sh
+git switch main
+git merge --no-commit dev
+git checkout --ours RECIPE.md     # 保留公开版
+git rm -f RECIPE.zh.md            # 笔记留在 dev
+git commit
+```
+
+两个分支的 `.gitignore` 现在只忽略 `RECIPE.zh.md`；`RECIPE.md` 两边都追踪。
 
 ## 2026-11-19 跨机交接
 
