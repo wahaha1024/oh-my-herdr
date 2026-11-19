@@ -3,10 +3,59 @@
 // 改成状态栏一行文字 + 居中弹窗，和 inkstone 的状态栏其余块一致。
 // 不存任何状态：Herdr 在你查看后会把 done 变 idle、blocked 变别的，行会自己消失。
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { agents, run, theme, props, closeOverlay } from "herdr";
+import { agents, run, theme, props, closeOverlay, openOverlay } from "herdr";
 
+const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
+const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FOOT = 40;
+const EDGE_PRESETS = [
+  { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
+  { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+];
+let edgeCacheKey = "";
+let edgeCacheDir = null;
+function artEdgeDir(t) {
+  if (t.paper) return "ink";
+  const bg = t.background ?? "", muted = t.muted ?? "";
+  const key = `${bg}|${muted}`;
+  if (key !== edgeCacheKey) {
+    edgeCacheKey = key;
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    edgeCacheDir = p ? p.dir : null;
+  }
+  return edgeCacheDir;
+}
+function paperCard(view, t, content) {
+  const dir = artEdgeDir(t);
+  const line = tint(t.accent, "cc");
+  if (!dir) return content.rounded(8).border(1).border_color(line);
+  const w = Math.max(200, view._cardW ?? 424);
+  const h = Math.max(160, view._cardH ?? 344);
+  const sideH = Math.max(0, h - 2 * EDGE_T);
+  const art = (name, iw, ih) => image(`mods/inkstone-edge/${dir}/${name}.svg`).absolute().w(iw).h(ih);
+  const hEdge = (side) => div().relative().w_full().h(EDGE_T).flex_none().overflow_hidden()
+    .child(div().absolute().left(0).top(0).w(Math.max(0, w - EDGE_CORNER)).h(EDGE_T).overflow_hidden().child(art(`${side}-l`, EDGE_LONG, EDGE_T).left(0).top(0)))
+    .child(div().absolute().right(0).top(0).w(Math.min(w, EDGE_CORNER)).h(EDGE_T).overflow_hidden().child(art(`${side}-r`, EDGE_CORNER, EDGE_T).right(0).top(0)));
+  const vEdge = (side) => div().relative().w(EDGE_T).h_full().flex_none().overflow_hidden()
+    .child(div().absolute().left(0).top(0).w(EDGE_T).h(Math.max(0, sideH - EDGE_FOOT)).overflow_hidden().child(art(`${side}-t`, EDGE_T, EDGE_TALL).left(0).top(0)))
+    .child(div().absolute().left(0).bottom(0).w(EDGE_T).h(Math.min(sideH, EDGE_FOOT)).overflow_hidden().child(art(`${side}-b`, EDGE_T, EDGE_FOOT).left(0).bottom(0)));
+  return v_flex().id("inbox-card").size_full().min_h(0)
+    .on_size_change((sz, cx) => {
+      if (Math.abs((view._cardW ?? 0) - sz.width) >= 1 || Math.abs((view._cardH ?? 0) - sz.height) >= 1) {
+        view._cardW = sz.width;
+        view._cardH = sz.height;
+        cx.notify();
+      }
+    })
+    .child(hEdge("top"))
+    .child(h_flex().w_full().flex_1().min_h(0)
+      .child(vEdge("left"))
+      .child(div().flex_1().min_w(0).min_h(0).h_full().overflow_hidden().border(1).border_color(line).child(content))
+      .child(vEdge("right")))
+    .child(hEdge("bottom"));
+}
 const RANK = { blocked: 2, done: 1 };
 const LABEL = { blocked: "等你决定", done: "已完成", working: "运行中", idle: "空闲" };
 
@@ -48,7 +97,7 @@ export default class Inbox extends View {
       .hover((s) => s.bg(t.hover))
       .tooltip(list.length ? `${list.length} 个智能体在等你 · 点开看是哪些` : "没有智能体在等你")
       .accessibility_label("待处理列表")
-      .on_click(() => run("mod.open", { name: "inkstone-inbox" }))
+      .on_click(() => openOverlay({ mod: "inkstone-inbox", kind: "dialog", frame: "none", width: 424, height: 344, props: { framed: true } }))
       .child(dot(t, urgent ? "blocked" : list.length ? "done" : "idle"))
       .child(div()
         .text_size(11)
@@ -83,10 +132,10 @@ export default class Inbox extends View {
 
   popup(t) {
     const list = waiting();
-    return v_flex()
+    const inner = v_flex()
       .size_full()
       .min_h(0)
-      .bg(t.chrome)
+      .bg(t.paper ?? t.background)
       .child(h_flex()
         .h(34)
         .flex_none()
@@ -119,6 +168,7 @@ export default class Inbox extends View {
         .children(list.length
           ? list.map((a, i) => this.row(a, i, t))
           : [div().p(10).text_size(12).text_color(t.dim).child("没有智能体在等你。")]));
+    return props()?.framed ? paperCard(this, t, inner) : inner;
   }
 
   render(_cx) {

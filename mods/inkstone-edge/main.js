@@ -5,24 +5,29 @@
 // 长切片给出边，从纸的另一端取的短切片给出远角，于是任何尺寸都能合拢。
 
 import { View, div, image } from "gpui-kit";
-import { props, theme, themes } from "herdr";
+import { props, theme } from "herdr";
 
 const T = 12, LONG = 3206, TALL = 1794, CORNER = 46, FOOT = 40;
 
-// 亮色主题也画边线：ink-qingci/ 是同一套切片刻的，纸料换成青瓷的 background、
-// 墨线换成青瓷的 muted——不引入任何新颜色。只有当活动主题的这两个槽与烤进去的
-// 值完全一致时才用它，其它主题保持留空。深色主题一律不画（浅色纸边在玄墨上露白）。
-const QINGCI_PAPER = "#e8f0ec";
-const QINGCI_INK = "#5f6b67";
+// 对应内置亮/暗主题画边线：ink-qingci / ink-xuanzhi / ink-xuanmo 由同一套切片替换色值，
+// 不引入任何新颜色；仅当当前主题的背景与次要色同时匹配时启用，其余主题保持留空。
+// 必须比对当前主题自身（theme()）而不是按 background 去 themes() 里找同名项：
+// 机器上若残留旧主题（如 inkstone-qingci 与 qingci 背景相同），find 会取到错误的 muted。
+const PRESETS = [
+  { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
+  { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+];
 let cacheKey = "";
 let cacheDir = null;
 function artDir(t) {
   if (t.paper) return "ink";
-  const key = t.background ?? "";
+  const bg = t.background ?? "", muted = t.muted ?? "";
+  const key = `${bg}|${muted}`;
   if (key !== cacheKey) {
     cacheKey = key;
-    const cur = themes().find((x) => x.light && x.colors.background === key);
-    cacheDir = key === QINGCI_PAPER && cur?.colors.muted === QINGCI_INK ? "ink-qingci" : null;
+    const p = PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    cacheDir = p ? p.dir : null;
   }
   return cacheDir;
 }

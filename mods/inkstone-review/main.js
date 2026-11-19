@@ -5,13 +5,62 @@
 // fsmonitor 与 index 自动刷新，避免读操作把目录监听搅得反复刷新。
 // 长行按宽度截断，悬停看整行——对话框里不做横向滚动，省掉一套滚动条状态。
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { panes, spaces, focused, exec, readTextFile, home, props, closeOverlay, openOverlay, theme, settings } from "herdr";
+import { panes, spaces, focused, exec, readTextFile, home, props, closeOverlay, openOverlay, theme, settings, window, checking } from "herdr";
 
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
 const MAX_ROWS = 800;
 const untab = (text) => text.replace(/[^\t]*\t/g, (s) => s.slice(0, -1).padEnd((s.length - 1) - (s.length - 1) % 4 + 4));
+const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
+const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FOOT = 40;
+const EDGE_PRESETS = [
+  { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
+  { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+];
+let edgeCacheKey = "";
+let edgeCacheDir = null;
+function artEdgeDir(t) {
+  if (t.paper) return "ink";
+  const bg = t.background ?? "", muted = t.muted ?? "";
+  const key = `${bg}|${muted}`;
+  if (key !== edgeCacheKey) {
+    edgeCacheKey = key;
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    edgeCacheDir = p ? p.dir : null;
+  }
+  return edgeCacheDir;
+}
+function paperCard(view, t, content) {
+  const dir = artEdgeDir(t);
+  const line = tint(t.accent, "cc");
+  if (!dir) return content.rounded(8).border(1).border_color(line);
+  const w = Math.max(400, view._cardW ?? 1264);
+  const h = Math.max(300, view._cardH ?? 864);
+  const sideH = Math.max(0, h - 2 * EDGE_T);
+  const art = (name, iw, ih) => image(`mods/inkstone-edge/${dir}/${name}.svg`).absolute().w(iw).h(ih);
+  const hEdge = (side) => div().relative().w_full().h(EDGE_T).flex_none().overflow_hidden()
+    .child(div().absolute().left(0).top(0).w(Math.max(0, w - EDGE_CORNER)).h(EDGE_T).overflow_hidden().child(art(`${side}-l`, EDGE_LONG, EDGE_T).left(0).top(0)))
+    .child(div().absolute().right(0).top(0).w(Math.min(w, EDGE_CORNER)).h(EDGE_T).overflow_hidden().child(art(`${side}-r`, EDGE_CORNER, EDGE_T).right(0).top(0)));
+  const vEdge = (side) => div().relative().w(EDGE_T).h_full().flex_none().overflow_hidden()
+    .child(div().absolute().left(0).top(0).w(EDGE_T).h(Math.max(0, sideH - EDGE_FOOT)).overflow_hidden().child(art(`${side}-t`, EDGE_T, EDGE_TALL).left(0).top(0)))
+    .child(div().absolute().left(0).bottom(0).w(EDGE_T).h(Math.min(sideH, EDGE_FOOT)).overflow_hidden().child(art(`${side}-b`, EDGE_T, EDGE_FOOT).left(0).bottom(0)));
+  return v_flex().id("rv-card").size_full().min_h(0)
+    .on_size_change((sz, cx) => {
+      if (Math.abs((view._cardW ?? 0) - sz.width) >= 1 || Math.abs((view._cardH ?? 0) - sz.height) >= 1) {
+        view._cardW = sz.width;
+        view._cardH = sz.height;
+        cx.notify();
+      }
+    })
+    .child(hEdge("top"))
+    .child(h_flex().w_full().flex_1().min_h(0)
+      .child(vEdge("left"))
+      .child(div().flex_1().min_w(0).min_h(0).h_full().overflow_hidden().border(1).border_color(line).child(content))
+      .child(vEdge("right")))
+    .child(hEdge("bottom"));
+}
 
 function location() {
   const f = focused();
@@ -55,6 +104,7 @@ function splitRows(rows) {
       i++;
       continue;
     }
+    if (r.kind !== "-" && r.kind !== "+") { i++; continue; }
     const dels = [];
     const adds = [];
     while (i < rows.length && rows[i].kind === "-") dels.push(rows[i++]);
@@ -117,7 +167,7 @@ async function homeDir(on) {
 async function newestSession(dir, on) {
   const r = on
     ? await exec("sh", ["-lc", `ls -t ${JSON.stringify(dir)}/*.jsonl 2>/dev/null | head -1`], { on }).catch(() => null)
-    : await exec("powershell", ["-NoProfile", "-Command", `Get-ChildItem -LiteralPath '${dir.replace(/'/g, "''")}' -Filter *.jsonl -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName`], {}).catch(() => null);
+    : await exec("powershell", ["-NoProfile", "-Command", `[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-ChildItem -LiteralPath '${dir.replace(/'/g, "''")}' -Filter *.jsonl -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName`], {}).catch(() => null);
   const p = r?.code === 0 ? r.stdout.trim() : "";
   return p || null;
 }
@@ -129,10 +179,35 @@ async function fileStamp(path, on) {
   return r?.code === 0 ? r.stdout.trim() : "";
 }
 
+// 会话文件常有十几 MB，而 exec 只给 8 MiB：整段 tail 在长会话里会被截断，
+// 丢掉的正是尾部（也就是本轮），于是「本轮」永远为空。只把 user 消息与工具调用
+// 两类行取回来，体积从 MB 降到几十 KB，顺序不变。
+const KEEP = '"role":"user"|tool_execution_start';
+
 async function tailLines(file, on, n) {
-  const r = on
-    ? await exec("sh", ["-lc", `tail -n ${n} -- ${JSON.stringify(file)} 2>/dev/null`], { on }).catch(() => null)
-    : await exec("powershell", ["-NoProfile", "-Command", `Get-Content -LiteralPath '${file.replace(/'/g, "''")}' -Tail ${n} -ErrorAction SilentlyContinue`], {}).catch(() => null);
+  if (on) {
+    const r = await exec("sh", ["-lc", `tail -n ${n} -- ${JSON.stringify(file)} 2>/dev/null | grep -E ${JSON.stringify(KEEP)}`], { on }).catch(() => null);
+    return r?.code === 0 ? r.stdout : "";
+  }
+  const bytes = Math.min(8 * 1024 * 1024, Math.max(524288, n * 512));
+  const esc = file.replace(/'/g, "''");
+  const ps = [
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+    `$p = '${esc}'; $max = ${bytes}`,
+    "if (Test-Path -LiteralPath $p) {",
+    "  $fs = [System.IO.File]::Open($p, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)",
+    "  try {",
+    "    $len = $fs.Length; $take = [Math]::Min($len, [int64]$max)",
+    "    if ($take -lt $len) { $fs.Seek(-$take, [System.IO.SeekOrigin]::End) | Out-Null }",
+    "    $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8, $true)",
+    "    while (-not $sr.EndOfStream) {",
+    "      $ln = $sr.ReadLine()",
+    "      if ($ln -and ($ln.Contains('\"role\":\"user\"') -or $ln.Contains('tool_execution_start'))) { $ln }",
+    "    }",
+    "  } finally { $fs.Dispose() }",
+    "}",
+  ].join("\n");
+  const r = await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { timeout: 10000 }).catch(() => null);
   return r?.code === 0 ? r.stdout : "";
 }
 
@@ -178,22 +253,63 @@ function baseOf(path) {
   return (path ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path || "~";
 }
 
+const plat = () => window()?.platform ?? "windows";
+const SKIP_REL = /(^|[\\/])(node_modules|target|dist|__pycache__|\.venv|\.next)([\\/]|$)/;
+
+function parsePorcelainCounts(raw) {
+  const parts = String(raw ?? "").split("\u0000");
+  let mod = 0, add = 0, del = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i];
+    if (!entry || entry.length < 4) continue;
+    const x = entry[0], y = entry[1];
+    const rel = entry.slice(3);
+    if (x === "R" || x === "C") i++;
+    if (SKIP_REL.test(rel)) continue;
+    if (x === "?" && y === "?") add++;
+    else if (x === "A" || y === "A") add++;
+    else if (x === "D" || y === "D") del++;
+    else if (x !== "!" && y !== "!") mod++;
+  }
+  return { mod, add, del };
+}
+
+function parseNumstat(raw) {
+  let plus = 0, minus = 0;
+  for (const ln of String(raw ?? "").split(/\r?\n/)) {
+    if (!ln) continue;
+    const [a, d] = ln.split("\t");
+    const na = Number(a), nd = Number(d);
+    if (Number.isFinite(na)) plus += na;
+    if (Number.isFinite(nd)) minus += nd;
+  }
+  return { plus, minus };
+}
 export default class Review extends View {
   init(_p, cx) {
     this.files = [];
     this.open = null;
     this.split = false;
     this.loading = false;
+    this.stage = "";
     this.error = "";
     this.cwd = null;
     this.repos = [];
     this.turnCount = 0;
     this.reposCache = new Map();
+    this.childReposCache = new Map();
     this.turnCache = { key: null, stamp: "", paths: [] };
+    this.summary = { mod: 0, add: 0, del: 0, plusLines: 0, minusLines: 0, repos: [], key: "" };
+    this.summaryLoading = false;
     this.at = 0;
     this.filesScroll = ScrollHandle.new();
     this.diffScroll = ScrollHandle.new();
-    if (props()?.overlay) this.refresh(cx);
+    if (props()?.overlay) {
+      this.refresh(cx);
+    } else if (!checking()) {
+      this.refreshSummary(cx);
+      cx.timer.every(5000, (cx) => this.refreshSummary(cx));
+    }
   }
 
   refresh(cx) {
@@ -204,21 +320,25 @@ export default class Review extends View {
       return;
     }
     this.loading = true;
+    this.stage = "init";
     cx.spawn(async (cx) => {
       try {
-        const { files, repos, turn } = await this.collect(cwd, on);
+        const { files, repos, turn } = await this.collect(cwd, on, cx);
         this.files = files;
         this.repos = repos;
         this.turnCount = turn.paths.length;
         if (!this.files.some((f) => f.key === this.open)) this.open = this.files[0]?.key ?? null;
         this.cwd = repos[0] ?? cwd;
         this.error = this.files.length ? "" : (repos.length ? "没有未提交的改动" : "当前目录不在 Git 仓库中");
+        const cur = this.files.find((f) => f.key === this.open);
+        if (cur?.unloaded) this.loadUntracked(cur, cx);
       } catch (e) {
         this.error = String(e?.message ?? e);
         this.files = [];
         this.repos = [];
       }
       this.loading = false;
+      this.stage = "";
       this.at = Date.now();
       cx.notify();
     });
@@ -237,6 +357,116 @@ export default class Review extends View {
     return repo;
   }
 
+  // 当 cwd 本身是工作区根目录（如 E:\DSH）而非仓库时，自动扫出下面 1~2 级子目录里的独立 .git 仓库。
+  async childRepos(dir, on) {
+    if (!dir) return [];
+    this.childReposCache = this.childReposCache ?? new Map();
+    const key = `${on ?? ""}\u0000${dir}`;
+    const hit = this.childReposCache.get(key);
+    if (hit && Date.now() - hit.at < 20000) return hit.repos;
+    let found = [];
+    const useWin = !on && plat() === "windows";
+    if (useWin) {
+      const esc = dir.replace(/'/g, "''");
+      const ps = [
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+        `$root = '${esc}'`,
+        "$skip = @('.git','node_modules','target','dist','.next','__pycache__','.venv')",
+        "$out = New-Object System.Collections.Generic.List[string]",
+        "if (Test-Path -LiteralPath $root) {",
+        "  foreach ($d in (Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction SilentlyContinue)) {",
+        "    if ($skip -contains $d.Name) { continue }",
+        "    if (Test-Path -LiteralPath (Join-Path $d.FullName '.git')) { $out.Add($d.FullName); continue }",
+        "    foreach ($sub in (Get-ChildItem -LiteralPath $d.FullName -Directory -Force -ErrorAction SilentlyContinue)) {",
+        "      if ($skip -contains $sub.Name) { continue }",
+        "      if (Test-Path -LiteralPath (Join-Path $sub.FullName '.git')) { $out.Add($sub.FullName) }",
+        "      if ($out.Count -ge 16) { break }",
+        "    }",
+        "    if ($out.Count -ge 16) { break }",
+        "  }",
+        "}",
+        "$out | Select-Object -First 16",
+      ].join("\n");
+      const r = await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { timeout: 6000 }).catch(() => null);
+      if (r?.code === 0) found = String(r.stdout ?? "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    } else {
+      const cmd = `find ${JSON.stringify(dir)} -mindepth 2 -maxdepth 3 \\( -name node_modules -o -name target -o -name dist -o -name .next -o -name __pycache__ -o -name .venv \\) -prune -o -name .git -print 2>/dev/null | head -n 16`;
+      const r = await exec("sh", ["-lc", cmd], { on, timeout: 6000 }).catch(() => null);
+      if (r?.code === 0) {
+        found = String(r.stdout ?? "")
+          .split(/\r?\n/)
+          .map((s) => s.trim().replace(/[\\/]\.git$/, ""))
+          .filter(Boolean);
+      }
+    }
+    this.childReposCache.set(key, { at: Date.now(), repos: found });
+    return found;
+  }
+
+  async discoverRepos(cwd, on, extraPaths = []) {
+    const map = new Map();
+    const add = (p) => {
+      if (!p) return;
+      const k = normPath(p);
+      if (!map.has(k)) map.set(k, p);
+    };
+    const [here, children] = await Promise.all([
+      this.repoOf(cwd, on),
+      this.childRepos(cwd, on),
+    ]);
+    add(here);
+    for (const c of children) add(c);
+    for (const p of extraPaths) {
+      const dir = p.replace(/[\\/][^\\/]+$/, "");
+      const repo = await this.repoOf(dir, on);
+      add(repo);
+    }
+    return [...map.values()];
+  }
+
+  refreshSummary(cx) {
+    if (this.summaryLoading || checking()) return;
+    const { cwd, on } = location();
+    if (!cwd) {
+      this.summary = { mod: 0, add: 0, del: 0, plusLines: 0, minusLines: 0, repos: [], key: "" };
+      cx.notify();
+      return;
+    }
+    const locKey = `${on ?? ""}|${cwd}`;
+    this.summaryLoading = true;
+    cx.spawn(async (cx) => {
+      try {
+        const repos = await this.discoverRepos(cwd, on);
+        let mod = 0, add = 0, del = 0, plusLines = 0, minusLines = 0;
+        await Promise.all(repos.map(async (repo) => {
+          const [st, ns] = await Promise.all([
+            exec("git", [...READ, "status", "--porcelain=v1", "-z", "-uall"], { cwd: repo, on, timeout: 8000 }).catch(() => null),
+            exec("git", [...READ, "diff", "HEAD", "--numstat"], { cwd: repo, on, timeout: 8000 }).catch(() => null),
+          ]);
+          if (st?.code === 0) {
+            const c = parsePorcelainCounts(st.stdout);
+            mod += c.mod;
+            add += c.add;
+            del += c.del;
+          }
+          let num = ns;
+          if (num && num.code !== 0) {
+            num = await exec("git", [...READ, "diff", "--numstat"], { cwd: repo, on, timeout: 8000 }).catch(() => null);
+          }
+          if (num?.code === 0) {
+            const ls = parseNumstat(num.stdout);
+            plusLines += ls.plus;
+            minusLines += ls.minus;
+          }
+        }));
+        this.summary = { mod, add, del, plusLines, minusLines, repos, key: locKey };
+      } catch {
+      } finally {
+        this.summaryLoading = false;
+        cx.notify();
+      }
+    });
+  }
   // 本回合改过的文件路径（会话日志尾部；stamp 不变就复用）。
   async turnEdits(cwd, on) {
     this.turnCache = this.turnCache ?? { key: null, stamp: "", paths: [] };
@@ -260,68 +490,186 @@ export default class Review extends View {
     return { paths };
   }
 
-  // 汇总：本轮碰过的仓库 + 当前目录所属仓库，各自 git diff HEAD；未跟踪文件只收本轮碰过的。
-  async collect(cwd, on) {
-    const turn = await this.turnEdits(cwd, on);
+  // 汇总：本轮碰过的仓库 + 当前目录所属仓库 + 当前工作区子仓库，并发收集 git diff HEAD + 未跟踪新文件。
+  async collect(cwd, on, cx) {
+    const setStage = (s) => { this.stage = s; cx?.notify(); };
+    setStage("扫描仓库");
+    const turnPromise = new Promise((resolve) => {
+      let settled = false;
+      if (cx?.timer?.after) {
+        cx.timer.after(2500, () => {
+          if (!settled) { settled = true; resolve({ paths: [] }); }
+        });
+      }
+      this.turnEdits(cwd, on)
+        .then((res) => { if (!settled) { settled = true; resolve(res); } })
+        .catch(() => { if (!settled) { settled = true; resolve({ paths: [] }); } });
+    });
+    const [turn, baseRepos] = await Promise.all([
+      turnPromise,
+      this.discoverRepos(cwd, on),
+    ]);
+    setStage(`定位仓库 (${turn.paths.length} 条记录)`);
     const turnSet = new Set(turn.paths.map(normPath));
-    const repos = new Map();
+    const repoMap = new Map(baseRepos.map((p) => [normPath(p), p]));
+    const baseList = [...repoMap.keys()];
+    const extraDirs = new Set();
     for (const p of turn.paths) {
       const dir = p.replace(/[\\/][^\\/]+$/, "");
-      const repo = await this.repoOf(dir, on);
-      if (repo) repos.set(repo, true);
+      const nd = normPath(dir);
+      if (!nd) continue;
+      if (baseList.some((b) => nd === b || nd.startsWith(b + "/"))) continue;
+      extraDirs.add(dir);
     }
-    const here = await this.repoOf(cwd, on);
-    if (here) repos.set(here, true);
-    const files = [];
-    for (const repo of repos.keys()) {
-      let r = await exec("git", [...READ, "diff", "HEAD", "--no-color", "--no-ext-diff", "-U3"], { cwd: repo, on, timeout: 20000 }).catch(() => null);
-      if (r && r.code !== 0) {
-        // 还没有第一次提交：HEAD 不存在，退回工作区差异。
-        r = await exec("git", [...READ, "diff", "--no-color", "--no-ext-diff", "-U3"], { cwd: repo, on, timeout: 20000 }).catch(() => null);
+    if (extraDirs.size) {
+      const found = await Promise.all([...extraDirs].map((d) => this.repoOf(d, on)));
+      for (const repo of found) {
+        if (repo && !repoMap.has(normPath(repo))) repoMap.set(normPath(repo), repo);
       }
+    }
+    const repos = [...repoMap.values()];
+    const pending = new Map(repos.map((r) => [baseOf(r), "init"]));
+    const syncPending = () => {
+      const left = [...pending.entries()].map(([k, v]) => `${k}:${v}`);
+      setStage(left.length ? left.slice(0, 3).join(", ") : "汇总");
+    };
+    syncPending();
+    const perRepo = await Promise.all(repos.map(async (repo) => {
+      const rName = baseOf(repo);
+      const out = [];
+      pending.set(rName, "git");
+      syncPending();
+      const [diffRes, st] = await Promise.all([
+        exec("git", [...READ, "diff", "HEAD", "--no-color", "--no-ext-diff", "-U3"], { cwd: repo, on, timeout: 10000 }).catch(() => null),
+        exec("git", [...READ, "status", "--porcelain=v1", "-z", "-uall"], { cwd: repo, on, timeout: 8000 }).catch(() => null),
+      ]);
+      let r = diffRes;
+      if (r && r.code !== 0) {
+        r = await exec("git", [...READ, "diff", "--no-color", "--no-ext-diff", "-U3"], { cwd: repo, on, timeout: 10000 }).catch(() => null);
+      }
+      pending.set(rName, "parse");
+      syncPending();
+      const seenRel = new Set();
       for (const f of r && r.code === 0 ? parseDiff(r.stdout ?? "") : []) {
+        seenRel.add(f.path);
         f.repo = repo;
-        f.repoName = baseOf(repo);
+        f.repoName = rName;
         f.key = `${repo}\u0000${f.path}`;
         f.touched = turnSet.has(normPath(`${repo}/${f.path}`));
-        files.push(f);
+        out.push(f);
       }
-      const st = await exec("git", [...READ, "status", "--porcelain=v1", "-z", "-uall"], { cwd: repo, on }).catch(() => null);
-      for (const entry of String(st?.stdout ?? "").split("\u0000")) {
-        if (!entry.startsWith("?? ")) continue;
+      const parts = String(st?.stdout ?? "").split("\u0000");
+      const untracked = [];
+      for (let i = 0; i < parts.length; i++) {
+        const entry = parts[i];
+        if (!entry || entry.length < 4) continue;
+        const x = entry[0], y = entry[1];
+        if (x === "R" || x === "C") { i++; continue; }
+        if (x !== "?" || y !== "?") continue;
         const rel = entry.slice(3);
-        if (!turnSet.has(normPath(`${repo}/${rel}`))) continue;
-        const text = await readTextFile(`${repo}/${rel}`, { on }).catch(() => null);
-        const lines = text == null ? [] : text.replace(/\r?\n$/, "").split(/\r?\n/).map((l) => `+${l}`);
-        const unified = unifiedRows(lines).slice(0, MAX_ROWS);
-        files.push({ path: rel, status: "U", add: lines.length, del: 0, lines, unified, split: splitRows(unified), repo, repoName: baseOf(repo), key: `${repo}\u0000${rel}`, touched: true });
+        if (SKIP_REL.test(rel) || seenRel.has(rel)) continue;
+        untracked.push(rel);
       }
-    }
+      const items = untracked.map((rel) => ({
+        path: rel,
+        status: "U",
+        add: 0,
+        del: 0,
+        lines: [],
+        unified: [],
+        split: [],
+        unloaded: true,
+        loadingBody: false,
+        on,
+        repo,
+        repoName: rName,
+        key: `${repo}\u0000${rel}`,
+        touched: turnSet.has(normPath(`${repo}/${rel}`)),
+      }));
+      out.push(...items);
+      pending.delete(rName);
+      syncPending();
+      return out;
+    }));
+    const files = perRepo.flat();
+    setStage("整理差异行");
     files.sort((a, b) => (a.touched === b.touched ? (a.repo.localeCompare(b.repo) || a.path.localeCompare(b.path)) : a.touched ? -1 : 1));
-    return { files, repos: [...repos.keys()], turn };
+    return { files, repos, turn };
   }
 
   current() {
     return this.files.find((f) => f.key === this.open) ?? null;
   }
 
-  // 状态栏形态：一个「审查」按钮。
-  compact(t) {
+  loadUntracked(f, cx) {
+    if (!f || !f.unloaded || f.loadingBody) return;
+    f.loadingBody = true;
+    cx.spawn(async (cx) => {
+      const text = await new Promise((resolve) => {
+        let settled = false;
+        if (cx?.timer?.after) {
+          cx.timer.after(1500, () => {
+            if (!settled) { settled = true; resolve(null); }
+          });
+        }
+        readTextFile(`${f.repo}/${f.path}`, { on: f.on ?? null })
+          .then((res) => { if (!settled) { settled = true; resolve(res); } })
+          .catch(() => { if (!settled) { settled = true; resolve(null); } });
+      });
+      f.loadingBody = false;
+      f.unloaded = false;
+      if (text === null) {
+        f.unified = [{ kind: "@", text: "无法预览此新文件（二进制、超大或读取超时）" }];
+      } else if (text.includes("\0")) {
+        f.unified = [{ kind: "@", text: "二进制文件 · 无文本差异" }];
+      } else {
+        const lines = text.replace(/\r?\n$/, "").split(/\r?\n/).map((l) => `+${l}`);
+        f.lines = lines;
+        f.add = lines.length;
+        f.unified = unifiedRows(lines).slice(0, MAX_ROWS);
+      }
+      f.split = splitRows(f.unified);
+      cx.notify();
+    });
+  }
+
+  // 状态栏形态：实时显示当前修改 / 新增 / 删除数量，点开全屏审查对话框。
+  compact(t, cx) {
+    const { cwd, on } = location();
+    const locKey = `${on ?? ""}|${cwd ?? ""}`;
+    if (!checking() && cwd && locKey !== this.summary?.key && !this.summaryLoading) {
+      this.refreshSummary(cx);
+    }
+    const s = this.summary ?? { mod: 0, add: 0, del: 0, plusLines: 0, minusLines: 0, repos: [] };
+    const hasChange = s.mod + s.add + s.del > 0;
+    const repoList = (s.repos ?? []).map(baseOf).join(" · ");
+    const tip = hasChange
+      ? `未提交变更：${s.mod} 修改 · ${s.add} 新增 · ${s.del} 删除（+${s.plusLines} / −${s.minusLines} 行）\n仓库：${repoList || "当前目录"}\n点击打开审查`
+      : (s.repos?.length ? `工作区干净（${repoList}）\n点击打开审查` : "未检测到 Git 仓库\n点击打开审查");
     return h_flex()
       .id("review-compact")
       .size_full()
       .flex_none()
-      .px(10)
-      .gap(6)
+      .px(8)
+      .gap(5)
       .items_center()
       .border_l(1)
       .border_color(t.border)
       .cursor_pointer()
-      .tooltip("审查本轮改动与工作区差异")
-      .hover((s) => s.bg(t.hover))
-      .on_click(() => openOverlay({ mod: "inkstone-review", kind: "dialog", width: 1240, height: 840, props: { review: true } }))
-      .child(svg("mods/workspace-chrome/git-compare.svg").size(12).flex_none().text_color(t.muted))
-      .child(div().text_size(11).text_color(t.muted).child("审查"));
+      .tooltip(tip)
+      .hover((h) => h.bg(t.hover))
+      .on_click(() => openOverlay({ mod: "inkstone-review", kind: "dialog", frame: "none", width: 1264, height: 864, props: { review: true, framed: true } }))
+      .child(svg("mods/workspace-chrome/git-compare.svg").size(12).flex_none().text_color(hasChange ? t.accent : t.muted))
+      .child(div().flex_none().text_size(11).text_color(hasChange ? t.foreground : t.muted).child("审查"))
+      .when(hasChange, (el) => el.child(h_flex()
+        .flex_1()
+        .min_w(0)
+        .gap(4)
+        .items_center()
+        .when(s.mod > 0, (x) => x.child(div().flex_none().text_size(10.5).font_semibold().text_color(t.working).child(`~${s.mod}`)))
+        .when(s.add > 0, (x) => x.child(div().flex_none().text_size(10.5).font_semibold().text_color(t.done).child(`+${s.add}`)))
+        .when(s.del > 0, (x) => x.child(div().flex_none().text_size(10.5).font_semibold().text_color(t.blocked).child(`−${s.del}`)))))
+      .when(!hasChange, (el) => el.child(div().flex_1().truncate().text_size(10).text_color(t.dim).child(s.repos?.length ? "无变更" : "")));
   }
 
   fileRow(f, t, cx) {
@@ -341,6 +689,7 @@ export default class Review extends View {
       .tooltip(`${f.repoName}/${f.path}${f.touched ? "\n本轮修改过" : ""}`)
       .on_click((_e, cx) => {
         this.open = f.key;
+        if (f.unloaded) this.loadUntracked(f, cx);
         cx.notify();
       })
       .child(div().w(10).flex_none().text_size(11).text_color(f.status === "A" ? t.done : f.status === "D" ? t.blocked : f.status === "U" ? t.dim : t.working).child(f.status))
@@ -398,6 +747,9 @@ export default class Review extends View {
       return div().flex_1().min_h(0).p(16).text_size(12).text_color(t.dim)
         .child(this.loading ? "读取差异…" : this.error || (this.cwd ? "工作区没有未提交的改动。" : ""));
     }
+    if (f.unloaded || f.loadingBody) {
+      return div().flex_1().min_h(0).p(16).text_size(12).text_color(t.dim).child("读取新文件内容…");
+    }
     return v_flex()
       .id("rv-diff")
       .flex_1()
@@ -433,11 +785,14 @@ export default class Review extends View {
     const files = this.files;
     const add = files.reduce((n, f) => n + f.add, 0);
     const del = files.reduce((n, f) => n + f.del, 0);
-    return v_flex()
+    const modCnt = files.filter((f) => f.status === "M" || f.status === "R").length;
+    const addCnt = files.filter((f) => f.status === "A" || f.status === "U").length;
+    const delCnt = files.filter((f) => f.status === "D").length;
+    const inner = v_flex()
       .id("rv-root")
       .size_full()
       .min_h(0)
-      .bg(t.background)
+      .bg(t.paper ?? t.background)
       .text_color(t.foreground)
       .text_size(13)
       .child(h_flex()
@@ -453,6 +808,9 @@ export default class Review extends View {
         .when((this.turnCount ?? 0) > 0, (el) => el
           .child(div().h(18).px(5).flex().items_center().rounded(4).bg(t.accent + "22").text_size(11).text_color(t.accent).child(`本轮 ${this.turnCount}`)))
         .child(div().px(5).py(1).rounded(4).border(1).border_color(t.border).text_size(11).text_color(t.muted).child(`${files.length} 个文件`))
+        .when(modCnt > 0, (el) => el.child(div().text_size(11).font_medium().text_color(t.working).child(`${modCnt} 修改`)))
+        .when(addCnt > 0, (el) => el.child(div().text_size(11).font_medium().text_color(t.done).child(`${addCnt} 新增`)))
+        .when(delCnt > 0, (el) => el.child(div().text_size(11).font_medium().text_color(t.blocked).child(`${delCnt} 删除`)))
         .child(div().text_size(11).text_color(t.done).child(`+${add}`))
         .child(div().text_size(11).text_color(t.blocked).child(`−${del}`))
         .child(div().flex_1())
@@ -500,7 +858,7 @@ export default class Review extends View {
             .track_scroll(this.filesScroll)
             .children(files.length
               ? files.map((f) => this.fileRow(f, t, cx))
-              : [div().px(8).py(8).text_size(12).text_color(t.dim).child(this.loading ? "读取差异…" : "没有改动")])))
+              : [div().px(8).py(8).text_size(12).text_color(t.dim).child(this.loading ? `读取差异… ${this.stage || ""}` : "没有改动")])))
         .child(v_flex()
           .flex_1()
           .min_w(0)
@@ -515,7 +873,7 @@ export default class Review extends View {
             .items_center()
             .border_b(1)
             .border_color(t.border)
-            .child(div().font_family(settings().font_family ?? "JetBrains Mono").text_size(11).text_color(t.muted).truncate().child(this.open ?? ""))
+            .child(div().font_family(settings().font_family ?? "JetBrains Mono").text_size(11).text_color(t.muted).truncate().child((() => { const c = this.current(); return c ? `${c.repo}/${c.path}` : ""; })()))
             .child(div().flex_1())
             .child(div().text_size(11).text_color(t.dim).child(this.split ? "分栏视图" : "统一视图"))))
           .child(this.diffBody(t, cx))))
@@ -531,10 +889,11 @@ export default class Review extends View {
         .text_color(t.dim)
         .child(div().flex_1().truncate().child(this.repos?.length ? `git diff HEAD · ${this.repos.map(baseOf).join(" · ")}` : ""))
         .when(Boolean(this.error), (el) => el.child(div().text_color(t.blocked).truncate().child(this.error))));
+    return props()?.framed ? paperCard(this, t, inner) : inner;
   }
 
   render(cx) {
     const t = theme();
-    return props()?.overlay ? this.dialog(t, cx) : this.compact(t);
+    return props()?.overlay ? this.dialog(t, cx) : this.compact(t, cx);
   }
 }

@@ -94,30 +94,63 @@ function clean(text) {
 const PAPER = (t) => Boolean(t.paper);
 const inkOf = (t, slot, fallback) => (PAPER(t) ? t[slot] : (t[fallback] ?? t.foreground));
 
-// 羊皮纸只有 144..400 的 17 档：绘制时按实际宽度拉伸（最大变形 8px，撕边看不出），档位取最近，避免 404。
-const PARCHMENT = [144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400];
-const nearestSheet = (w) => PARCHMENT.reduce((best, v) => (Math.abs(v - w) < Math.abs(best - w) ? v : best), PARCHMENT[0]);
-const PAD = 5, TALL = 1600;
+const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FOOT = 40;
+const EDGE_PRESETS = [
+  { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
+  { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+];
+let edgeCacheKey = "";
+let edgeCacheDir = null;
+function artEdgeDir(t) {
+  if (t.paper) return "ink";
+  const bg = t.background ?? "", muted = t.muted ?? "";
+  const key = `${bg}|${muted}`;
+  if (key !== edgeCacheKey) {
+    edgeCacheKey = key;
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    edgeCacheDir = p ? p.dir : null;
+  }
+  return edgeCacheDir;
+}
 
-// 一整张纸沿侧栏铺下来，这块画它的 mid（只露两侧）：接在顶块的纸沿下、页脚的上方。
-function sheet(view, part, content) {
-  const w = Math.max(1, view.sheetW ?? 240), h = Math.max(1, view.sheetH ?? 400);
-  const W = nearestSheet(w);
-  const art = () => image(`mods/inkstone-chrome/ink/parchment-${W}.svg`).absolute().left(-PAD).w(w + 2 * PAD).h(TALL + 2 * PAD);
-  const crop = part === "top" ? div().absolute().left(0).top(-PAD).w(w).h(h + PAD).overflow_hidden().child(art().top(0))
-    : part === "foot" ? div().absolute().left(0).bottom(-PAD).w(w).h(h + PAD).overflow_hidden().child(art().bottom(0))
-    : div().absolute().left(0).top(0).w(w).h(h).overflow_hidden().child(art().top(-520));
-  return div().size_full().px(8)
-    .child(div().id(`${part}-sheet`).relative().size_full()
-      .on_size_change((size, cx) => {
-        if (Math.abs((view.sheetW ?? 0) - size.width) >= 1 || Math.abs((view.sheetH ?? 0) - size.height) >= 1) {
-          view.sheetW = size.width;
-          view.sheetH = size.height;
+// 独立纸边卡片：四周 12px 撕纸毛边 + 内侧青瓷细框，样式对齐主终端区（page）。
+function paperCard(view, t, content) {
+  const dir = artEdgeDir(t);
+  const line = tint(t.accent, "99");
+  if (!dir) {
+    return div().size_full().min_h(0).pl(6).pr(4).pt(2).pb(1)
+      .child(div().size_full().min_h(0).overflow_hidden().rounded(8).border(1).border_color(line).child(content));
+  }
+  const w = Math.max(120, view._cardW ?? 278);
+  const h = Math.max(80, view._cardH ?? 400);
+  const EDGE_B = 8;
+  const sideH = Math.max(0, h - EDGE_T - EDGE_B);
+  const art = (name, iw, ih) => image(`mods/inkstone-edge/${dir}/${name}.svg`).absolute().w(iw).h(ih);
+  const hEdge = (side) => {
+    const eh = side === "bottom" ? EDGE_B : EDGE_T;
+    return div().relative().w_full().h(eh).flex_none().overflow_hidden()
+      .child(div().absolute().left(0).top(0).w(Math.max(0, w - EDGE_CORNER)).h(eh).overflow_hidden().child(art(`${side}-l`, EDGE_LONG, EDGE_T).left(0).top(0)))
+      .child(div().absolute().right(0).top(0).w(Math.min(w, EDGE_CORNER)).h(eh).overflow_hidden().child(art(`${side}-r`, EDGE_CORNER, EDGE_T).right(0).top(0)));
+  };
+  const vEdge = (side) => div().relative().w(EDGE_T).h_full().flex_none().overflow_hidden()
+    .child(div().absolute().left(0).top(0).w(EDGE_T).h(Math.max(0, sideH - EDGE_FOOT)).overflow_hidden().child(art(`${side}-t`, EDGE_T, EDGE_TALL).left(0).top(0)))
+    .child(div().absolute().left(0).bottom(0).w(EDGE_T).h(Math.min(sideH, EDGE_FOOT)).overflow_hidden().child(art(`${side}-b`, EDGE_T, EDGE_FOOT).left(0).bottom(0)));
+  return div().size_full().min_h(0).pl(4).pr(2)
+    .child(v_flex().id("wb-card").size_full().min_h(0)
+      .on_size_change((sz, cx) => {
+        if (Math.abs((view._cardW ?? 0) - sz.width) >= 1 || Math.abs((view._cardH ?? 0) - sz.height) >= 1) {
+          view._cardW = sz.width;
+          view._cardH = sz.height;
           cx.notify();
         }
       })
-      .child(crop)
-      .child(div().relative().size_full().child(content)));
+      .child(hEdge("top"))
+      .child(h_flex().w_full().flex_1().min_h(0)
+        .child(vEdge("left"))
+        .child(div().flex_1().min_w(0).min_h(0).h_full().overflow_hidden().border(1).border_color(line).child(content))
+        .child(vEdge("right")))
+      .child(hEdge("bottom")));
 }
 
 // 荧光笔：选中实色、悬停半透，边角不等（3/8/4/9）；非纸主题退回 t.selected / t.hover。
@@ -813,7 +846,7 @@ export default class Workbench extends View {
     const inner = v_flex()
       .size_full()
       .min_h(0)
-      .bg(paper ? t.paper : t.chrome)
+      .bg(narrow ? t.chrome : (t.paper ?? t.background))
       .text_size(13)
       .child(narrow
         ? v_flex()
@@ -837,7 +870,7 @@ export default class Workbench extends View {
             .accessibility_label("展开侧栏")
             .on_click(() => {
               setShared("sidebar.collapsed", false);
-              run("layout.resize", { id: "sidebar", px: shared("sidebar.width") ?? 272 });
+              run("layout.resize", { id: "sidebar", px: shared("sidebar.width") ?? 284 });
             })
             .child(svg("mods/inkstone-chrome/chevron-right.svg").size(14)))
           .child(div()
@@ -918,13 +951,13 @@ export default class Workbench extends View {
         .flex_1()
         .min_h(0)
         .px(narrow ? 4 : 8)
-        .pb(12)
+        .pb(narrow ? 12 : 6)
         .gap(1)
         .overflow_y_scrollbar()
         .mode("always")
         .track_scroll(this.scroll)
         .children(rows.length ? rows : [div().px(10).py(8).text_size(12).text_color(t.dim).child("还没有空间 · 点上面的 + 新建")]));
-    // 纸感下这一块画同一张纸上的一段（只露两侧），上接标题块的纸沿、下接页脚。
-    return paper ? sheet(this, "mid", inner) : inner;
+    // 展开态下包成独立纸边卡片；rail 图标轨态保持紧贴窄条。
+    return narrow ? inner : paperCard(this, t, inner);
   }
 }
