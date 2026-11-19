@@ -2,20 +2,38 @@
 > **开发分支专用（`dev`）**：本文件随 `dev` 分支跟踪，用来让两台电脑共享关键代码位置、改动记录与排查步骤；`main` 分支不含它——合并 `dev → main` 前必须 `git rm --cached RECIPE.md RECIPE.zh.md` 再提交，别把开发笔记带上公开仓库。改完后**不要自动 push 到 **`origin`，等口头同意再推。公开仓库只放 `mods/`、`themes/`、`layouts/`、`pixel-icons/`、`programs.json`、安装脚本、README 与 LICENSE。
 >
 
-一扇给自己用的工作台：左边是「目录 → 空间 → 终端」三层列表，右边终端，右侧一个 380px 的抽屉（文件/变更/驾驶舱/会话/收藏），底部一条 28px 状态栏。空间自带颜色，扫一眼就知道自己在哪个项目、哪台机器。默认主题月白（qingci），另带玄墨（xuanmo）与可选的纸墨（zhi）。
+一扇给自己用的工作台：左边按「机器 → 目录 → 空间 → 终端」分层，终端右侧有 380px 抽屉（文件、会话、收藏），底部是 28px 状态栏。默认亮色月白（qingci），另带玄墨（xuanmo）与可选的纸墨（zhi）。
 
 ![](preview.png)
+
+[English RECIPE](RECIPE.md)
+
+## 2026-11-19 跨机交接
+
+在仓库运行 `git switch dev` 和 `git pull --ff-only origin dev`。如果另一台电脑已经安装过，请先备份 Herdr 配置，再预览安装（Windows：`.\install.ps1 -DryRun -Force`；macOS/Linux：`./install.sh --dry-run --force`），确认后去掉预览参数安装，然后切一次布局或重启。默认安装会跳过同名文件并提示，`-Force` / `--force` 才会覆盖布局、模块和主题；现有 `programs.omp` 仍保留。`refresh.ps1` 的方向相反：它把实机配置同步回仓库，不用它安装远端更新。不要跨机复制 `data/` 缓存或 OMP 会话日志。
+
+### 历史发言与阅读窗口（`d41c014`、`4459530`）
+
+- **入口与操作**：本地 Windows 的 OMP 窗格头时钟按钮打开面板（[`inkstone-pane`](mods/inkstone-pane/main.js)）。[`inkstone-history`](mods/inkstone-history/main.js) 的 `rounds()` 按用户消息组轮，将回复、工具和压缩记录归位；`firstKeptEntryId` 要能对到该轮的用户或助手消息。搜索覆盖提问、回复、工具；方向键选轮，Enter、双击或箭头回到终端；「阅读」或 `r` 打开宽 62%、高 86% 的窗口。阅读窗通过 `shared("inkstone.history.read")` 复用已解析内容和跳转位置，不再扫日志。圆点表示尚未对上终端回滚区，不代表丢了会话记录。不要用剪贴板模拟 `/tree`：OMP 会把粘贴后回车的文本当作普通提问，也没有指定树节点的恢复参数。
+- **读取与刷新**：`load()` 先按 `pane.cwd` 和标题定位文件（`FOUND` 的命中有效期 120 秒），有缓存就先画列表。`readMessages()` 优先用 Node 子进程，从 `seen` 字节起读；`seen` 必须落在最后一个完整换行之后，半行留给下一次，文件比偏移短则回到 0。Node 不可用时用 PowerShell 全量读取；两条路径都先筛消息和压缩记录，再把精简 JSON 交回界面，不能用 `readTextFile` 读整个会话。`watchFolder` 将目录事件合并到 2 秒后刷新；15 秒标题检查只在标题变化时重新定位。`syncAlign()` 在回滚行数和对位长度没变时复用结果，需读时使用 `hc read` 的 1500 毫秒缓存。
+- **落盘**：`PARSED` 最多 4 个会话；`${appHome()}/data/inkstone-history-cache.json` 按路径保存 `{v:1, entries:{…}}`，最多保留最新 3 个，整份序列化文本超过 900000 字符就跳过写入（避免读回时撞上 1 MiB 上限）。刷新写入至少间隔 5000 毫秒，关窗尝试补写。`writeTextFile(path, text, expected)` 的 `expected` 必须是读取到的磁盘原文，`null` 只用于新建；首写成功、后续 `seen` 一直不动时先检查这里。
+- **样式**：改 `FS`、`sectionLabel()`、`row()`、`markRow()` 和 `renderRead()`。选中项/跳转用 `accent`，有回复用 `done`，工具用 `working`；纸墨保留荧光笔选中底，搜索底用 `popover`。保持系统默认字体和三套主题的颜色槽，别给 GPUI 传 `bg("transparent")`。
+- **接手验证**：在实际配置目录跑 `herdr-app check mods/inkstone-history`，并看 `herdr-app status` 的 `errors`。打开有长回复和压缩点的 OMP 会话，检查搜索、Esc 清搜索、`r` 开大窗和 Esc 关闭，以及箭头只出现在已对位的行；分别看 `qingci`、`xuanmo`、`zhi`。旧机约 40 MB 日志的解析探针是 421 毫秒全量、103 毫秒空尾读，不是首屏耗时。要比较另一台电脑的速度，分别计无缓存首开、有磁盘缓存重启后首开和同进程重开；验证半行时用日志副本，不改原会话。
+
+### 侧栏、审查和会话抽屉
+
+- **空间 / 智能体**（`de3c9a5`、`d41c014`）：[`sidebar-lists`](layouts/oh-my-herdr.json) 中空间和智能体权重 5:4、间距 0；[`inkstone-workbench`](mods/inkstone-workbench/main.js) 按机器 → 目录 → 空间分组，[`inkstone-agents`](mods/inkstone-agents/main.js) 单列待处理、运行中、已完成。两张卡接缝靠 `EDGE_B` / `EDGE_TOP` 各裁到 8px；别只改外层间距。终端边条在 [`artDir()`](mods/inkstone-edge/main.js)：有 `paper` 走原纸边，否则配对 `background` / `muted`，匹配才用 `ink-qingci`、`ink-xuanzhi`、`ink-xuanmo` 切片。
+- **审查**（`3963819`、`d41c014`）：[`inkstone-review`](mods/inkstone-review/main.js) 从底栏打开，Git 改动以实时 `git diff HEAD` 为主，未跟踪文件的正文点开才读；支持统一和左右对照。`turnEdits()` / `turnPaths()` 从最新用户消息边界提取 `edit` / `write` / `apply_patch` 的路径，只用来发现仓库和置顶该轮文件，不替代 Git 状态。排查「本轮为空」时，先查 Windows 路径是否按 UTF-8 返回、尾部窗口是否读到用户边界。`tailLines()` 在子进程里滤出用户和 `tool_execution_start` 行，别把完整尾部跨 IPC 送回（`exec` 输出上限 8 MiB）。
+- **会话抽屉**（`d41c014`）：[`inkstone-sessions`](mods/inkstone-sessions/main.js) 支持 CodeBuddy、本地/远程扫描和独立的列表缓存 `data/inkstone-sessions-cache.json`（45 秒有效期）。维护删除功能时，只用测试记录验证单条/批量确认：它删除的是实际会话记录，不只是隐藏列表项。右侧抽屉只有文件、会话、收藏；变更走底栏审查，驾驶舱走顶栏弹出层。双语 README 保持面向用户，排障细节留在 RECIPE。
+
 
 ## 看到什么
 从上到下、从左到右：
 
-+ **侧栏 272px**（可拖动，最小 44px 收缩成图标轨）：
-    - 顶部 52px 品牌条（`inkstone-chrome`，可拖动窗口，双击最大化）。
-    - 中间 `inkstone-workbench`：按目录分组（folder 图标 = 组内第一个空间的颜色，组间一条 1px 分隔线），组内每个空间一行 30px、圆角 7：8×8 像素图案（可切头像）、空间名 14px、数量、状态点，git 只在异常时留 `↑n` / `↓n`。空间展开后列终端：有智能体的显示「图标 + 名字 + 状态」24px 行，普通终端显示「图标 + 名字」24px 行；空空间显示「还没有终端」。
-    - 底部 120px `inkstone-chrome`（footer 模式）：偏好、Herdr 设置、添加机器三行 32px。
-+ **顶部 42px**：`inkstone-tabs` 画标签（`inkstone-tabs` 自己画窗口按钮，Windows 下用矢量图标），左边一排面板按钮（文件/会话/收藏/驾驶舱/变更），右边空间色点 7px。
++ **侧栏 284px**（可拖动，最小 44px 收缩成图标轨）：顶部 44px 品牌条，中间按 5:4 分给空间列表和智能体列表，底部 40px；布局和边条参数见上面的跨机交接。
++ **顶部 42px**：`inkstone-tabs` 画标签、文件/会话/收藏按钮、驾驶舱弹出入口和窗口按钮，右侧有空间色点。
 + **中间**：终端，间距 8，圆角 10。
-+ **右侧抽屉 380px**（默认藏起，点顶部面板按钮展开）：`inkstone-files`、`changes`、`cockpit`、`inkstone-sessions`、`inkstone-favorites` 五页。
++ **右侧抽屉 380px**（默认隐藏）：文件、会话和收藏三页。
 + **底部 28px**：`status-text` 占满剩余，右侧依次 `inkstone-metrics`（CPU/内存）、`inkstone-ports`（端口数）、`inkstone-inbox`（待处理数）、`inkstone-review`（审查）。
 + **纸墨（zhi）下多出四层**：桌面（`canvas` `#dad1bf`）→ 羊皮纸侧栏（brand / workbench / footer 三块各画同一张 `parchment-*.svg` 的一段，拼成一整页）→ 纸页（终端四周 `inkstone-edge` 撕边、自绘 `inkstone-pane` 窗格头、标签条底边用 `rule-h.svg` 裁 2px 铅笔线）→ 墨字。选中态不是实色底而是荧光笔 `#f8dc4c`（四角不等圆角），组头下面一条铅笔线，工作树左侧一条竖铅笔线，git 只在异常时留 `↑n` / `↓n`。切回月白/玄墨，所有 `PAPER ? … : …` 都走 fallback，退回原有 GPUI 几何。
 
@@ -50,17 +68,17 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 ```
 
 ## 用到的东西
-+ **布局节点**：布局文档最外层节点（`titlebar: "none"`、`traffic_lights: [12,16]`、`theme: {light:"qingci",dark:"xuanmo"}`、`terminal_menu: "inkstone-paste"`）下挂 `root` `row`（背景 `canvas`、`terminal_padding [14,12]`、`preview`）→ `sidebar`（column，272，min 44，max 420，背景 `canvas`）+ `work`（column：42px `inkstone-tabs` 块 + body row + 28px 状态栏 row）。body 是 `row`、padding `[6,6]`、gap 8、背景 `canvas`，里面一个 `page`（column）：`page-top` / `page-row`（`page-left` + `panel-body` + `page-right`）/ `page-bottom`，四条 12px 的 block 各挂一个 `inkstone-edge` 切片（`props.side` = top/bottom/left/right），把终端围成一张纸页。`panel-body` 是 `{tab:"active"}` 的 block，pane 帧为 `header: {content:{mod:"inkstone-pane"}, reveal:"always", height:30, position:"top"}`、`radius 0`、`border.width 0`、`gap 1`、`lone true`、`focus 2px accent`——窗格之间的 1px 缝透出 body 的桌面色。`panel` 是 380px 的 column（`stack` id `panel-stack`，子页 inkstone-files/changes/cockpit/inkstone-sessions/inkstone-favorites）。
-+ **自己的 mod**（17 个）：`inkstone-chrome`（品牌条 + footer）、`inkstone-workbench`（列表）、`inkstone-tabs`（标签 + 窗口按钮 + 面板按钮）、`inkstone-edge`（终端四周的撕边切片）、`inkstone-pane`（自绘窗格头：程序名 / 目录 / 状态徽章 / 悬停按钮）、`inkstone-history`（OMP 历史发言面板：倒序列出当前会话的发言，选中看全文，能对上的可跳回终端）、`inkstone-files`（文件树 + 搜索 + `@path` + `jj`/`git` 标记）、`inkstone-sessions`、`inkstone-favorites`、`inkstone-inbox`、`inkstone-metrics`、`inkstone-ports`、`inkstone-review`、`inkstone-settings`、`inkstone-paste`（右键即粘贴）、`inkstone-menu`（工作台与可选右键菜单）、`cockpit`。
-+ **用到的 Herdr 自带资产**：`changes`、`workspace-status`、`pane`（及 `mods/files/*.svg` 图标）。
++ **布局节点**：以 [`layouts/oh-my-herdr.json`](layouts/oh-my-herdr.json) 为准。`root` 下分 `sidebar` 和 `work`；`body` 的 `page` 用 `page-top`、`page-left`、`page-right`、`page-bottom` 四条 12px 切片包围终端。`panel-body` 的窗格头固定 30px，窗格间距 1px；右侧 `panel-stack` 对应文件、会话、收藏三个页面。
++ **自定义模块**：`inkstone-chrome`、`inkstone-workbench`、`inkstone-agents`、`inkstone-tabs`、`inkstone-edge`、`inkstone-pane`、`inkstone-history`、`inkstone-files`、`inkstone-sessions`、`inkstone-favorites`、`inkstone-inbox`、`inkstone-metrics`、`inkstone-ports`、`inkstone-review`、`inkstone-settings`、`inkstone-paste`、`inkstone-menu`、`cockpit`。
++ **用到的 Herdr 自带资产**：`workspace-status`、`pane`（及 `mods/files/*.svg` 图标）。
 + **herdr 函数**：`theme()`、`spaces()`、`panes()`、`terminals()`、`keys()`、`shared()` / `setShared()`、`layout()`、`exec()`、`run()`、`notify()`、`openOverlay()` / `closeOverlay()`、`props()`。
 + **命令**：`space.select`、`tab.select`、`tab.new`、`pane.focus`、`pane.split`、`pane.close`、`pane.zoom`、`agent.focus`、`terminal.open`、`terminal.kill`、`terminal.copy` / `terminal.paste`、`layout.select` / `layout.show` / `layout.hide` / `layout.resize`、`mod.open`、`app.theme`、`window.*`。
 + **读的外部数据**：OMP（`~/.omp/agent/sessions`）、Codex（`~/.codex/sessions`）、Claude Code（`~/.claude/projects`）、Pi（`~/.pi/agent/sessions`）、项目归档（`<cwd>/.herdr/conversations`）的首尾各 25 行，及可选 `sqlite3` 只读 OpenCode（Windows 用 PowerShell，macOS / Linux / 远程机器用 `sh` + `awk`，不依赖 Python）；文件搜索与状态走 `jj` / `git`；系统指标与监听端口在 Windows 走 PowerShell，在 macOS 走 `vm_stat`/`top`/`sysctl`/`lsof`/`open`/`kill`，在 Linux 走 `/proc`、`lsof`/`ss`、`xdg-open`/`kill`；`hc` / `git` 通过 `exec`。
 
 ## 注意
-+ 侧栏宽度和折叠状态是 `layout.resize` 的点击状态，存在 `layouts/.state/`，**重启不保留**（布局文件里的 272 才是初始值）。
++ 侧栏初始宽度 284px；拖动和折叠走 `layout.resize`，调默认宽度要改布局。
 + `inkstone-workbench` 和 `inkstone-tabs` 各存了一份调色板常量（mod 之间不能 import），改配色要同时改两个文件。
-+ 状态栏几个块是固定宽度（metrics 152 / ports 64 / inbox 84 / review 88），改内容长度要同步改布局里的 px。
++ 状态栏几个块是固定宽度（metrics 152 / ports 64 / inbox 84 / review 148），改内容长度要同步改布局里的 px。
 + 会话实况识别优先匹配启动参数中的会话 ID，其次匹配终端 OSC 标题前 24 字与 cwd；标题被手动改掉且无参数启动时会当成新会话开。
 + 远程空间会在已连机器上通过 `exec(..., { on })` 扫描会话与文件目录。
 + 图案、项目文件夹、铃铛都是 GPUI 矩形拼的，不走 svg；改图案只改 `sprites.js` 里的字符串数组（`.` 透空、`x` 主色、`o` 白、`k` 近黑），每行 8 列。
@@ -69,11 +87,10 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 + `inkstone-edge` 的 `mod.json` 必须是 `{ "place": "none" }`：写别的值 Herdr 会把这块自动插进布局，删掉 mod 后布局就坏。
 + `titlebar` 与 `traffic_lights` 必须写在布局文档的最外层节点上（与 `id`、`type`、`children` 同级）。写到里面的 `root` row 上会被静默忽略：系统标题栏照旧浮在布局上方，`window().buttons` 为 `false`，`inkstone-tabs` 那三个 − □ × 永远不渲染。挪到外层后标题栏消失，最小化 / 最大化 / 关闭落在标签条右端「驾驶舱」之后，与面板按钮同一行。
 + 纸感只由「主题里有没有 `paper` 槽」决定（`Boolean(theme().paper)`），mod 从不认主题名。`themes/zhi.json` 多带 11 个自定义槽（`paper` / `desk` / `ink` / `pencil` / `rule` / `stroke` / `mark` / `bracket` / `up` / `down` / `seal`）；没定义 `paper` 的主题自动走 fallback，不会留浅色纸边，也不会去取不存在的羊皮纸档（`nearest()` 取最近档，永不 404）。
-+ 撕边比纸感宽一档：亮色主题（月白）也画四边毛边，用的是 `mods/inkstone-edge/ink-qingci/`——同一套切片把纸料换成青瓷的 `background`、墨线换成 `muted`，没引入任何新颜色；只有活动主题的这两个槽与烤进去的值一致时才用，深色主题一律不画（否则深底浮白边）。
++ 撕边不要求 `paper` 槽：内置明暗配色按 `background` 和 `muted` 匹配 `inkstone-edge` 的 `PRESETS`，无匹配才留空。
 + 纸感与撕边资产合计约 3.2MB：`mods/inkstone-chrome/ink/`（39 个文件：羊皮纸 17 档、头像 11、墨线纸片 6、铅笔线 2、徽章 2、LICENSE）、`mods/inkstone-edge/ink/`（8 片撕边 + LICENSE）与 `mods/inkstone-edge/ink-qingci/`（同 8 片的青瓷配色版），都从 Looseleaf（MIT）搬来；`inkstone-pane` 另有 5 个 22px 图标。
 + **常驻的窗格头按钮要给悬停按钮组留位**：窗格头是 `h_flex` + `gap 8`，四个悬停按钮一出现整行变宽，左侧所有按钮右移 4×22 + 4×8 = 120px。OMP 那枚历史按钮正好在那个位置，点它落到 `close` 上，终端当场被杀。不悬停时要在同样的槽位放四个空的 22px div；合并成一个 88px 不够，因为父级 `gap` 只加在相邻兄弟之间。
-+ **终端回滚只有约 1000 行，更早的发言直接被裁掉**：`hc read <term> --lines 20000 --json` 在活着的 OMP 终端上只回约 1000 行且 `complete:false`；`~/.config/herdr-core/config.toml` 不存在，`settings.json` 里也没有 scrollback 项，上限不可配。OMP 确实会把你的提问画进对话流，只是两三轮之后就滚出缓冲了：41 条实测命中最后 2 条，其余是**被裁掉了**，不是 markdown 重绘导致。**dump 前先确认是哪块终端**：dump 同 cwd 的、早已结束的兄弟终端，会得出「一条都匹配不上」的错误结论。
-+ **`readTextFile` 读 20MB 文件会把面板卡死**：整段字符串过 IPC，界面一直停在「读取…」几十秒。大文件改走 `exec("powershell", …)`，用 `[System.IO.File]::Open(...,'Open','Read','ReadWrite')` + `StreamReader` 逐行读；21MB / 4537 行的会话约 400ms。
++ **旧发言没有箭头时，先看终端保留区**：对当前终端执行 `hc read <term> --lines 20000 --json`；返回 `complete: false` 说明只拿到保留的部分，不代表日志解析失败。不要测同 cwd 下已经结束的兄弟终端。大日志由子进程筛选，`readTextFile` 只读小缓存。
 + **经 `exec` 传给 PowerShell 的命令串里不能有双引号**：Windows 命令行解析会先把 `"` 剥掉，PowerShell 认为语句没结束而挂起等输入，调用只能等超时才返回。所有引号用 `[string][char]34` 拼。命令串前面还要加 `[Console]::OutputEncoding=[Text.Encoding]::UTF8;`，否则中文路径回来是乱码，查找静默失败。
 + **按 `pane.cwd` 定位 OMP 会话，不要全库搜标题**：`~/.omp/agent/sessions/<cwd 里 [:\/] 换成 ->` 目录里只放这个项目的会话；扫全库再退回「最近写过的那个文件」，会在标题还是空的时候把别的项目的对话显示出来。
 
@@ -82,7 +99,7 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 herdr-app check mods/inkstone-workbench    # → check passed
 herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 herdr-app status | jq .errors              # → []
-herdr-app shot out.png                     # 看侧栏有彩色徽章、状态栏右侧四块、顶部五个面板按钮
+herdr-app shot out.png                     # 看空间/智能体列表、状态栏和顶部三个抽屉按钮
 ```
 
 ## 排查
@@ -112,7 +129,7 @@ herdr-app status | grep -o '"errors":\[[^]]*\]'
 |---|---|---|
 | 1 不是 4，或 2 等于 0 | 之前装过旧版，`install.ps1` / `install.sh` 跳过了同名文件 | `.\install.ps1 -Force`（`./install.sh --force`），然后 `herdr-app do layout.switch '{"name":"oh-my-herdr"}'`，或重启 herdr-app |
 | 3 有内容 | herdr 低于 0.1.16，没有 `themes` 导出，撕边 mod 加载失败 | 升级 herdr |
-| 三条都正常、仍无撕边 | 当前主题不是亮色：深色主题（玄墨）不画浅色纸边 | `(Get-Content "$cfg\settings.json" -Raw \| ConvertFrom-Json).appearance` 应为 `light`，或 `herdr-app do app.theme '{"name":"qingci"}'` |
+| 三条都正常、仍无撕边 | 当前主题未命中切片的配色 | 用 `herdr-app do app.theme '{"name":"qingci"}'` 对照，检查 `inkstone-edge/main.js` 的 `PRESETS` |
 
 改完配置要让它重新加载：`layout.switch` 切一次布局，或重启 herdr-app。
 
