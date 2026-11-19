@@ -7,7 +7,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { exec, run, props, closeOverlay, openOverlay, theme, themes, window } from "herdr";
+import { exec, run, props, closeOverlay, openOverlay, theme, window } from "herdr";
 
 const plat = () => window()?.platform ?? "windows";
 const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
@@ -21,13 +21,12 @@ let edgeCacheKey = "";
 let edgeCacheDir = null;
 function artEdgeDir(t) {
   if (t.paper) return "ink";
-  const key = t.background ?? "";
+  const bg = t.background ?? "", muted = t.muted ?? "";
+  const key = `${bg}|${muted}`;
   if (key !== edgeCacheKey) {
     edgeCacheKey = key;
-    const p = EDGE_PRESETS.find((x) => x.bg === key);
-    if (!p) { edgeCacheDir = null; return null; }
-    const cur = themes().find((x) => x.colors?.background === key);
-    edgeCacheDir = cur?.colors?.muted === p.muted ? p.dir : null;
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    edgeCacheDir = p ? p.dir : null;
   }
   return edgeCacheDir;
 }

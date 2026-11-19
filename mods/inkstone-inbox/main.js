@@ -5,7 +5,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { agents, run, theme, themes, props, closeOverlay, openOverlay } from "herdr";
+import { agents, run, theme, props, closeOverlay, openOverlay } from "herdr";
 
 const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
 const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FOOT = 40;
@@ -18,13 +18,12 @@ let edgeCacheKey = "";
 let edgeCacheDir = null;
 function artEdgeDir(t) {
   if (t.paper) return "ink";
-  const key = t.background ?? "";
+  const bg = t.background ?? "", muted = t.muted ?? "";
+  const key = `${bg}|${muted}`;
   if (key !== edgeCacheKey) {
     edgeCacheKey = key;
-    const p = EDGE_PRESETS.find((x) => x.bg === key);
-    if (!p) { edgeCacheDir = null; return null; }
-    const cur = themes().find((x) => x.colors?.background === key);
-    edgeCacheDir = cur?.colors?.muted === p.muted ? p.dir : null;
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    edgeCacheDir = p ? p.dir : null;
   }
   return edgeCacheDir;
 }
