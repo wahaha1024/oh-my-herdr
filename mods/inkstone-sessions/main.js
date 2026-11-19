@@ -3,31 +3,74 @@
 //   - OMP：~/.omp/agent/sessions/<编码目录>/<时间戳>_<uuid>.jsonl
 //   - Codex CLI：~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl（首行 type=session_meta）
 //   - Claude Code：~/.claude/projects/<slug>/<sessionId>.jsonl
+//   - CodeBuddy：~/.codebuddy/projects/<slug>/<sessionId>.jsonl（type=message 且 role 在顶层）
 //   - Pi：~/.pi/agent/sessions/*.jsonl（首行 type=session）
 //   - 本地归档：<当前空间>/.herdr/conversations/*.jsonl|*.json
 //   - OpenCode（可选）：仅在本机已有 sqlite3 与 opencode.db 时只读查询
-// 恢复命令：omp --resume <id> / codex resume <id> / claude --resume <id> / pi --session <id> / opencode --session <id>。
+// 恢复命令：omp --resume <id> / codex resume <id> / claude --resume <id> / codebuddy --resume <id> / pi --session <id> / opencode --session <id>。
 // 会话已经在某个终端里开着时不新起进程，直接切过去——新进程会把整段历史重渲染一遍。
 
 import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input } from "gpui-base";
-import { exec, run, theme, spaces, panes, notify, terminals, window, checking } from "herdr";
+import { exec, run, theme, spaces, panes, notify, terminals, window, checking, appHome, readTextFile, writeTextFile } from "herdr";
 
-const MAX_PER = 30;
-const MAX_CODEX = 50;
+const MAX_PER = 100;
+const MAX_CODEX = 120;
+const CACHE_TTL_MS = 45000;
+const CACHE_FILE = () => `${appHome()}/data/inkstone-sessions-cache.json`;
+const MEM_CACHE = new Map();
+let DISK_LOADED = false;
+let DISK_RAW = null;
 const SEP = "\u001f";
 const plat = () => window()?.platform ?? "windows";
 
+function toB64(str) {
+  const bytes = [];
+  for (let i = 0; i < str.length; i++) {
+    let cp = str.charCodeAt(i);
+    if (cp >= 0xd800 && cp <= 0xdbff && i + 1 < str.length) {
+      const lo = str.charCodeAt(i + 1);
+      if (lo >= 0xdc00 && lo <= 0xdfff) {
+        cp = ((cp - 0xd800) << 10) + (lo - 0xdc00) + 0x10000;
+        i++;
+      }
+    }
+    if (cp < 0x80) bytes.push(cp);
+    else if (cp < 0x800) bytes.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
+    else if (cp < 0x10000) bytes.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+    else bytes.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+  }
+  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    out += abc[b0 >> 2];
+    out += abc[((b0 & 3) << 4) | (b1 >> 4)];
+    out += i + 1 < bytes.length ? abc[((b1 & 15) << 2) | (b2 >> 6)] : "=";
+    out += i + 2 < bytes.length ? abc[b2 & 63] : "=";
+  }
+  return out;
+}
+
+function safeSessionFile(p) {
+  const s = String(p ?? "").trim();
+  if (!s) return false;
+  if (!(/\.(jsonl|json)$/i.test(s))) return false;
+  return /^([a-zA-Z]:[\\/]|\/)/.test(s);
+}
 const SOURCES = {
   omp: { label: "OMP", dir: ".omp/agent/sessions", bin: "omp", argv: (id) => ["--resume", id] },
   codex: { label: "Codex", dir: ".codex/sessions", bin: "codex", argv: (id) => ["resume", id] },
   claude: { label: "Claude", dir: ".claude/projects", bin: "claude", argv: (id) => ["--resume", id] },
+  codebuddy: { label: "CodeBuddy", dir: ".codebuddy/projects", bin: "codebuddy", argv: (id) => ["--resume", id] },
   pi: { label: "Pi", dir: ".pi/agent/sessions", bin: "pi", argv: (id) => ["--session", id] },
   opencode: { label: "OpenCode", bin: "opencode", argv: (id) => ["--session", id] },
   local: { label: "本地", bin: null, argv: null },
 };
 
-const SOURCE_ORDER = ["omp", "codex", "claude", "pi", "opencode", "local"];
+const SOURCE_ORDER = ["omp", "codex", "claude", "codebuddy", "pi", "opencode", "local"];
 
 function buildPsScan(target) {
   const esc = String(target ?? "").replace(/['‘’‚‛]/g, "$&$&");
@@ -101,7 +144,8 @@ function buildPsScan(target) {
     "    elseif (-not $ti -and $o.name) { $ti = [string]$o.name }",
     "    if (-not $fu) {",
     "      $txt = $null",
-    "      if ($o.type -eq 'message' -and $o.message.role -eq 'user') { $c = @($o.message.content); if ($c.Count) { $txt = [string]$c[0].text } }",
+    "      if ($o.type -eq 'message' -and $o.role -eq 'user') { $c = @($o.content); if ($c.Count) { $txt = [string]$c[0].text } }",
+    "      elseif ($o.type -eq 'message' -and $o.message.role -eq 'user') { $c = @($o.message.content); if ($c.Count) { $txt = [string]$c[0].text } }",
     "      elseif ($o.type -eq 'response_item' -and $o.payload.role -eq 'user') { $c = @($o.payload.content); if ($c.Count) { $txt = [string]$c[0].text } }",
     "      elseif ($o.type -eq 'user' -and $o.message.role -eq 'user') { $c = @($o.message.content); if ($c.Count) { $txt = [string]$c[0].text } }",
     "      elseif ($o.role -eq 'user' -and $o.text) { $txt = [string]$o.text }",
@@ -114,7 +158,7 @@ function buildPsScan(target) {
     "  if (-not $ti -and $fu) { $ti = $fu }",
     "  if ($id) {",
     "    $m = [int]([DateTimeOffset]$f.LastWriteTimeUtc).ToUnixTimeSeconds()",
-    "    $rows.Add(@($src, $m, $id, ($ti -replace '[\\r\\n]+', ' '), $cwd) -join $SEP)",
+    "    $rows.Add(@($src, $m, $id, ($ti -replace '[\\r\\n]+', ' '), $cwd, $f.FullName) -join $SEP)",
     "  }",
     "}",
     "function Scan($src, $root, $limit, $leaf) {",
@@ -134,6 +178,7 @@ function buildPsScan(target) {
     `Scan 'omp' (Join-Path $env:USERPROFILE '${SOURCES.omp.dir}') ${MAX_PER} $leaf`,
     `Scan 'codex' (Join-Path $env:USERPROFILE '${SOURCES.codex.dir}') ${MAX_CODEX} ''`,
     `Scan 'claude' (Join-Path $env:USERPROFILE '${SOURCES.claude.dir}') ${MAX_PER} $leaf`,
+    `Scan 'codebuddy' (Join-Path $env:USERPROFILE '${SOURCES.codebuddy.dir}') ${MAX_PER} $leaf`,
     `Scan 'pi' (Join-Path $env:USERPROFILE '${SOURCES.pi.dir}') ${MAX_PER} $leaf`,
     "if ($target) {",
     "  $conv = Join-Path $target '.herdr\\conversations'",
@@ -149,7 +194,7 @@ function buildPsScan(target) {
     "          $ti = [string]($o.title, $o.name, $o.summary, $f.BaseName | Where-Object { $_ } | Select-Object -First 1)",
     "          $cwd = [string]($o.cwd, $target | Where-Object { $_ } | Select-Object -First 1)",
     "          $m = [int]([DateTimeOffset]$f.LastWriteTimeUtc).ToUnixTimeSeconds()",
-    "          if ($id) { $rows.Add(@('local', $m, $id, ($ti -replace '[\\r\\n]+', ' '), $cwd) -join $SEP) }",
+    "          if ($id) { $rows.Add(@('local', $m, $id, ($ti -replace '[\\r\\n]+', ' '), $cwd, $f.FullName) -join $SEP) }",
     "        } catch {}",
     "      }",
     "    }",
@@ -160,7 +205,8 @@ function buildPsScan(target) {
     "  foreach ($db in @((Join-Path $env:LOCALAPPDATA 'opencode\\opencode.db'), (Join-Path $env:USERPROFILE '.local\\share\\opencode\\opencode.db'))) {",
     "    if (Test-Path -LiteralPath $db) {",
     "      try {",
-    "        $sql = \"SELECT 'opencode' || char(31) || CAST(CASE WHEN time_updated > 100000000000 THEN time_updated / 1000 ELSE time_updated END AS INTEGER) || char(31) || id || char(31) || replace(replace(COALESCE(title,''), char(10), ' '), char(13), ' ') || char(31) || COALESCE(directory,'') FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC LIMIT 30;\"",
+    "        $dbEsc = $db.Replace(\"'\", \"''\")",
+    "        $sql = \"SELECT 'opencode' || char(31) || CAST(CASE WHEN time_updated > 100000000000 THEN time_updated / 1000 ELSE time_updated END AS INTEGER) || char(31) || id || char(31) || replace(replace(COALESCE(title,''), char(10), ' '), char(13), ' ') || char(31) || COALESCE(directory,'') || char(31) || '$dbEsc' FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC LIMIT 30;\"",
     "        & $sq.Source -readonly $db $sql 2>$null | ForEach-Object { if ($_) { $rows.Add($_) } }",
     "      } catch {}",
     "      break",
@@ -174,7 +220,7 @@ function buildPsScan(target) {
 
 // 每条 JSON 首个出现的 id / cwd / 标题就够用了：取前 25 行，避免读大文件的整段历史。
 const AWK = [
-  'BEGIN { sep = sprintf("%c", 31); id = ""; cwd = ""; ti = ""; fu = "" }',
+  'BEGIN { sep = sprintf("%c", 31); id = ""; cwd = ""; ti = ""; fu = ""; if (src == "codebuddy" && fid != "") id = fid }',
 "{",
 '  ln = $0; if (length(ln) > 131072) ln = substr(ln, 1, 4096) " " substr(ln, length(ln) - 4095)',
 '  if (id == "" && match(ln, /"id"[ \t]*:[ \t]*"[^"]*"/)) { s = substr(ln, RSTART, RLENGTH); sub(/^[^:]*:[ \t]*"/, "", s); sub(/"$/, "", s); if (s != "") id = s }',
@@ -184,7 +230,7 @@ const AWK = [
 '  if (ti == "" && match(ln, /"title"[ \t]*:[ \t]*"[^"]*"/)) { s = substr(ln, RSTART, RLENGTH); sub(/^[^:]*:[ \t]*"/, "", s); sub(/"$/, "", s); if (s != "") ti = s }',
 '  if (fu == "" && ln ~ /"role"[ \t]*:[ \t]*"user"/ && match(ln, /"text"[ \t]*:[ \t]*"[^"]*"/)) { s = substr(ln, RSTART, RLENGTH); sub(/^[^:]*:[ \t]*"/, "", s); sub(/"$/, "", s); if (s != "" && substr(s, 1, 1) != "<") fu = substr(s, 1, 80) }',
 "}",
-  'END { if (ti == "" && fu != "") ti = fu; if (id != "") printf "%s%s%s%s%s%s%s%s%s\\n", src, sep, m, sep, id, sep, ti, sep, cwd }',
+  'END { if (ti == "" && fu != "") ti = fu; if (id != "") printf "%s%s%s%s%s%s%s%s%s%s%s\\n", src, sep, m, sep, id, sep, ti, sep, cwd, sep, f }',
 ].join("\n");
 
 const SH_SCAN = [
@@ -195,7 +241,7 @@ const SH_SCAN = [
   "scan_files() {",
   "  src=$1; lim=$2",
   '  sort -rn | head -n "$lim" | while IFS=$(printf "\\t") read -r m f; do',
-  '    { head -n 25 "$f"; tail -n 25 "$f"; } 2>/dev/null | awk -v src="$src" -v m="$m" -v sep="$SEP" "$AWK"',
+  '    { head -n 25 "$f"; tail -n 25 "$f"; } 2>/dev/null | awk -v src="$src" -v m="$m" -v sep="$SEP" -v fid="$(basename "$f" .jsonl)" -v f="$f" "$AWK"',
   "  done",
   "}",
   "scan() {",
@@ -218,6 +264,7 @@ const SH_SCAN = [
   `scan omp "$HOME/${SOURCES.omp.dir}" ${MAX_PER} 1`,
   `scan codex "$HOME/${SOURCES.codex.dir}" ${MAX_CODEX} 0`,
   `scan claude "$HOME/${SOURCES.claude.dir}" ${MAX_PER} 1`,
+  `scan codebuddy "$HOME/${SOURCES.codebuddy.dir}" ${MAX_PER} 1`,
   `scan pi "$HOME/${SOURCES.pi.dir}" ${MAX_PER} 1`,
   'if [ -n "$TARGET" ] && [ -d "$TARGET/.herdr/conversations" ]; then',
   '  find "$TARGET/.herdr/conversations" -maxdepth 1 -type f -name "*.jsonl" 2>/dev/null | while IFS= read -r f; do',
@@ -227,7 +274,7 @@ const SH_SCAN = [
   "fi",
   'OC_DB="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db"',
   'if [ -f "$OC_DB" ] && command -v sqlite3 >/dev/null 2>&1; then',
-  '  sqlite3 -readonly "$OC_DB" "SELECT \'opencode\' || char(31) || CAST(CASE WHEN time_updated > 100000000000 THEN time_updated / 1000 ELSE time_updated END AS INTEGER) || char(31) || id || char(31) || replace(replace(COALESCE(title,\'\'), char(10), \' \'), char(13), \' \') || char(31) || COALESCE(directory,\'\') FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC LIMIT 30;" 2>/dev/null || true',
+  "  sqlite3 -readonly \"$OC_DB\" \"SELECT 'opencode' || char(31) || CAST(CASE WHEN time_updated > 100000000000 THEN time_updated / 1000 ELSE time_updated END AS INTEGER) || char(31) || id || char(31) || replace(replace(COALESCE(title,''), char(10), ' '), char(13), ' ') || char(31) || COALESCE(directory,'') FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC LIMIT 30;\" 2>/dev/null | while IFS= read -r ln; do [ -n \"$ln\" ] && printf '%s\\037%s\\n' \"$ln\" \"$OC_DB\"; done || true",
   "fi",
 ].join("\n");
 
@@ -254,11 +301,17 @@ export default class Sessions extends View {
     this.failReason = "";
     this.all = false;
     this.source = "all";
+    this.timeRange = "all";
     this.query = "";
     this.copied = null;
     this.bins = {};
     this.resumed = new Set();
     this.scannedKey = null;
+    this.manage = false;
+    this.selected = new Set();
+    this.confirmOne = null;
+    this.confirmBatch = false;
+    this.deleting = false;
     this.handle = cx.focus_handle();
     this.input = InputState.new({ placeholder: "搜索标题、目录或 ID…" });
     this.input.on("change", (_e, cx) => {
@@ -268,12 +321,124 @@ export default class Sessions extends View {
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     if (!checking()) {
-      this.detect();
-      this.reload(cx);
+      const sp = this.activeSpace();
+      const on = this.activeMachine(sp);
+      const target = this.activeFolder(sp);
+      const key = `${on ?? ""}|${target}`;
+      this.detect(on);
+      this.activateKey(key, cx, false);
     } else {
       this.loading = false;
     }
-    cx.timer.every(60000, (cx) => this.reload(cx));
+    cx.timer.every(60000, (cx) => this.reload(cx, { silent: true }));
+  }
+
+  normCacheItems(arr) {
+    if (!Array.isArray(arr)) return [];
+    const out = [];
+    for (const x of arr) {
+      if (!x || !x.id || !SOURCES[x.src]) continue;
+      const files = Array.isArray(x.files) ? x.files.filter(Boolean) : (x.file ? [x.file] : []);
+      out.push({
+        src: x.src,
+        m: Number(x.m) || 0,
+        id: String(x.id),
+        t: String(x.t ?? ""),
+        cwd: String(x.cwd ?? ""),
+        file: String(files[0] ?? ""),
+        files,
+      });
+    }
+    return out;
+  }
+
+  async loadDiskCache() {
+    if (DISK_LOADED) return;
+    try {
+      const raw = await readTextFile(CACHE_FILE());
+      DISK_RAW = raw;
+      if (raw) {
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === "object") {
+          for (const [k, v] of Object.entries(obj)) {
+            if (!v || !Array.isArray(v.items)) continue;
+            if (!MEM_CACHE.has(k)) {
+              MEM_CACHE.set(k, { ts: Number(v.ts) || 0, items: this.normCacheItems(v.items) });
+            }
+          }
+        }
+      }
+    } catch {}
+    DISK_LOADED = true;
+  }
+
+  async flushDiskCache() {
+    if (checking()) return;
+    try {
+      const entries = [...MEM_CACHE.entries()]
+        .sort((a, b) => (b[1]?.ts || 0) - (a[1]?.ts || 0))
+        .slice(0, 6);
+      const obj = {};
+      for (const [k, v] of entries) {
+        obj[k] = {
+          ts: v.ts || 0,
+          items: (v.items ?? []).slice(0, 180).map((s) => ({
+            src: s.src,
+            m: s.m,
+            id: s.id,
+            t: String(s.t ?? "").slice(0, 140),
+            cwd: s.cwd,
+            files: (s.files ?? (s.file ? [s.file] : [])).slice(0, 2),
+          })),
+        };
+      }
+      const json = JSON.stringify(obj);
+      try {
+        await writeTextFile(CACHE_FILE(), json, DISK_RAW);
+        DISK_RAW = json;
+      } catch {
+        const latest = await readTextFile(CACHE_FILE()).catch(() => null);
+        await writeTextFile(CACHE_FILE(), json, latest).catch(() => {});
+        DISK_RAW = json;
+      }
+    } catch {}
+  }
+
+  writeCache(key, list) {
+    if (!key || checking()) return;
+    MEM_CACHE.set(key, { ts: Date.now(), items: (list ?? []).slice(0, 250) });
+    this.flushDiskCache();
+  }
+
+  activateKey(key, cx, inRender = false) {
+    this.scannedKey = key;
+    const hit = MEM_CACHE.get(key);
+    if (hit && hit.items.length) {
+      this.list = hit.items;
+      this.loading = false;
+      this.failed = false;
+      if (!inRender) cx.notify();
+      if (Date.now() - hit.ts >= CACHE_TTL_MS) this.reload(cx, { silent: true });
+      return;
+    }
+    if (!DISK_LOADED) {
+      this.loading = this.list.length === 0;
+      this.loadDiskCache().then(() => {
+        if (this.scannedKey !== key) return;
+        const diskHit = MEM_CACHE.get(key);
+        if (diskHit && diskHit.items.length) {
+          this.list = diskHit.items;
+          this.loading = false;
+          this.failed = false;
+          cx.notify();
+          if (Date.now() - diskHit.ts >= CACHE_TTL_MS) this.reload(cx, { silent: true });
+        } else {
+          this.reload(cx);
+        }
+      });
+      return;
+    }
+    this.reload(cx);
   }
 
   activeSpace() {
@@ -311,13 +476,16 @@ export default class Sessions extends View {
     }
   }
 
-  reload(cx) {
+  reload(cx, opts = {}) {
     if (this.reloading) return;
+    const silent = Boolean(opts?.silent) && this.list.length > 0;
     this.reloading = true;
+    if (!silent) this.loading = this.list.length === 0;
     const sp = this.activeSpace();
     const on = this.activeMachine(sp);
     const target = this.activeFolder(sp);
-    this.scannedKey = `${on ?? ""}|${target}`;
+    const scanKey = `${on ?? ""}|${target}`;
+    this.scannedKey = scanKey;
     this.detect(on);
     const useWin = !on && plat() === "windows";
     const job = useWin
@@ -326,9 +494,11 @@ export default class Sessions extends View {
     job
       .then((r) => {
         if (r?.code !== 0) {
-          this.failed = true;
-          const err = String(r?.stderr ?? "").trim().split(/\r?\n/).filter(Boolean).pop() ?? "";
-          this.failReason = err ? `退出码 ${r?.code ?? "?"}：${err}` : `退出码 ${r?.code ?? "未知"}`;
+          if (!silent) {
+            this.failed = true;
+            const err = String(r?.stderr ?? "").trim().split(/\r?\n/).filter(Boolean).pop() ?? "";
+            this.failReason = err ? `退出码 ${r?.code ?? "?"}：${err}` : `退出码 ${r?.code ?? "未知"}`;
+          }
           return;
         }
         const un = useWin ? (s) => s : (s) => String(s ?? "").replace(/\\(["\\])/g, "$1");
@@ -336,20 +506,32 @@ export default class Sessions extends View {
         for (const line of String(r?.stdout ?? "").split(/\r?\n/)) {
           const trimmed = line.trim();
           if (!trimmed) continue;
-          const [src, m, id, t, cwd] = trimmed.split(SEP);
-          const item = { src, m: Number(m) || 0, id: un(id), t: un(t), cwd: un(cwd) };
+          const [src, m, id, t, cwd, file] = trimmed.split(SEP);
+          const fpath = un(file);
+          const item = { src, m: Number(m) || 0, id: un(id), t: un(t), cwd: un(cwd), file: fpath, files: fpath ? [fpath] : [] };
           if (!item.id || !SOURCES[item.src]) continue;
           const dedup = `${item.src}:${item.id}`;
           const prev = byKey.get(dedup);
-          if (!prev || item.m > prev.m) byKey.set(dedup, item);
+          if (!prev) {
+            byKey.set(dedup, item);
+          } else {
+            const merged = item.m > prev.m ? { ...item, files: [...new Set([...prev.files, ...item.files])] } : { ...prev, files: [...new Set([...prev.files, ...item.files])] };
+            byKey.set(dedup, merged);
+          }
         }
-        this.list = [...byKey.values()].sort((a, b) => b.m - a.m).slice(0, 120);
+        this.list = [...byKey.values()].sort((a, b) => b.m - a.m).slice(0, 400);
+        this.writeCache(scanKey, this.list);
+        const valid = new Set(this.list.map((s) => `${s.src}:${s.id}`));
+        for (const k of [...this.selected]) if (!valid.has(k)) this.selected.delete(k);
+        if (this.confirmOne && !valid.has(this.confirmOne)) this.confirmOne = null;
         this.failed = false;
         this.failReason = "";
       })
       .catch((e) => {
-        this.failed = true;
-        this.failReason = String(e?.message || e || "执行异常");
+        if (!silent) {
+          this.failed = true;
+          this.failReason = String(e?.message || e || "执行异常");
+        }
       })
       .finally(() => {
         this.reloading = false;
@@ -424,8 +606,7 @@ export default class Sessions extends View {
     cx.write_to_clipboard(text);
     this.copied = s.id;
     cx.notify();
-    cx.spawn(async (cx) => {
-      await new Promise((r) => setTimeout(r, 1800));
+    cx.timer.after(1800, (cx) => {
       if (this.copied === s.id) {
         this.copied = null;
         cx.notify();
@@ -433,6 +614,124 @@ export default class Sessions extends View {
     });
   }
 
+  askDeleteOne(s, cx) {
+    const key = `${s.src}:${s.id}`;
+    this.confirmOne = key;
+    cx.notify();
+    cx.timer.after(4000, (cx) => {
+      if (this.confirmOne === key) {
+        this.confirmOne = null;
+        cx.notify();
+      }
+    });
+  }
+
+  toggleSelect(s, cx) {
+    const key = `${s.src}:${s.id}`;
+    if (this.selected.has(key)) this.selected.delete(key);
+    else this.selected.add(key);
+    this.confirmBatch = false;
+    cx.notify();
+  }
+
+  async deleteItems(items, cx) {
+    if (this.deleting || !items.length) return;
+    this.deleting = true;
+    cx.notify();
+    const on = this.activeMachine();
+    const useWin = !on && plat() === "windows";
+    const fileItems = items.filter((s) => s.src !== "opencode");
+    const ocItems = items.filter((s) => s.src === "opencode" && s.file && s.id);
+    const files = [...new Set(fileItems.flatMap((s) => s.files ?? (s.file ? [s.file] : [])).filter(safeSessionFile))];
+    const ocByDb = new Map();
+    for (const s of ocItems) {
+      if (!ocByDb.has(s.file)) ocByDb.set(s.file, []);
+      ocByDb.get(s.file).push(s.id);
+    }
+    const oc = [...ocByDb.entries()].map(([db, ids]) => ({ db, ids }));
+    const okFiles = new Set();
+    const okOc = new Set();
+    let errMsg = "";
+    try {
+      if (useWin) {
+        const b64 = toB64(JSON.stringify({ files, oc }));
+        const ps = [
+          "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+          `$req = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')) | ConvertFrom-Json`,
+          "foreach ($p in @($req.files)) {",
+          "  if (-not $p) { continue }",
+          "  try {",
+          "    if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction Stop }",
+          "    \"OK`t$p\"",
+          "  } catch { \"ERR`t$p`t$($_.Exception.Message)\" }",
+          "}",
+          "$sq = Get-Command sqlite3 -ErrorAction SilentlyContinue",
+          "foreach ($g in @($req.oc)) {",
+          "  if (-not $sq -or -not $g.db -or -not (Test-Path -LiteralPath $g.db)) { continue }",
+          "  $inList = (@($g.ids) | ForEach-Object { \"'\" + ([string]$_).Replace(\"'\", \"''\") + \"'\" }) -join ','",
+          "  if (-not $inList) { continue }",
+          "  try {",
+          "    & $sq.Source $g.db \"PRAGMA foreign_keys=ON; DELETE FROM session WHERE id IN ($inList);\" 2>$null",
+          "    if ($LASTEXITCODE -eq 0) { foreach ($id in @($g.ids)) { \"OC`t$id\" } }",
+          "    else { \"ERR`toc`texit $LASTEXITCODE\" }",
+          "  } catch { \"ERR`toc`t$($_.Exception.Message)\" }",
+          "}",
+        ].join("\n");
+        const r = await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { timeout: 20000 });
+        for (const ln of String(r?.stdout ?? "").split(/\r?\n/)) {
+          if (ln.startsWith("OK\t")) okFiles.add(ln.slice(3));
+          else if (ln.startsWith("OC\t")) okOc.add(ln.slice(3));
+          else if (ln.startsWith("ERR\t") && !errMsg) errMsg = ln.split("\t").slice(2).join(" ");
+        }
+        if (r?.code !== 0 && !errMsg) errMsg = String(r?.stderr ?? "").trim();
+      } else {
+        if (files.length) {
+          const shDel = 'for p in "$@"; do if [ -e "$p" ]; then rm -f -- "$p" && printf "OK\\t%s\\n" "$p" || printf "ERR\\t%s\\n" "$p"; else printf "OK\\t%s\\n" "$p"; fi; done';
+          const r = await exec("sh", ["-c", shDel, "sh", ...files], { on, timeout: 20000 });
+          for (const ln of String(r?.stdout ?? "").split(/\r?\n/)) {
+            if (ln.startsWith("OK\t")) okFiles.add(ln.slice(3));
+            else if (ln.startsWith("ERR\t") && !errMsg) errMsg = `删除失败：${ln.slice(4)}`;
+          }
+          if (r?.code !== 0 && !errMsg) errMsg = String(r?.stderr ?? "").trim();
+        }
+        for (const g of oc) {
+          const inList = g.ids.map((id) => `'${String(id).replace(/'/g, "''")}'`).join(",");
+          const sql = `PRAGMA foreign_keys=ON; DELETE FROM session WHERE id IN (${inList});`;
+          const r = await exec("sqlite3", [g.db, sql], { on, timeout: 10000 });
+          if (r?.code === 0) for (const id of g.ids) okOc.add(id);
+          else if (!errMsg) errMsg = String(r?.stderr ?? "").trim() || "OpenCode 删除失败";
+        }
+      }
+      const deletedKeys = new Set();
+      for (const s of items) {
+        const k = `${s.src}:${s.id}`;
+        if (s.src === "opencode") {
+          if (okOc.has(s.id)) deletedKeys.add(k);
+        } else {
+          const fs = (s.files ?? (s.file ? [s.file] : [])).filter(safeSessionFile);
+          if (fs.length && fs.every((f) => okFiles.has(f))) deletedKeys.add(k);
+        }
+      }
+      if (deletedKeys.size) {
+        this.list = this.list.filter((s) => !deletedKeys.has(`${s.src}:${s.id}`));
+        for (const k of deletedKeys) this.selected.delete(k);
+        this.writeCache(this.scannedKey, this.list);
+      }
+      this.confirmBatch = false;
+      if (deletedKeys.size === items.length) {
+        notify({ title: "已删除会话", body: `共删除 ${deletedKeys.size} 条会话记录`, level: "info" });
+      } else if (deletedKeys.size > 0) {
+        notify({ title: "部分会话已删除", body: `成功 ${deletedKeys.size} 条，失败 ${items.length - deletedKeys.size} 条${errMsg ? `：${errMsg}` : ""}`, level: "warn" });
+      } else {
+        notify({ title: "删除会话失败", body: errMsg || "未找到可删除的会话文件", level: "error" });
+      }
+    } catch (e) {
+      notify({ title: "删除会话失败", body: String(e?.message ?? e), level: "error" });
+    } finally {
+      this.deleting = false;
+      cx.notify();
+    }
+  }
   // 按「当前目录 / 全部」过滤后的列表（不含来源与关键字，用于计算来源药丸计数）。
   scoped() {
     const all = this.list;
@@ -442,9 +741,20 @@ export default class Sessions extends View {
     return all.filter((s) => inFolder(s.cwd, here));
   }
 
+  inTimeRange(s, nowSec, range = this.timeRange) {
+    if (range === "all") return true;
+    const age = Math.max(0, nowSec - (s.m || 0));
+    if (range === "7d") return age <= 7 * 86400;
+    if (range === "30d") return age <= 30 * 86400;
+    if (range === "gt30d") return age > 30 * 86400;
+    return true;
+  }
+
   shown() {
+    const nowSec = Math.floor(Date.now() / 1000);
     let items = this.scoped();
     if (this.source !== "all") items = items.filter((s) => s.src === this.source);
+    if (this.timeRange !== "all") items = items.filter((s) => this.inTimeRange(s, nowSec));
     const q = this.query.trim().toLowerCase();
     if (q) {
       items = items.filter((s) => (
@@ -461,20 +771,27 @@ export default class Sessions extends View {
     if (src === "omp") return t.accent;
     if (src === "codex") return t.done;
     if (src === "claude") return t.working;
+    if (src === "codebuddy") return t.ansi4;
     if (src === "pi") return t.ansi5;
     if (src === "opencode") return t.ansi6;
     return t.muted;
   }
 
-  row(s, i, t) {
+  row(s, i, t, cx) {
     const src = SOURCES[s.src];
     const up = this.live(s);
+    const key = `${s.src}:${s.id}`;
     const copied = this.copied === s.id;
-    const tip = up
-      ? `${s.cwd || "?"}\n这个会话正开着：点一下切过去，不重新加载`
-      : src.bin
-        ? `${s.cwd || "?"}\n点一下：${this.cmdString(s)}`
-        : `${s.cwd || "?"}\n本地归档记录（点一下复制 ID）`;
+    const checked = this.selected.has(key);
+    const askingDel = !this.manage && this.confirmOne === key;
+    const canDel = s.src === "opencode" ? Boolean(s.file && s.id) : (s.files ?? (s.file ? [s.file] : [])).some(safeSessionFile);
+    const tip = this.manage
+      ? `${s.cwd || "?"}\n点击选中或取消选中`
+      : up
+        ? `${s.cwd || "?"}\n这个会话正开着：点一下切过去，不重新加载`
+        : src.bin
+          ? `${s.cwd || "?"}\n点一下：${this.cmdString(s)}`
+          : `${s.cwd || "?"}\n本地归档记录（点一下复制 ID）`;
     return h_flex()
       .id(`ses-${i}`)
       .h(46)
@@ -483,10 +800,26 @@ export default class Sessions extends View {
       .gap(8)
       .items_center()
       .rounded(6)
+      .when(this.manage && checked, (el) => el.bg(t.selected))
       .cursor_pointer()
-      .hover((h) => h.bg(t.hover))
+      .hover((h) => h.bg(this.manage && checked ? t.selected : t.hover))
       .tooltip(tip)
-      .on_click((_e, cx) => this.resume(s, cx))
+      .on_click((_e, cx) => {
+        if (this.manage) this.toggleSelect(s, cx);
+        else this.resume(s, cx);
+      })
+      .when(this.manage, (el) => el.child(div()
+        .id(`ses-chk-${i}`)
+        .size(15)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(4)
+        .border(1)
+        .border_color(checked ? t.accent : t.border)
+        .bg(checked ? t.accent : t.background)
+        .when(checked, (b) => b.child(svg("mods/inkstone-chrome/check.svg").size(10).text_color(t.accent_foreground)))))
       .child(div().w(44).flex_none().flex().items_center().justify_center().rounded(5).h(18).bg(t.raised)
         .child(div().text_size(9).text_color(this.badgeColor(s.src, t)).child(src.label)))
       .child(v_flex()
@@ -496,7 +829,7 @@ export default class Sessions extends View {
         .child(div().w_full().truncate().text_size(12).child(s.t || base(s.cwd) || String(s.id).slice(0, 8)))
         .child(div().w_full().truncate().text_size(11).text_color(t.dim)
           .child(`${ago(s.m)} · ${base(s.cwd) || "?"} · ${String(s.id).slice(0, 6)}`)))
-      .when(up, (el) => el.child(div()
+      .when(up && !askingDel, (el) => el.child(div()
         .flex_none()
         .px(5)
         .py(1)
@@ -505,26 +838,85 @@ export default class Sessions extends View {
         .text_size(9)
         .text_color(t.done)
         .child("已打开")))
-      .child(div()
-        .id(`ses-cp-${i}`)
-        .h(20)
-        .px(5)
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(4)
-        .text_size(10)
-        .text_color(copied ? t.done : t.dim)
-        .cursor_pointer()
-        .tooltip(copied ? "已复制" : src.bin ? `复制恢复命令：${this.cmdString(s)}` : "复制 ID")
-        .accessibility_label("复制恢复命令")
-        .hover((h) => h.bg(t.raised).text_color(t.foreground))
-        .on_click((_e, cx) => {
-          cx.stop_propagation();
-          this.copyCmd(s, cx);
-        })
-        .child(copied ? "已复制" : "命令"));
+      .when(askingDel, (el) => el
+        .child(div()
+          .id(`ses-del-ok-${i}`)
+          .h(20)
+          .px(6)
+          .flex_none()
+          .flex()
+          .items_center()
+          .justify_center()
+          .rounded(4)
+          .bg(t.blocked)
+          .text_size(10)
+          .font_semibold()
+          .text_color(t.accent_foreground ?? "#ffffff")
+          .cursor_pointer()
+          .tooltip(up ? "该会话正运行中，确认仍删除本地记录？" : "确认永久删除该会话文件")
+          .on_click((_e, cx) => {
+            cx.stop_propagation();
+            this.deleteItems([s], cx);
+          })
+          .child(this.deleting ? "删除中" : "确认删"))
+        .child(div()
+          .id(`ses-del-no-${i}`)
+          .h(20)
+          .px(5)
+          .flex_none()
+          .flex()
+          .items_center()
+          .justify_center()
+          .rounded(4)
+          .bg(t.raised)
+          .text_size(10)
+          .text_color(t.muted)
+          .cursor_pointer()
+          .hover((h) => h.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => {
+            cx.stop_propagation();
+            this.confirmOne = null;
+            cx.notify();
+          })
+          .child("取消")))
+      .when(!this.manage && !askingDel, (el) => el
+        .child(div()
+          .id(`ses-cp-${i}`)
+          .h(20)
+          .px(5)
+          .flex_none()
+          .flex()
+          .items_center()
+          .justify_center()
+          .rounded(4)
+          .text_size(10)
+          .text_color(copied ? t.done : t.dim)
+          .cursor_pointer()
+          .tooltip(copied ? "已复制" : src.bin ? `复制恢复命令：${this.cmdString(s)}` : "复制 ID")
+          .accessibility_label("复制恢复命令")
+          .hover((h) => h.bg(t.raised).text_color(t.foreground))
+          .on_click((_e, cx) => {
+            cx.stop_propagation();
+            this.copyCmd(s, cx);
+          })
+          .child(copied ? "已复制" : "命令"))
+        .when(canDel, (b) => b.child(div()
+          .id(`ses-del-${i}`)
+          .size(20)
+          .flex_none()
+          .flex()
+          .items_center()
+          .justify_center()
+          .rounded(4)
+          .cursor_pointer()
+          .tooltip(up ? "删除会话记录（运行中）" : "删除会话")
+          .accessibility_label("删除会话")
+          .hover((h) => h.bg(t.raised))
+          .on_click((_e, cx) => {
+            cx.stop_propagation();
+            this.askDeleteOne(s, cx);
+          })
+          .child(svg("mods/inkstone-sessions/trash.svg").size(12).text_color(t.dim)))));
   }
 
   render(cx) {
@@ -534,15 +926,22 @@ export default class Sessions extends View {
     const here = this.activeFolder(sp);
     const key = `${on ?? ""}|${here}`;
     if (!checking() && key !== this.scannedKey && !this.reloading) {
-      this.reload(cx);
+      this.activateKey(key, cx, true);
     }
     const scoped = this.scoped();
+    const nowSec = Math.floor(Date.now() / 1000);
     const counts = {};
     for (const s of scoped) counts[s.src] = (counts[s.src] ?? 0) + 1;
     const activeSources = SOURCE_ORDER.filter((k) => counts[k] > 0);
     if (this.source !== "all" && !counts[this.source] && scoped.length > 0) this.source = "all";
+    const srcScoped = this.source === "all" ? scoped : scoped.filter((s) => s.src === this.source);
+    const tCounts = {
+      "7d": srcScoped.filter((s) => this.inTimeRange(s, nowSec, "7d")).length,
+      "30d": srcScoped.filter((s) => this.inTimeRange(s, nowSec, "30d")).length,
+      "gt30d": srcScoped.filter((s) => this.inTimeRange(s, nowSec, "gt30d")).length,
+    };
     const list = this.shown();
-    const hasFilter = Boolean(this.query.trim()) || this.source !== "all";
+    const hasFilter = Boolean(this.query.trim()) || this.source !== "all" || this.timeRange !== "all";
 
     return v_flex()
       .size_full()
@@ -550,13 +949,25 @@ export default class Sessions extends View {
       .bg(t.chrome)
       .track_focus(this.handle)
       .on_key_down((e, cx) => {
-        if (e.key === "escape" && (this.typing || this.query)) {
-          this.query = "";
-          this.input.set_value("");
-          this.typing = false;
-          this.handle.focus();
-          cx.stop_propagation();
-          cx.notify();
+        if (e.key === "escape") {
+          if (this.typing || this.query) {
+            this.query = "";
+            this.input.set_value("");
+            this.typing = false;
+            this.handle.focus();
+            cx.stop_propagation();
+            cx.notify();
+          } else if (this.confirmOne || this.confirmBatch) {
+            this.confirmOne = null;
+            this.confirmBatch = false;
+            cx.stop_propagation();
+            cx.notify();
+          } else if (this.manage) {
+            this.manage = false;
+            this.selected.clear();
+            cx.stop_propagation();
+            cx.notify();
+          }
         }
       })
       .child(h_flex()
@@ -588,6 +999,26 @@ export default class Sessions extends View {
           })
           .child(this.all ? "全部" : "当前目录"))
         .child(div()
+          .id("ses-manage")
+          .px(6)
+          .py(2)
+          .rounded(5)
+          .text_size(11)
+          .when(this.manage, (el) => el.bg(t.selected))
+          .text_color(this.manage ? t.foreground : t.dim)
+          .cursor_pointer()
+          .tooltip(this.manage ? "退出批量删除模式" : "批量选择并删除会话")
+          .accessibility_label("批量管理会话")
+          .hover((s) => s.bg(this.manage ? t.selected : t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => {
+            this.manage = !this.manage;
+            this.confirmOne = null;
+            this.confirmBatch = false;
+            if (!this.manage) this.selected.clear();
+            cx.notify();
+          })
+          .child(this.manage ? "完成" : "批量"))
+        .child(div()
           .id("ses-reload")
           .px(6)
           .py(2)
@@ -598,8 +1029,8 @@ export default class Sessions extends View {
           .tooltip("重新扫描")
           .accessibility_label("重新扫描会话")
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
-          .on_click((_e, cx) => this.reload(cx))
-          .child("刷新")))
+          .on_click((_e, cx) => this.reload(cx, { force: true }))
+          .child(this.reloading ? "更新中" : "刷新")))
       .child(h_flex()
         .h(32)
         .flex_none()
@@ -643,6 +1074,101 @@ export default class Sessions extends View {
         .flex_wrap()
         .child(this.pill(t, "all", `全部 ${scoped.length}`, cx))
         .children(activeSources.map((k) => this.pill(t, k, `${SOURCES[k].label} ${counts[k]}`, cx)))))
+      .when(scoped.length > 0 || this.timeRange !== "all", (el) => el.child(h_flex()
+        .flex_none()
+        .px(8)
+        .pt(5)
+        .gap(4)
+        .flex_wrap()
+        .child(this.timePill(t, "all", "不限时间", cx))
+        .child(this.timePill(t, "7d", `7天内 ${tCounts["7d"]}`, cx))
+        .child(this.timePill(t, "30d", `30天内 ${tCounts["30d"]}`, cx))
+        .child(this.timePill(t, "gt30d", `30天外 ${tCounts["gt30d"]}`, cx))))
+      .when(this.manage, (el) => {
+        const allSelected = list.length > 0 && list.every((s) => this.selected.has(`${s.src}:${s.id}`));
+        const selItems = this.list.filter((s) => this.selected.has(`${s.src}:${s.id}`));
+        const nSel = selItems.length;
+        return el.child(h_flex()
+          .h(30)
+          .flex_none()
+          .mx(8)
+          .mt(6)
+          .px(8)
+          .gap(6)
+          .items_center()
+          .rounded(6)
+          .bg(t.raised)
+          .border(1)
+          .border_color(t.border)
+          .child(div()
+            .id("ses-sel-all")
+            .px(6)
+            .py(2)
+            .rounded(4)
+            .text_size(11)
+            .text_color(t.accent)
+            .cursor_pointer()
+            .hover((h) => h.bg(t.hover))
+            .on_click((_e, cx) => {
+              if (allSelected) {
+                for (const s of list) this.selected.delete(`${s.src}:${s.id}`);
+              } else {
+                for (const s of list) this.selected.add(`${s.src}:${s.id}`);
+              }
+              this.confirmBatch = false;
+              cx.notify();
+            })
+            .child(allSelected ? "取消全选" : "全选"))
+          .child(div().text_size(11).text_color(t.dim).child(`已选 ${nSel}`))
+          .child(div().flex_1())
+          .when(this.confirmBatch && nSel > 0, (b) => b
+            .child(div()
+              .id("ses-batch-ok")
+              .h(20)
+              .px(7)
+              .flex()
+              .items_center()
+              .rounded(4)
+              .bg(t.blocked)
+              .text_size(10.5)
+              .font_semibold()
+              .text_color(t.accent_foreground ?? "#ffffff")
+              .cursor_pointer()
+              .on_click((_e, cx) => this.deleteItems(selItems, cx))
+              .child(this.deleting ? "删除中…" : `确认删除 ${nSel} 条`))
+            .child(div()
+              .id("ses-batch-no")
+              .h(20)
+              .px(6)
+              .flex()
+              .items_center()
+              .rounded(4)
+              .text_size(10.5)
+              .text_color(t.muted)
+              .cursor_pointer()
+              .hover((h) => h.bg(t.hover).text_color(t.foreground))
+              .on_click((_e, cx) => {
+                this.confirmBatch = false;
+                cx.notify();
+              })
+              .child("取消")))
+          .when(!this.confirmBatch, (b) => b.child(div()
+            .id("ses-batch-del")
+            .h(20)
+            .px(7)
+            .flex()
+            .items_center()
+            .rounded(4)
+            .text_size(10.5)
+            .font_medium()
+            .when(nSel > 0, (el) => el.bg(t.blocked + "22"))
+            .text_color(nSel > 0 ? t.blocked : t.dim)
+            .when(nSel > 0, (x) => x.cursor_pointer().hover((h) => h.bg(t.blocked + "33")).on_click((_e, cx) => {
+              this.confirmBatch = true;
+              cx.notify();
+            }))
+            .child(nSel > 0 ? `删除 (${nSel})` : "删除"))));
+      })
       .child(v_flex()
         .flex_1()
         .min_h(0)
@@ -651,7 +1177,7 @@ export default class Sessions extends View {
         .gap(1)
         .overflow_y_scrollbar()
         .children(list.length
-          ? list.map((s, i) => this.row(s, i, t))
+          ? list.map((s, i) => this.row(s, i, t, cx))
           : [this.emptyState(t, hasFilter, scoped.length, cx)]))
       .child(h_flex()
         .h(24)
@@ -666,7 +1192,7 @@ export default class Sessions extends View {
         .child(div().truncate().child(activeSources.length
           ? `来源：${activeSources.map((k) => SOURCES[k].label).join(" · ")}`
           : "OMP / Codex / Claude / Pi / 本地"))
-        .child(div().flex_none().child("点行恢复 · Esc 清空搜索")));
+        .child(div().flex_none().child(this.manage ? "点行勾选 · Esc 退出" : "点行恢复 · Esc 清空搜索")));
   }
 
   pill(t, id, label, cx) {
@@ -686,6 +1212,29 @@ export default class Sessions extends View {
       .hover((s) => s.bg(on ? t.selected : t.hover))
       .on_click(() => {
         this.source = id;
+        cx.notify();
+      })
+      .child(label);
+  }
+
+  timePill(t, id, label, cx) {
+    const on = this.timeRange === id;
+    return div()
+      .id(`ses-time-${id}`)
+      .h(20)
+      .px(7)
+      .flex_none()
+      .flex()
+      .items_center()
+      .rounded(5)
+      .text_size(10)
+      .cursor_pointer()
+      .bg(on ? t.selected : t.raised)
+      .text_color(on ? t.foreground : t.muted)
+      .hover((s) => s.bg(on ? t.selected : t.hover))
+      .on_click(() => {
+        this.timeRange = id;
+        this.confirmBatch = false;
         cx.notify();
       })
       .child(label);
@@ -716,6 +1265,7 @@ export default class Sessions extends View {
           .on_click(() => {
             this.query = "";
             this.source = "all";
+            this.timeRange = "all";
             this.input.set_value("");
             cx.notify();
           })

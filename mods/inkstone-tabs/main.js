@@ -87,7 +87,7 @@ function spaceFill(t, id) {
 
 // 右侧抽屉的页容器：新布局是一个 stack（切页 = 一条 layout.select）；
 // 老布局是三块互斥 block（只能靠 hidden 开关来"选页"）。两套都认。
-const PANELS = ["files", "sessions", "favorites", "cockpit"];
+const PANELS = ["files", "sessions", "favorites"];
 
 function pageStack(panel) {
   if (panel?.type === "stack" && (panel.children ?? []).some((c) => PANELS.includes(c.id))) return panel;
@@ -255,20 +255,19 @@ export default class Tabs extends View {
       .when(this.prStale, el => el.child(div().text_size(10).text_color(t.dim).child("?")));
   }
 
-  // 顶部像素铃铛：只在有智能体等你（待处理，或你不在时已完成）时出现。
-  // 颜色分轻重（有 blocked 就是 blocked 色），数字是等你的总数；点一下到最急的那个。
+  // 顶部像素铃铛：常驻显示。平时为绿色（t.done），有待处理智能体时变红（t.blocked）保持原逻辑；
+  // 点击后在按钮旁弹出无框撕纸卡片显示当前驾驶舱内容。
   waiting(t) {
     const list = agents().filter((a) => a.status === "blocked" || a.status === "done");
-    if (!list.length) return div().flex_none();
-    const rank = (a) => (a.status === "blocked" ? 0 : 1);
-    const first = [...list].sort((a, b) => rank(a) - rank(b) || (b.seq ?? 0) - (a.seq ?? 0))[0];
     const blocked = list.filter((a) => a.status === "blocked").length;
     const tone = blocked ? t.blocked : t.done;
-    const tip = [
-      blocked ? `${blocked} 个待你处理` : null,
-      list.length > blocked ? `${list.length - blocked} 个已完成待查看` : null,
-      "点一下跳到最急的那个",
-    ].filter(Boolean).join(" · ");
+    const tip = list.length
+      ? [
+        blocked ? `${blocked} 个待你处理` : null,
+        list.length > blocked ? `${list.length - blocked} 个已完成待查看` : null,
+        "点开查看驾驶舱",
+      ].filter(Boolean).join(" · ")
+      : "全部就绪 · 点开查看驾驶舱";
     return h_flex()
       .id("inkstone-waiting")
       .h(26)
@@ -279,20 +278,21 @@ export default class Tabs extends View {
       .rounded(6)
       .cursor_pointer()
       .text_color(tone)
-      .hover((s) => s.bg(t.hover))
+      .hover((s) => s.bg(PAPER(t) ? `${MARK}4d` : t.hover))
       .tooltip(tip)
       .accessibility_label(tip)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-      .on_click(() => {
-        // 与侧栏的智能体行一致：只在确实要换空间/标签时才切换，避免重放 scrollback。
-        const sp = spaces().find((s) => s.id === first.space);
-        if (sp && !sp.active) run("space.select", { id: first.space });
-        if (first.tab && !sp?.tabs?.find((x) => x.id === first.tab)?.active) run("tab.select", { id: first.tab });
-        if (first.pane) run("pane.focus", { pane: first.pane });
-        else if (first.address) run("agent.focus", { terminal: first.address });
-      })
+      .on_click(() => openOverlay({
+        mod: "cockpit",
+        kind: "popup",
+        frame: "none",
+        at: "pointer",
+        width: 396,
+        height: 460,
+        props: { framed: true, width: 396, height: 460 },
+      }))
       .child(bellGlyph(tone))
-      .child(div().text_size(12).font_semibold().child(String(list.length)));
+      .when(list.length > 0, (el) => el.child(div().text_size(12).font_semibold().child(String(list.length))));
   }
 
   render() {
@@ -346,8 +346,8 @@ export default class Tabs extends View {
     // 右侧抽屉的页：文件 / 变更 / 会话 / 收藏 / 驾驶舱。
     // inkstone-changes 自己判断仓库与改动，不受「Git 工作树」开关影响，按钮常驻。
     const enabled = PANELS;
-    const icons = { files: "mods/files/file.svg", sessions: "mods/inkstone-chrome/terminal.svg", favorites: "mods/inkstone-chrome/pin.svg", cockpit: "mods/workspace-chrome/layers.svg" };
-    const names = { files: "文件", sessions: "会话", favorites: "收藏", cockpit: "驾驶舱" };
+    const icons = { files: "mods/files/file.svg", sessions: "mods/inkstone-chrome/terminal.svg", favorites: "mods/inkstone-chrome/pin.svg" };
+    const names = { files: "文件", sessions: "会话", favorites: "收藏" };
     this.syncPanel(space, panel, enabled);
     // 图标按钮固定在右侧：点已激活的页收起抽屉，点别的页切过去。
     // 用图标而非文字：中文词会挤掉标签页的位置（靠 tooltip 与无障碍名说明）。

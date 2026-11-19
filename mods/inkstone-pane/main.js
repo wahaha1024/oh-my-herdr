@@ -5,7 +5,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, props, run, theme, home, layout } from "herdr";
+import { panes, props, run, theme, home, layout, openOverlay, closeOverlay, shared, setShared } from "herdr";
 
 // 找第一个可见的 tab 帧（含 stack 里当前可见的那个），用来判断头在上还是在下。
 function paneFrame(node) {
@@ -52,7 +52,7 @@ export default class Pane extends View {
     const on = this.over === id;
     return div()
       .id(id)
-      .size(22).flex().items_center().justify_center()
+      .size(22).flex_none().flex().items_center().justify_center()
       .text_color(on ? ink(t, "ink", "foreground") : ink(t, "pencil", "muted"))
       .when(on, (el) =>
         PAPER(t)
@@ -67,6 +67,55 @@ export default class Pane extends View {
         run(command, args);
       })
       .child(svg(`mods/inkstone-pane/${art}.svg`).size(16));
+  }
+
+  // 只给 OMP 终端加历史按钮：它的会话记录存在 ~/.omp 下，别的程序没有。
+  isOmp(p) {
+    return Boolean(p?.terminal) && (p.app === "omp" || p.program?.key === "omp");
+  }
+
+  // 常驻的历史发言按钮：开过就高亮，再点一次收起。
+  histButton(t, p) {
+    const id = `ph-h-${p.pane}`;
+    const on = this.over === id || shared("inkstone.history")?.term === p.terminal;
+    return div()
+      .id(id)
+      .size(22).flex_none().flex().items_center().justify_center()
+      .text_color(on ? ink(t, "ink", "foreground") : ink(t, "pencil", "muted"))
+      .when(on && PAPER(t), (el) => el.bg("#f8dc4c9e").rounded_tl(3).rounded_tr(8).rounded_br(4).rounded_bl(9))
+      .when(on && !PAPER(t), (el) => el.bg(t.hover).rounded(6))
+      .on_hover((h, cx) => {
+        this.over = h ? id : this.over === id ? null : this.over;
+        cx.notify();
+      })
+      .on_click((_e, cx) => {
+        cx.stop_propagation();
+        const st = shared("inkstone.history");
+        if (st && st.term && st.term === p.terminal) {
+          closeOverlay(String(st.id ?? ""));
+          setShared("inkstone.history", null);
+          cx.notify();
+          return;
+        }
+        run("pane.focus", { pane: p.pane });
+        // shared 只有一份：先把别的窗格开着的历史浮层收掉，
+        // 否则它就成了没人认领的窗口，而按钮会一直以为自己还开着。
+        if (st?.id && st.id !== "pending") closeOverlay(String(st.id));
+        setShared("inkstone.history", { term: p.terminal, id: "pending" });
+        const oid = openOverlay({
+          mod: "inkstone-history",
+          kind: "window",
+          key: `hist-${p.terminal}`,
+          frame: "none",
+          width: 484,
+          height: 0.72,
+          at: "pointer",
+          props: { terminal: p.terminal },
+        });
+        setShared("inkstone.history", { term: p.terminal, id: String(oid ?? "") });
+        cx.notify();
+      })
+      .child(svg("mods/inkstone-history/history.svg").size(15));
   }
 
   render(cx) {
@@ -113,10 +162,20 @@ export default class Pane extends View {
         el.child(svg("mods/inkstone-chrome/spinner.svg").size(16).flex_none().text_color(t.working).spin(900)))
       .when(st === "blocked", (el) => el.child(needs))
       .when(st === "done", (el) => el.child(svg("mods/inkstone-chrome/check.svg").size(16).flex_none().text_color(t.done)))
+      // OMP 窗格有个常驻的历史按钮，它右边那 4 个只在悬停时出现。
+      // 未悬停时要在同一位置摆 4 个等宽的占位块（不能合并成一条 88px 的，
+      // 因为父级 gap 8 只加在相邻子元素之间，合并会让宽度少 24px，
+      // 悬停时历史按钮就往左挪，点下去正好落在 split-right 上）。
+      .when(this.isOmp(p), (el) => el.child(this.histButton(t, p)))
       .when(this.hovered, (el) =>
         el.child(this.button(t, `ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }))
           .child(this.button(t, `ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane }))
           .child(this.button(t, `ph-z-${pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }))
-          .child(this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane })));
+          .child(this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane })))
+      .when(!this.hovered && this.isOmp(p), (el) =>
+        el.child(div().flex_none().size(22))
+          .child(div().flex_none().size(22))
+          .child(div().flex_none().size(22))
+          .child(div().flex_none().size(22)));
   }
 }

@@ -36,6 +36,7 @@ Default is qingci (light). xuanmo (dark) and the optional zhi (paper) are bundle
 - **Sessions page** — scans OMP / Codex / Claude Code / Pi / project archives (OpenCode too when `sqlite3` is present), with search, source filters, current-folder and remote-machine scans, and one-click resume-command copy. A session already running in a terminal is marked open and clicking switches to it.
 - **Cockpit** — what each agent is doing, where it is stuck, and what it suggests next, on one page.
 - **Favourites** — pin the spaces and terminals you keep coming back to.
+- **Prompt history** — OMP panes get a button at the right end of the pane header; it opens every prompt you sent in that session, newest first, scrollable and live-updating. Click one to see three things in the panel: your prompt, the tools that turn ran, and the agent's last reply — the terminal keeps only about the last thousand lines, so older turns live here. Rows still present in the terminal carry a dot and jump back to their place.
 - **Remote spaces** — once a machine is connected, its folders, sessions and files list like local ones.
 
 ## Themes

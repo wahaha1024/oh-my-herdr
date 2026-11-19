@@ -9,11 +9,13 @@ import { props, theme, themes } from "herdr";
 
 const T = 12, LONG = 3206, TALL = 1794, CORNER = 46, FOOT = 40;
 
-// 亮色主题也画边线：ink-qingci/ 是同一套切片刻的，纸料换成青瓷的 background、
-// 墨线换成青瓷的 muted——不引入任何新颜色。只有当活动主题的这两个槽与烤进去的
-// 值完全一致时才用它，其它主题保持留空。深色主题一律不画（浅色纸边在玄墨上露白）。
-const QINGCI_PAPER = "#e8f0ec";
-const QINGCI_INK = "#5f6b67";
+// 对应内置亮/暗主题画边线：ink-qingci / ink-xuanzhi / ink-xuanmo 由同一套切片替换色值，
+// 不引入任何新颜色；仅当当前主题与对应切片色值匹配时启用，其余主题保持留空。
+const PRESETS = [
+  { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
+  { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+];
 let cacheKey = "";
 let cacheDir = null;
 function artDir(t) {
@@ -21,8 +23,10 @@ function artDir(t) {
   const key = t.background ?? "";
   if (key !== cacheKey) {
     cacheKey = key;
-    const cur = themes().find((x) => x.light && x.colors.background === key);
-    cacheDir = key === QINGCI_PAPER && cur?.colors.muted === QINGCI_INK ? "ink-qingci" : null;
+    const p = PRESETS.find((x) => x.bg === key);
+    if (!p) { cacheDir = null; return null; }
+    const cur = themes().find((x) => x.colors?.background === key);
+    cacheDir = cur?.colors?.muted === p.muted ? p.dir : null;
   }
   return cacheDir;
 }

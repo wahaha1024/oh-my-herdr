@@ -6,12 +6,66 @@
 // Cockpit 上游是 macOS / Linux 的 Rust TUI 插件，Windows 上无法运行它的二进制，
 // 所以这里保留它的信息结构，界面用 herdr 的 mod 重画。
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, spaces, run, theme } from "herdr";
+import { agents, spaces, run, theme, themes, props, closeOverlay } from "herdr";
 
 const LABEL = { working: "运行中", blocked: "待处理", done: "已完成", idle: "空闲" };
 const tone = (t, s) => (s === "blocked" ? t.blocked : s === "done" ? t.done : s === "working" ? t.working : t.idle ?? t.dim);
+const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
+const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FOOT = 40;
+const EDGE_PRESETS = [
+  { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
+  { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+];
+let edgeCacheKey = "";
+let edgeCacheDir = null;
+function artEdgeDir(t) {
+  if (t.paper) return "ink";
+  const key = t.background ?? "";
+  if (key !== edgeCacheKey) {
+    edgeCacheKey = key;
+    const p = EDGE_PRESETS.find((x) => x.bg === key);
+    if (!p) { edgeCacheDir = null; return null; }
+    const cur = themes().find((x) => x.colors?.background === key);
+    edgeCacheDir = cur?.colors?.muted === p.muted ? p.dir : null;
+  }
+  return edgeCacheDir;
+}
+function paperCard(view, t, content, fixedW, fixedH) {
+  const dir = artEdgeDir(t);
+  const line = tint(t.accent, "cc");
+  if (!dir) {
+    const box = content.rounded(8).border(1).border_color(line);
+    return fixedW && fixedH ? box.w(fixedW).h(fixedH) : box;
+  }
+  const w = Math.max(240, fixedW ?? view._cardW ?? 396);
+  const h = Math.max(200, fixedH ?? view._cardH ?? 460);
+  const sideH = Math.max(0, h - 2 * EDGE_T);
+  const art = (name, iw, ih) => image(`mods/inkstone-edge/${dir}/${name}.svg`).absolute().w(iw).h(ih);
+  const hEdge = (side) => div().relative().w_full().h(EDGE_T).flex_none().overflow_hidden()
+    .child(div().absolute().left(0).top(0).w(Math.max(0, w - EDGE_CORNER)).h(EDGE_T).overflow_hidden().child(art(`${side}-l`, EDGE_LONG, EDGE_T).left(0).top(0)))
+    .child(div().absolute().right(0).top(0).w(Math.min(w, EDGE_CORNER)).h(EDGE_T).overflow_hidden().child(art(`${side}-r`, EDGE_CORNER, EDGE_T).right(0).top(0)));
+  const vEdge = (side) => div().relative().w(EDGE_T).h_full().flex_none().overflow_hidden()
+    .child(div().absolute().left(0).top(0).w(EDGE_T).h(Math.max(0, sideH - EDGE_FOOT)).overflow_hidden().child(art(`${side}-t`, EDGE_T, EDGE_TALL).left(0).top(0)))
+    .child(div().absolute().left(0).bottom(0).w(EDGE_T).h(Math.min(sideH, EDGE_FOOT)).overflow_hidden().child(art(`${side}-b`, EDGE_T, EDGE_FOOT).left(0).bottom(0)));
+  const root = v_flex().id("ck-card");
+  return (fixedW && fixedH ? root.w(w).h(h) : root.size_full().min_h(0)
+    .on_size_change((sz, cx) => {
+      if (Math.abs((view._cardW ?? 0) - sz.width) >= 1 || Math.abs((view._cardH ?? 0) - sz.height) >= 1) {
+        view._cardW = sz.width;
+        view._cardH = sz.height;
+        cx.notify();
+      }
+    }))
+    .child(hEdge("top"))
+    .child(h_flex().w_full().flex_1().min_h(0)
+      .child(vEdge("left"))
+      .child(div().flex_1().min_w(0).min_h(0).h_full().overflow_hidden().border(1).border_color(line).child(content))
+      .child(vEdge("right")))
+    .child(hEdge("bottom"));
+}
 
 function dot(t, status, size = 7) {
   if (status === "idle" || !status) return div().size(size).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
@@ -54,9 +108,11 @@ export default class Cockpit extends View {
   }
 
   go(a) {
-    run("space.select", { id: a.space });
-    run("tab.select", { id: a.tab });
+    const sp = spaces().find((s) => s.id === a.space);
+    if (sp && !sp.active) run("space.select", { id: a.space });
+    if (a.tab && !sp?.tabs?.find((x) => x.id === a.tab)?.active) run("tab.select", { id: a.tab });
     run("agent.focus", { terminal: a.address });
+    if (props()?.overlay) closeOverlay(props().overlay);
   }
 
   tile(id, label, value, color, t, onClick) {
@@ -121,10 +177,12 @@ export default class Cockpit extends View {
         .child(text)
         .when(count !== undefined, (el) => el.child(div().text_color(color ?? t.dim).child(String(count))));
 
-    return v_flex()
+    const p = props();
+    const framed = Boolean(p?.framed);
+    const inner = v_flex()
       .size_full()
       .min_h(0)
-      .bg(t.chrome)
+      .bg(framed ? (t.paper ?? t.background) : t.chrome)
       .child(h_flex()
         .h(34)
         .flex_none()
@@ -135,7 +193,18 @@ export default class Cockpit extends View {
         .border_color(t.border)
         .child(svg("mods/workspace-chrome/layers.svg").size(14).flex_none().text_color(t.accent))
         .child(div().flex_1().text_size(13).font_semibold().child("驾驶舱"))
-        .child(div().text_size(11).text_color(blocked.length ? t.blocked : t.dim).child(blocked.length ? `${blocked.length} 待您处理` : "全部就绪")))
+        .child(div().text_size(11).text_color(blocked.length ? t.blocked : t.dim).child(blocked.length ? `${blocked.length} 待您处理` : "全部就绪"))
+        .when(Boolean(props()?.overlay), (el) => el.child(div()
+          .id("ck-close")
+          .px(6)
+          .py(2)
+          .rounded(5)
+          .text_size(11)
+          .text_color(t.dim)
+          .cursor_pointer()
+          .hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .on_click(() => closeOverlay(props()?.overlay))
+          .child("Esc"))))
       .child(v_flex()
         .id("ck-body")
         .flex_1()
@@ -192,5 +261,6 @@ export default class Cockpit extends View {
           const started = since(a.space, a.tab);
           return this.row(a, t, started ? duration(Date.now() - started) : "");
         })));
+    return framed ? paperCard(this, t, inner, p?.width, p?.height) : inner;
   }
 }

@@ -8,13 +8,63 @@
 //         · 状态栏四块：系统资源 / 活跃端口 / 待处理 / 代码审查 → 改布局节点的 hidden
 // 左栏两组写回 layouts/oh-my-herdr.json，右栏写回 settings.json，重启后都还在。
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import {
-  theme, run, props, closeOverlay, shared, setShared,
+  theme, themes, run, props, closeOverlay, shared, setShared,
   appHome, readTextFile, writeTextFile, settings as readSettings,
 } from "herdr";
 
+const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
+const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FOOT = 40;
+const EDGE_PRESETS = [
+  { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
+  { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+];
+let edgeCacheKey = "";
+let edgeCacheDir = null;
+function artEdgeDir(t) {
+  if (t.paper) return "ink";
+  const key = t.background ?? "";
+  if (key !== edgeCacheKey) {
+    edgeCacheKey = key;
+    const p = EDGE_PRESETS.find((x) => x.bg === key);
+    if (!p) { edgeCacheDir = null; return null; }
+    const cur = themes().find((x) => x.colors?.background === key);
+    edgeCacheDir = cur?.colors?.muted === p.muted ? p.dir : null;
+  }
+  return edgeCacheDir;
+}
+function paperCard(view, t, content) {
+  const dir = artEdgeDir(t);
+  const line = tint(t.accent, "cc");
+  if (!dir) return content.rounded(8).border(1).border_color(line);
+  const w = Math.max(400, view._cardW ?? 784);
+  const h = Math.max(300, view._cardH ?? 544);
+  const sideH = Math.max(0, h - 2 * EDGE_T);
+  const art = (name, iw, ih) => image(`mods/inkstone-edge/${dir}/${name}.svg`).absolute().w(iw).h(ih);
+  const hEdge = (side) => div().relative().w_full().h(EDGE_T).flex_none().overflow_hidden()
+    .child(div().absolute().left(0).top(0).w(Math.max(0, w - EDGE_CORNER)).h(EDGE_T).overflow_hidden().child(art(`${side}-l`, EDGE_LONG, EDGE_T).left(0).top(0)))
+    .child(div().absolute().right(0).top(0).w(Math.min(w, EDGE_CORNER)).h(EDGE_T).overflow_hidden().child(art(`${side}-r`, EDGE_CORNER, EDGE_T).right(0).top(0)));
+  const vEdge = (side) => div().relative().w(EDGE_T).h_full().flex_none().overflow_hidden()
+    .child(div().absolute().left(0).top(0).w(EDGE_T).h(Math.max(0, sideH - EDGE_FOOT)).overflow_hidden().child(art(`${side}-t`, EDGE_T, EDGE_TALL).left(0).top(0)))
+    .child(div().absolute().left(0).bottom(0).w(EDGE_T).h(Math.min(sideH, EDGE_FOOT)).overflow_hidden().child(art(`${side}-b`, EDGE_T, EDGE_FOOT).left(0).bottom(0)));
+  return v_flex().id("prefs-card").size_full().min_h(0)
+    .on_size_change((sz, cx) => {
+      if (Math.abs((view._cardW ?? 0) - sz.width) >= 1 || Math.abs((view._cardH ?? 0) - sz.height) >= 1) {
+        view._cardW = sz.width;
+        view._cardH = sz.height;
+        cx.notify();
+      }
+    })
+    .child(hEdge("top"))
+    .child(h_flex().w_full().flex_1().min_h(0)
+      .child(vEdge("left"))
+      .child(div().flex_1().min_w(0).min_h(0).h_full().overflow_hidden().border(1).border_color(line).child(content))
+      .child(vEdge("right")))
+    .child(hEdge("bottom"));
+}
 const LAYOUT = "oh-my-herdr";
 const FILE = () => `${appHome()}/layouts/${LAYOUT}.json`;
 const SETTINGS_FILE = () => `${appHome()}/settings.json`;
@@ -289,12 +339,14 @@ export default class InkstoneSettings extends View {
 
   render(cx) {
     const t = theme();
+    const framed = Boolean(props()?.framed);
     if (!this.doc) {
-      return v_flex().w(720).h(500).bg(t.popover).p(16).gap(8)
+      const loading = v_flex().size_full().min_h(0).bg(t.paper ?? t.background).p(16).gap(8)
         .child(div().text_size(13).font_semibold().text_color(t.foreground).child("OMH 偏好"))
         .child(div().text_size(11).text_color(this.err ? t.blocked : t.dim).child(this.err ?? "读取布局…"));
+      return framed ? paperCard(this, t, loading) : loading;
     }
-    return v_flex().w(720).h(500).bg(t.popover).p(14).gap(12)
+    const inner = v_flex().size_full().min_h(0).bg(t.paper ?? t.background).p(14).gap(12)
       .child(h_flex().w_full().items_center().justify_between()
         .child(v_flex().gap(1)
           .child(div().text_size(13).font_semibold().text_color(t.foreground).child("OMH 偏好"))
@@ -307,5 +359,6 @@ export default class InkstoneSettings extends View {
         .child(this.left(t, cx))
         .child(div().w(1).h_full().flex_none().bg(t.border))
         .child(this.right(t, cx)));
+    return framed ? paperCard(this, t, inner) : inner;
   }
 }
