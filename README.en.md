@@ -80,6 +80,37 @@ Clone the repo and run the matching script — layout, mods and themes come out 
 
 To update a machine that already has it, add `-Force` (`./install.sh --force`): the scripts skip files that already exist, so without it the layout, mods and themes stay at the old version — the usual symptom is no torn paper edge around the terminal and no NEED YOU / IN FLIGHT sections at the bottom of the sidebar.
 
+## Troubleshooting
+
+Something looks off after installing (classic case: no torn paper edge around the terminal, no NEED YOU / IN FLIGHT sections at the bottom of the sidebar). Run these three checks on the machine that misbehaves:
+
+```powershell
+$cfg = "$HOME\.config\herdr-app"
+# 1) does the layout carry the four page strips? expect 4
+(Select-String -Path "$cfg\layouts\oh-my-herdr.json" -Pattern 'page-left|page-right|page-top|page-bottom').Count
+# 2) is the edge mod the version with the qingci slices? expect more than 0 (0 means the old one)
+(Select-String -Path "$cfg\mods\inkstone-edge\main.js" -Pattern 'ink-qingci').Count
+# 3) any mod load errors? expect empty
+(herdr-app status | ConvertFrom-Json).errors
+```
+
+macOS / Linux equivalents:
+
+```sh
+cfg="$HOME/.config/herdr-app"
+grep -c 'page-left\|page-right\|page-top\|page-bottom' "$cfg/layouts/oh-my-herdr.json"
+grep -c 'ink-qingci' "$cfg/mods/inkstone-edge/main.js"
+herdr-app status | grep -o '"errors":\[[^]]*\]'
+```
+
+| Result | Cause | Fix |
+|---|---|---|
+| 1 is not 4, or 2 is 0 | an older install is in place; the scripts skipped the existing files | `.\install.ps1 -Force` (`./install.sh --force`), then `herdr-app do layout.switch '{"name":"oh-my-herdr"}'`, or restart herdr-app |
+| 3 is not empty | herdr older than 0.1.16, no `themes` export, the edge mod fails to load | update herdr |
+| all three fine, still no edge | the active theme is not light — dark themes (xuanmo) draw no pale paper edge | `(Get-Content "$cfg\settings.json" -Raw \| ConvertFrom-Json).appearance` should be `light`, or run `herdr-app do app.theme '{"name":"qingci"}'` |
+
+Either way the config only takes effect after a reload: switch the layout once, or restart herdr-app.
+
 ## Limits
 
 - Sidebar width, drawer state and the folded rail are runtime state and may not survive a restart.
