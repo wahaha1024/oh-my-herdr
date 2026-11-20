@@ -1,253 +1,78 @@
 # Oh My Herdr
 
-> **Dev-branch notes (`dev` only).** This file is tracked on `dev` so both machines can share code locations, change notes and troubleshooting steps. `main` carries a different, public `RECIPE.md` — that is the file the layout marketplace reads and renders as its layout page. The notes here never go there, and `RECIPE.zh.md` stays on `dev` alone; see *Merging into `main`* at the end of this file. Never `git push` to `origin` after an edit — wait for explicit approval. The public repo carries `mods/`, `themes/`, `layouts/`, `pixel-icons/`, `programs.json`, the install scripts, both READMEs, the public `RECIPE.md` and LICENSE.
-
-A Herdr layout with machines, folders, spaces and terminals on the left. A 380px drawer on the right holds Files, Sessions and Favourites; the 28px status bar holds CPU, memory, ports, pending agents and Review. Space colours carry across the UI, and the sidebar can collapse to an icon rail.
-
-[中文版 RECIPE](RECIPE.zh.md)
+A workbench layout for the Herdr desktop app: machines, folders, spaces and terminals on the left, one 380 px drawer for files, sessions and favourites, and a 28 px status bar with CPU, memory, ports, waiting agents and review. Qingci follows light mode and Xuanmo dark mode; the optional Zhi paper theme adds torn paper edges and highlighter selection.
 
 ![Oh My Herdr](preview.png)
 
-## Next (2026-11-20)
-
-Starting points for the other machine, in priority order. Each item names the files it touches.
-
-### 1. UI language switching (zh / en)
-
-Every label is a Chinese literal, spread across 18 mods: `cockpit`, `inkstone-agents`, `inkstone-chrome`, `inkstone-favorites`, `inkstone-files`, `inkstone-history`, `inkstone-inbox`, `inkstone-menu`, `inkstone-metrics`, `inkstone-pane`, `inkstone-ports`, `inkstone-review`, `inkstone-sessions`, `inkstone-settings`, `inkstone-tabs`, `inkstone-workbench`, plus the `mod.json` titles. There is no built-in hook: `settings()` is typed `Record<string, unknown>` and gpui-kit exposes no UI locale (the `language` option in `EditorState` is a syntax mode).
-
-- **One setting, read everywhere.** `shared("inkstone.lang")` = `"zh" | "en"`, default `"zh"`. Write it from the preferences overlay in `inkstone-settings`; every mod reads it. Mods cannot import each other, so each one keeps its own table at the top of `main.js`.
-- **Table shape.** `const STR = { zh: {…}, en: {…} }; const L = () => STR[shared("inkstone.lang") ?? "zh"] ?? STR.zh;` Keys stay stable; a missing key must fall back to `zh`, never render `undefined`.
-- **Translate:** status words (`待处理 / 运行中 / 已完成 / 空闲`, `等你决定 / 全部就绪`), screen titles (`驾驶舱`, `系统资源`, `待处理`, `目录收藏`, `文件`, `历史发言`, `偏好`, `审查`, `会话`, `收藏`), empty states, tooltips, `accessibility_label` strings, `notify()` titles, the right-click items in `inkstone-menu`, relative time (`刚刚 / 分钟 / 小时 / 天`), and `待你处理` in the pane header.
-- **Do not translate:** anything from the app or the agent — space and agent titles, Git output, file paths — and the labels Herdr itself draws.
-- **Width, after translating.** English is longer. Re-check the 268px sidebar, the 380px drawer, the 84px inbox block and `inkstone-menu`'s 248px overlay; use `truncate()` instead of widening a fixed block.
-- **Verify.** Set `en`, restart, then walk the sidebar, status bar, all three drawer pages, right-click menu, preferences, inbox, metrics, cockpit, review, sessions. Switch back and confirm nothing stayed English.
-
-### 2. The public surface after the gallery listing
-
-- `main` now carries a public `RECIPE.md`; the marketplace renders it as the layout page. Anything a visitor must know belongs there as well as in the README.
-- `preview.png` is 1600×1000 because the gallery card crops to 16:10 with `object-fit: cover`. After editing `preview.svg`, regenerate with `python mkprev.py` (it finds Edge or Chrome, or takes `HERDR_PREVIEW_BROWSER`) and copy the result over `layouts/oh-my-herdr.png`.
-- `screenshot.png` and `screenshot-paper.png` predate the Agents panel and the history button. Retake both before the next release so the README matches the app.
-- The repository description is capped at 350 characters by GitHub; the gallery `blurb` is that description, truncated.
-- `OiAnthony/oh-my-herdr` is a different layout with the same repository name. If the two stay hard to tell apart in the gallery, rename ours and update the README, `RECIPE.md` and the install snippets.
-
-### 3. Known gaps
-
-- History reads local OMP sessions on Windows only; `hc read` is the undocumented dependency, and macOS/Linux paths are untested.
-- OpenCode sessions need `sqlite3` on the machine that holds them.
-- The installers never delete themes from an earlier install, so old `inkstone-*` copies survive an upgrade. A `-Clean` switch is open work; until then the README tells people to delete by hand.
-- `inkstone-settings` only draws the paper card when opened with `props().framed`; the built-in Settings page has no edge by design.
-
-### Merging into `main`
-
-`main` keeps the public `RECIPE.md` and must not receive `RECIPE.zh.md`:
-
-```sh
-git switch main
-git merge --no-commit dev
-git checkout --ours RECIPE.md     # keep the public one
-git rm -f RECIPE.zh.md            # notes stay on dev
-git commit
-```
-
-`.gitignore` on both branches ignores `RECIPE.zh.md` only; `RECIPE.md` is tracked everywhere now.
-
-## 2026-11-20 audit fixes
-
-- **Data safety:** history copies use `cx.write_to_clipboard`, with no plaintext temporary file. History, Sessions and Settings recover from stale compare-and-swap (CAS) snapshots; settings writes are serialised and replay only the requested field change. History alignment starts unknown rather than falsely reporting zero retained lines.
-- **Session and file lifecycles:** cancel old file/history watches on context changes and close; reject late results from old spaces or history sources. Rebuild the file index if VCS detection completes after search starts. CLI detection misses expire after 60 seconds. Windows bulk deletion uses at most 50 paths/IDs per batch, splitting again when the encoded payload exceeds 24,000 characters; oversized individual records fail visibly rather than being deleted.
-- **Live Review:** the status summary polls every 25 seconds, caches child-repository discovery per location, and visits repositories sequentially. An open review refreshes every 5 seconds while retaining the selection. `liveDiff()` handles unborn SHA-1/SHA-256 repositories via an empty-tree comparison; `gitPath()` handles quoted paths and `core.quotePath=false` preserves Unicode. Local Unix current-turn discovery uses `sh` with positional arguments. Untracked preview failures remain retryable; the 800-row display cap and the host's 1 MiB read limit are explicit. No diff-body disk cache is introduced.
-- **Process controls and layout:** “结束” opens the same explicit confirmation style in Metrics and Ports; a failed command keeps the row and its error. Linux ports distinguish valid empty `lsof` results from failure and try `ss` as a fallback. Close/open/end hit targets are at least 28 logical pixels where changed. Only horizontal-dominant wheel gestures switch tabs. Drawer sync is coalesced into a one-shot task rather than running layout commands during render; shrinking the work column below drawer width + 432 pixels temporarily hides the drawer without forgetting the page.
-- **Install and sync:** shell dry-run writes neither destination directories nor skip files. Windows validates the three required source directories and warns on zero writes. Program merges read UTF-8/BOM safely; `refresh.ps1` keeps personal programs outside the release patch. Preserve the current checkout's separate CodeBuddy registration and add-only program-merge policy.
-- **Edge palette adaptation:** all three built-in slice sets now use paper one step lighter than the theme background with creases in its `muted`. `ink-xuanzhi` and `ink-xuanmo` previously filled paper with their own background colour and held creases at 0.05–0.07 opacity, so the deckle vanished; xuanmo also drew creases in pure black on a near-black background, which has no contrast at all. Matching now keys on `background`, with `muted` as a tiebreaker and `xuanzhi-dimmed` / `xuanmo-dimmed` registered as their own rows. All 9 `PRESETS` copies returned identical results across 9 palettes; qingci and xuanzhi verified on the live window.
-- **Creating spaces and folders:** new [`inkstone-space`](mods/inkstone-space/main.js) with two modes. The top-bar `+` opens `space`: type a directory, use the system picker or a recent entry, pick local/remote machine and a launch program, defaulting to the focused pane's directory. Project and directory context menus gained “新建文件夹…” and “在此新建空间…” ([`inkstone-workbench`](mods/inkstone-workbench/main.js) passes `{folder, machine}` to the `dir` branch of [`inkstone-menu`](mods/inkstone-menu/main.js)); `folder` mode creates a subdirectory under that parent and inherits its machine. On success it calls `space.new`, records `shared("inkstone.recentFolders")` and closes the overlay. Two hard constraints: never `await exec` inside a host event callback — the host waits for the callback to return, so the panel stays on “创建中…” forever; run the async flow from its own `make(cx)` so the callback returns immediately and failures land in `this.err` via `.catch`. Create directories with idempotent `mkdir -p` (Git Bash provides it on Windows), falling back to `cmd /c mkdir` and treating its “already exists” exit code 1 as success; directories are never created on a remote machine, only a hint to create them there.
-- **Verification boundary:** targeted native checks and isolated behavioural probes cover the changed paths. macOS and remote Windows are not available here; Unix command paths use Git Bash probes, not claims of native-platform certification. WSL is not installed. Remote failures identify the machine and the `sh`/`awk` prerequisite instead of silently showing an empty list. Test destructive actions only on disposable processes and session records.
-- **Windows runtime proof:** an independent `HERDR_APP_HOME` and `HC_SESSION` loaded the checkout with `status.errors=[]`. Captured qingci/xuanmo/zhi, the file drawer hidden on shrink and restored on expansion, and native settings/session/resource/port/history entry states. An unborn repository displayed its staged Chinese path; changing that file updated the open review without clicking Refresh. A PowerShell-only test pane exercised the history empty state, not an interactive OMP conversation. Test windows and core sessions are disposable; do not drive the person's real window.
-
-## 2026-11-19 development handoff
-
-In the checkout, run `git switch dev` and `git pull --ff-only origin dev`. Back up the live Herdr config on a machine with an existing install. Preview with `.\install.ps1 -DryRun -Force` on Windows or `./install.sh --dry-run --force` on macOS/Linux, then remove the dry-run flag to install and switch layouts or restart. Without `-Force` / `--force`, the installers report and skip existing files; even with it, existing `programs.omp` and `programs.codebuddy` entries are kept. `refresh.ps1` goes the other way (live configuration → repository), merging only those two program keys and keeping other repository entries. Do not sync `data/` caches or OMP session logs between machines.
-
-### OMP history and reader (`d41c014`, `4459530`)
-
-- **Entry points.** The clock in [`inkstone-pane`](mods/inkstone-pane/main.js) opens history for a local Windows OMP pane. In [`inkstone-history`](mods/inkstone-history/main.js), `rounds()` groups prompts, replies and tools and places compaction markers; `firstKeptEntryId` can point to a user or assistant message. Search all three kinds of text, navigate with ↑/↓, jump with Enter, double-click or the arrow, or open the 62% × 86% reader with the button or `r`. The reader reuses `shared("inkstone.history.read")` rather than rereading the log. A dot means no scrollback match. Do not paste `/tree` as a workaround: OMP receives the pasted text as a prompt, and the CLI cannot target a tree node.
-- **First paint and refresh.** `load()` resolves the log by `pane.cwd` and title (`FOUND` keeps hits for 120 seconds), then paints cached rounds before parsing. `readMessages()` prefers Node and resumes from `seen`, the byte after the last complete newline. Leave partial lines for the next pass and reread from zero if the file shrank below the offset. Without Node, PowerShell scans the whole file. Both subprocesses send filtered records, never the full JSONL across IPC. `follow()` owns one cancellable `watchFolder` handle and coalesces writes into a reload after 2 seconds; a title/cwd change invalidates old reads and restarts the watch. The 15-second check also retries if the watch failed. `syncAlign()` reuses alignment if the scrollback total and alignment length match, otherwise uses the 1,500 ms `hc read` cache.
-- **Disk cache.** `PARSED` holds at most four sessions; `${appHome()}/data/inkstone-history-cache.json` keeps the three most recent paths in `{v:1, entries:{…}}`. `utf8Bytes()` limits the whole serialised document to 900,000 UTF-8 bytes, below `readTextFile`'s 1 MiB limit even for Chinese and emoji. Saves during refresh are at least 5 seconds apart; close attempts to flush a pending save. `writeTextFile(path, text, expected)` requires the original contents as `expected`; `null` is only for a new file. On a stale snapshot, reread and merge once; advance the snapshot only after success.
-- **Visual changes.** Edit `FS`, `sectionLabel()`, `row()`, `markRow()` and `renderRead()`. Use theme slots: `accent` for selection/jump, `done` for replies, `working` for tools, and `popover` for the paper search background. Keep the system font and the paper highlighter; GPUI rejects `bg("transparent")`.
-- **Verify on the receiving machine.** In the live config, run `herdr-app check mods/inkstone-history` and check that `herdr-app status` reports no errors. Use an OMP session with a long reply and a compaction marker; check search, Esc clearing search, `r` opening the reader and Esc closing it, and arrows only on aligned turns. Check `qingci`, `xuanmo` and `zhi`. The previous machine's ~40 MB probe took 421 ms for a full parse and 103 ms for an empty tail; these are parser timings, not time to first paint. Measure uncached open, first open with disk cache after restart, and same-process reopen separately. Test complete and partial appended lines on a copy of the log.
-
-### Sidebar, Review and Sessions
-
-- **Spaces / Agents** (`de3c9a5`, `d41c014`): [`sidebar-lists`](layouts/oh-my-herdr.json) gives Spaces and Agents weights 5:4 with zero gap. [`inkstone-workbench`](mods/inkstone-workbench/main.js) groups by machine → folder → space; [`inkstone-agents`](mods/inkstone-agents/main.js) lists waiting, running and done separately. `EDGE_B` / `EDGE_TOP` crop the adjacent card edges to 8 px. The terminal's [`artDir()`](mods/inkstone-edge/main.js) uses the original paper art for `paper`; otherwise a palette whose `background` hits a preset gets `ink-qingci`, `ink-xuanzhi` or `ink-xuanmo`, with `muted` only breaking ties between presets sharing a background and `*-dimmed` variants registered as their own rows.
-- **Review** (`3963819`, `d41c014`): [`inkstone-review`](mods/inkstone-review/main.js) opens from the status bar and reads live Git changes with `git diff HEAD`, loading untracked file bodies only on demand. Unified and split views use the same diff. `turnEdits()` / `turnPaths()` resolve paths from `edit` / `write` / `apply_patch` since the latest user message, for repository discovery and ordering, not as a substitute for Git. If the current turn is empty, check UTF-8 paths on Windows and whether the tail contains a user boundary. `tailLines()` filters for user and `tool_execution_start` lines in the subprocess; unfiltered logs can exceed the 8 MiB `exec` output limit.
-- **Sessions** (`d41c014`): [`inkstone-sessions`](mods/inkstone-sessions/main.js) adds CodeBuddy, local/remote browsing and a separate 45-second list cache at `data/inkstone-sessions-cache.json`. Test single and bulk deletion only with disposable records: deletion affects actual session records, not just list entries. The right drawer holds Files, Sessions and Favourites; changes go through Review, and Cockpit is a top-bar popup. Keep the two README files user-facing; put troubleshooting here.
-
-
 ## What you see
 
-The window has no OS titlebar (`"titlebar": "none"`); the layout draws its own chrome. Four regions:
+- **Sidebar (268 px, collapses to a 44 px icon rail).** Brand strip with search, layout menu and `+`. Spaces grouped by machine → folder → space, each row led by a pixel sprite and the space's colour. Agents in three groups — waiting, running, done — each row one click from its terminal. Footer: Preferences, Settings, Add machine.
+- **Terminal area.** A 42 px header holds the tabs, Files / Sessions / Favourites, the Cockpit popup and the window controls. Each pane has a custom header: program, `~/`-folded folder, and the agent state (spinner, “waiting for you”, or a done check), with split / zoom / close on hover.
+- **Right drawer (380 px).** Files: tree with search, read-only highlighted preview, `git` / `jj` status marks and one-click `@relative/path` copy. Sessions: OMP, Codex, Claude Code, CodeBuddy, Pi, project archives and optional OpenCode, filtered by keyword and source, local or on connected machines. Favourites: project folders you keep coming back to.
+- **Status bar (28 px).** Server and branch, CPU and memory, listening ports, waiting agents, Review.
 
-**Sidebar, left, 284px** (`min` 44, `max` 420): a 44px brand strip, a flexible column for Spaces and Agents at weights 5:4, then a 40px footer. See the handoff above for grouping and card edges.
+## Install
 
-**Work column, right**, a column of three:
+Ask your agent:
 
-- 42px header (`inkstone-tabs`): terminal tabs, Files/Sessions/Favourites buttons, a Cockpit popup and window controls.
-- Work area: four 12px `inkstone-edge` slices around `panel-body`, plus the 380px drawer. The pane header is `inkstone-pane` (30px, always shown); the pane gap is 1px.
-- 28px status row: `workspace-status` grows; `inkstone-metrics`, `inkstone-ports`, `inkstone-inbox` and `inkstone-review` take 152, 64, 84 and 148px respectively.
+```
+Read ~/.config/herdr-app/AGENTS.md, then add this layout: github.com/wahaha1024/oh-my-herdr
+```
 
-The root is a `row`, background `canvas`, `traffic_lights: [12, 16]`, `terminal_padding: [14, 12]`, `divider: { width: 1, color: "border" }`, `terminal_menu: "inkstone-paste"`, `theme: { "light": "qingci", "dark": "xuanmo" }`, `preview: "layouts/oh-my-herdr.png"`.
+Or run the script:
+
+```sh
+git clone https://github.com/wahaha1024/oh-my-herdr
+cd oh-my-herdr && ./install.ps1 -Force        # macOS / Linux: ./install.sh --force
+herdr-app do layout.switch '{"name":"oh-my-herdr"}'
+```
+
+The installer needs an initialised config directory (`~/.config/herdr-app` with `settings.json`), so launch Herdr once first. Without `-Force` / `--force` it reports and skips files that already exist.
 
 ## How it behaves
 
-**Space colours.** Seven indices, stored in `shared("inkstone.spaceColors")` as `{ [spaceId]: 0..6 }` — never hex. A new space takes the least-used index; entries for spaces that no longer exist are dropped on the next read, so colours are reclaimed. A colour renders through `fill(t, i)`: `luminance(t.background) < 0.5` picks `PALETTE_DARK`, otherwise `PALETTE_LIGHT`, so a theme change swaps brightness and keeps hue. Badge text uses `#f7faf8` on dark fills and `#14131a` on light ones, decided by the fill's own luminance.
-
-`PALETTE_LIGHT = ["#a84a50", "#8a5619", "#7d640c", "#357041", "#34618f", "#5f5399", "#805083"]`
-`PALETTE_DARK = ["#f08a8a", "#f2a46a", "#e8c76a", "#7ecf86", "#6fb3ea", "#9a8ce6", "#c98ae6"]`
-
-**Pixel critters.** Space rows and the rail lead with an 8×8 sprite, not the number badge. `mods/inkstone-workbench/sprites.js` holds `SPRITES` (15 patterns: `slime ghost cat robot mushroom octopus skull heart potion frog rocket terminal coffee bomb star`; `.` clear, `x` the space's colour, `o` white, `k` near-black), `NAMES`, `glyph(rows, fill, kit, px = 2)`, `sprite(name, fill, kit, px = 2)`, `FOLDER` and `assign(spaces, kept)`. `assign` gives a new space the least-used pattern, hashed from its name; the map lives in `shared("inkstone.sprites")` as `{ [spaceId]: name }`, trimmed to live spaces on read. Alt+click a sprite cycles to the next name and writes the map back. Rows are drawn as GPUI rectangles, never as an SVG: a one-colour run per row becomes one `div().bg(...)` of `px * run` width, so an 8-unit pattern at `px = 2` stays crisp — a scaled SVG gets antialiased into mush. The project header's folder is `glyph(FOLDER, fill, kit, 2)`; the tab strip draws a program icon from `programs.json` with `image(icon).size(16)` (an integer 2× of 8 units).
-
-**Header bell.** `inkstone-tabs`'s `waiting(t)` lists agents with `status === "blocked" || "done"` and renders nothing when that list is empty; otherwise a 26px pill carries `bellGlyph(tone)` (the same rectangle-drawn 8×8 bell: rows `...xx...`, `..xxxx..`, `.xxxxxx.`, `.xxxxxx.`, `xxxxxxxx`, `.xxxxxx.`, `........`, `...xx...`) and the count. The tone is `blocked` when any agent is blocked, else `done`. A click selects that agent's space/tab (only when it is not already showing) and then `pane.focus`, falling back to `agent.focus`.
-
-Both `inkstone-workbench` and `inkstone-tabs` hold their own copy — mods cannot import each other — so a palette change is two edits. `tint(hex, alpha)` appends a two-digit alpha to a `#rrggbb` string; `luminance(hex)` is WCAG relative luminance.
-
-**Status, by shape.** `blocked` is a small solid square with radius 1 (7px), `done` a solid 7px circle, `working` a 2px ring plus a 12px `spinner.svg` spinning at 900ms, `idle` and no-status a 1.5px hollow circle. The status block in the status bar repeats the same shapes at 5px.
-
-**Clicks.** A space row selects the space (`space.select`). A terminal or agent row selects its space, its tab (`tab.select`) and focuses the pane or agent. Both are guarded: if the space and tab are already showing, nothing is sent — every select rebuilds the terminal view and replays its scrollback, so a redundant click would cost a full re-render. Group headers toggle expansion; the collapsed state lives in component state, not shared.
-
-**Hover.** Rows get `hover`; the space dot and the count get tooltips (`"<n> terminals"`); the panel buttons show their label always and no tooltip; the rail badges carry the space name, terminal count and status in their tooltip.
-
-**Rail mode.** The sidebar is in rail mode whenever its width is below 160 — decided by reading `layout()` for the `sidebar` node, so dragging the edge triggers it too. In rail mode: group rows show only the folder icon, spaces only the coloured index badge (centred, 15px), the list padding drops from 8 to 4, and the header keeps only `+`, centred (on macOS, where `inkstone-chrome` leaves room for the traffic lights instead of drawing a toggle button, `inkstone-workbench` stacks an `inkstone-sidebar-unfold` button directly above `+`). Nothing is disabled; clicks behave as before. The collapse button sends `layout.resize` to 44 (76 on macOS, for the traffic lights) and back to `shared("sidebar.width")` (default 268); it also mirrors the state into `shared("sidebar.collapsed")`.
-
-**Panel buttons.** `openPanel(id)` selects Files, Sessions or Favourites in `panel-stack` and shows `panel`; the active page is read from `stack.active`.
-
-**Files & Sessions drawers.** `inkstone-files` provides a Chinese-localised file tree and read-only highlighted preview (`Esc` clears search or exits preview), builds a path search index via `git ls-files` / `jj file list` (falling back to bounded directory traversal skipping `.git`, `.jj`, `node_modules`, `target`, `dist`, `.next`, `__pycache__`), renders `jj` or `git --no-optional-locks` status marks, and offers one-click `@relative/path` clipboard copy on every row and preview header. `inkstone-sessions` scans OMP (`~/.omp/agent/sessions`), Codex (`~/.codex/sessions`), Claude Code (`~/.claude/projects`), Pi (`~/.pi/agent/sessions`), project-local `.herdr/conversations` archives, and (when `sqlite3` is available) OpenCode databases across both the local machine and active remote `{ on }` spaces — reading the first and last 25 lines per `.jsonl` (or full file up to 64 KiB) to pick up the latest `title_change` / `custom-title` / `ai-title`. It includes live keyword search, source filter pills, a current-directory-first vs all-sessions toggle, and one-click resume-command copying. Clicking a row checks `live(s)` first (matching session ID in `argv`/`foreground.argv`, falling back to the first 24 characters of the OSC terminal title plus `cwd`) to switch to an open terminal, or launches `terminal.open` (`omp`/`claude --resume`, `codex resume`, `pi --session`, `opencode -s`).
-
-**Favourites drawer.** `shared("inkstone.favorites")` is `[{ name, folder }]`. "Collect current" resolves the current space's folder (its first terminal's live cwd, else the space's `folder`) and appends it with the folder's basename as the name; duplicates are ignored. A row clicks through to `space.new { folder }` and shows an "already open" chip when some space's live folder matches. The remove button deletes the row. The empty state offers a "browse folders…" row.
-
-**Pending (inbox).** The status block shows a status shape and "N waiting" (or "nothing waiting"), sized 84px; clicking opens the `inkstone-inbox` overlay (400×320), which lists the blocked agents with their space and tab.
-
-**Metrics / ports / review.** Metrics and ports open their overlays on click. The 148px Review block also displays a Git summary; see the handoff for the diff window.
-
-**Right-click pastes.** `terminal_menu: "inkstone-paste"` points Herdr's terminal menu at a mod that does not draw a menu at all: a 1×1 overlay that on open focuses `props().target.terminal` (falling back to the focused pane only for an explicit command with no target), runs `terminal.paste`, and closes its own overlay (`props().overlay` → `closeOverlay`). Net effect: a right-click in a terminal is a paste, with no menu in the way. `init()` returns early when `checking()` is true, so `herdr-app check` never touches the clipboard.
+| Do this | What happens |
+|---|---|
+| Click a space or a terminal row | That space and terminal take focus; the space colour carries into tabs and panes |
+| Click a waiting agent | Switches to that agent's space and tab, then focuses the pane |
+| Drag the sidebar edge below 160 px, or click collapse | The sidebar becomes an icon rail; clicking again restores the stored width |
+| Right-click inside a terminal | Pastes, with no menu in the way |
+| Click the clock in a pane header | Opens that pane's OMP history: search prompts, replies and tool calls, read by turn, jump back while the turn is still in scrollback |
+| Click Review in the status bar | Live `git diff HEAD` with the files this agent turn touched listed first, unified or side by side |
+| Change the system appearance | Qingci ↔ Xuanmo; choose Zhi in Preferences for the paper look |
 
 ## Built from
 
-**Layout node tree** (`layouts/oh-my-herdr.json`), top to bottom:
+The layout root is a column: a 42 px titlebar, then a row of sidebar (Spaces and Agents weighted 5 : 4), work area and a 1 px divider, then the 28 px status row. The work area wraps the pane body in four 12 px torn-paper slices and holds the drawer.
 
-```
-layout root     column titlebar none, traffic_lights [12,16],
-                       terminal_menu inkstone-paste, theme {light:qingci, dark:xuanmo}
-root            row    bg canvas, terminal_padding [14,12], divider 1/border,
-                       preview layouts/oh-my-herdr.png
-├ sidebar       column 284 (min 44 max 420, bg canvas, resizable, window_drag false)
-│ ├ brand       block 44  window_drag, content {mod: inkstone-chrome}
-│ ├ sidebar-lists column gap 0
-│ │ ├ workbench block weight 5, content {mod: inkstone-workbench}
-│ │ └ agents    block weight 4, content {mod: inkstone-agents}
-│ └ sidebar-footer block 40, content {mod: inkstone-chrome, props {footer: true}}
-└ work          column
-  ├ tabs        block 42 window_drag content {mod: inkstone-tabs}
-  ├ body        row padding [6,6] gap 8, bg canvas
-  │ ├ page      column, weight 1
-  │ │ ├ page-top    block 12 content {mod: inkstone-edge, props {side: top}}
-  │ │ ├ page-row    row, weight 1
-  │ │ │ ├ page-left   block 12 content {mod: inkstone-edge, props {side: left}}
-  │ │ │ ├ panel-body  block {tab: "active"} content {mod: pane}
-  │ │ │ │   header {mod inkstone-pane, always, 30, top}, radius 0, border 0, gap 1, lone
-  │ │ │ └ page-right  block 12 content {mod: inkstone-edge, props {side: right}}
-  │ │ └ page-bottom block 12 content {mod: inkstone-edge, props {side: bottom}}
-  │ └ panel     column 380 (min 280 max 620, resizable, hidden) → stack panel-stack
-  │              active files; children: files {mod inkstone-files},
-  │              sessions {mod inkstone-sessions}, favorites {mod inkstone-favorites}
-  └ status      row
-    ├ status-text    block  (mod workspace-status, grows)
-    ├ metrics        block 152 (mod inkstone-metrics)
-    ├ ports          block 64  (mod inkstone-ports)
-    ├ inbox          block 84  (mod inkstone-inbox)
-    └ review         block 148 (mod inkstone-review)
-```
+Each mod does one job:
 
-**Mods written for this layout** (each `mods/<name>/mod.json` is `{ "place": "none" }` unless noted; every one exports a `View` subclass and uses `gpui-kit` + `gpui-base` + `herdr`):
+- `inkstone-chrome` — brand strip and footer.
+- `inkstone-workbench` — machine / folder / space tree, terminals, icon rail.
+- `inkstone-agents` — waiting / running / done groups.
+- `inkstone-tabs` — tab strip, drawer buttons, Cockpit, window controls.
+- `inkstone-pane` — pane header.
+- `inkstone-edge` — torn-paper slices.
+- `inkstone-files`, `inkstone-sessions`, `inkstone-favorites` — the three drawer pages.
+- `inkstone-history` — turn-based history search and the large reader.
+- `inkstone-review` — Git diff with current-turn ordering.
+- `inkstone-metrics`, `inkstone-ports`, `inkstone-inbox` — status blocks.
+- `inkstone-settings` — the preferences overlay.
+- `inkstone-paste`, `inkstone-menu` — right-click paste and the context menu.
+- `cockpit` — top-bar popup.
 
-| Mod | Role | Reads / writes | Commands |
-|---|---|---|---|
-| `inkstone-chrome` | brand strip and footer, one component with a `footer` prop | `layout()` (sidebar width), `shared("sidebar.width")`, `shared("sidebar.collapsed")` | `layout.resize`, `mod.open`, `app.help`, `space.new` |
-| `inkstone-workbench` | machine/folder groups, spaces, terminals and icon rail | `spaces()`, `panes()`, `machines()`, `layout()`, `shared("inkstone.spaceColors")` | `space.select`, `tab.select`, `pane.focus`, `space.new` |
-| `inkstone-agents` | separate waiting, running and done groups | `agents()`, `spaces()`, `panes()`, `layout()` | `space.select`, `tab.select`, `pane.focus` |
-| `inkstone-tabs` | tab strip, panel buttons, window buttons | `spaces()`, `panes()`, `shared("inkstone.git")`, `shared("inkstone.spaceColors")`, `layout()` | `tab.select`, `tab.close`, `tab.new`, `layout.select`, `layout.show`, `layout.hide`, `window.*`. |
-| `inkstone-edge` | torn-paper slices for `paper` or a matching palette | `theme()`, `layout()` | — |
-| `inkstone-pane` | custom pane header: program icon + name, `~/`-folded cwd, working spinner / "待你处理" badge / done check, hover-only split-right / split-down / zoom / close buttons, pencil rule under it | `panes()`, `layout()`, `theme()` | `pane.focus`, `pane.split`, `pane.zoom`, `pane.close` |
-| `inkstone-files` | project file tree, path search, `@path` copy, `jj`/`git` marks | `spaces()`, `panes()`, `focused()`, `readTextFile`, `watchFolder`, `exec` | `cx.write_to_clipboard` |
-| `inkstone-history` | searchable OMP history by turn, compaction markers and full-window reader | session JSONL, `hc read`, `shared("inkstone.history")`, `shared("inkstone.history.read")` | `pane.focus`, `terminal.scroll` |
-| `inkstone-sessions` | multi-source session drawer (search, filters, remote `{ on }`, copy cmd) | local/remote session dirs via `exec` (PowerShell / `sh`+`awk` / optional `sqlite3`), `terminals()`, `spaces()` | `space.select`, `tab.select`, `pane.focus`, `terminal.open` |
-| `inkstone-favorites` | favourites drawer | `shared("inkstone.favorites")`, `panes()` | `space.new`, `mod.open` |
-| `inkstone-inbox` | 84px status block + overlay | `spaces()`, `agents` from panes | `space.select`, `tab.select`, `pane.focus`, `overlay.close` |
-| `inkstone-metrics` | 152px CPU/memory block | system counters | `overlay.close` |
-| `inkstone-ports` | 64px port count | listening sockets | — |
-| `inkstone-review` | Git summary and live unified/split diff with current-turn ordering | Git diff/status, OMP session log | `mod.open` |
-| `inkstone-settings` | preferences overlay (`overlay: 760×520`, title "OMH 偏好") | `theme()`, settings | `app.theme`, `overlay.close` |
-| `inkstone-paste` | right-click pastes straight into the terminal (`terminal_menu`); a 1×1 overlay that focuses the target terminal, runs `terminal.paste` and closes itself | `props().overlay`, `props().target.terminal` | `pane.focus`, `terminal.paste` |
-| `inkstone-menu` | Chinese context menu for workbench rows and optional `terminal_menu` (`overlay: 248×348`) | `props()`, `spaces()`, `panes()`, `terminals()`, `keys()`, `git` via `exec` | `pane.focus`, `terminal.*`, `pane.*`, `tab.*`, `space.*`, `app.*`, `worktree` |
-| `cockpit` | top-bar popup | `spaces()`, `panes()` | `space.select`, `tab.select` |
-
-**Shipped mods/assets it uses:** `changes`, `workspace-status`, `pane`, plus `mods/files/*.svg` icons.
-**Themes:** `themes/qingci.json` — background `#e8f0ec`, foreground `#2b333e`, selection `#c7d9cf`, cursor `#126e82`; ANSI `#4f5b5a #c23142 #1a6840 #66462a #126e82 #813c85 #495c69 #7d8983` and bright `#a5b3ac #82111f #207f4c #b78b26 #11659a #894276 #134857 #8f9c96`; slots `surface #e1eae4`, `canvas #d9e3dc`, `chrome #e1eae4`, `popover #d9e3dc`, `raised #d9e3dc`, `hover #e2ebe5`, `selected #c7d9cf`, `border #afcdd0`, `input #edf4ef`, `muted #5f6b67`, `dim #646c73`, `accent #126e82`, `accent_foreground #f2f8f4`, `solid #126e82`, `ring #126e82`, `working #66462a`, `blocked #c23142`, `done #1a6840`, `idle #a5b3ac`. `themes/xuanmo.json` — background `#14131a`, foreground `#d4cec4`, selection `#332f46`, cursor `#619ac3`; ANSI opens `#3a3646 #e1505d #2bae85 #e2c027 #619ac3 #c08eaf` (16 in all); slots `surface #1a1922`, `canvas #0f0e14`, `chrome #1a1922`, `popover #22212c`, `raised #22212c`, `hover #24222e`, `border #273443`, `input #1e1d27`, `muted #8b8597`, `dim #827f7c`, `accent #619ac3`, `accent_foreground #14131a`, `working #e2c027`, `blocked #e1505d`, `done #2bae85`, `idle #6b6478`. No art or files beyond the theme schema.
-**Paper theme (optional):** `themes/zhi.json` — background `#f8f5ee`, foreground `#1f2328`, selection `#cfe3fb`, cursor `#0969da`, GitHub-Light 16-colour ANSI, canvas `#dad1bf`, chrome `#f8f2de`, selected `#f8e68a`, plus 11 custom slots: `paper #f8f5ee`, `desk #dad1bf`, `ink #2a2420`, `pencil #5a554e`, `rule #b2c3dc`, `stroke #8e887f`, `mark #f8dc4c`, `bracket #2c4f9e`, `up #3b7a4b`, `down #c2412d`, `seal #f8f2de`. Mods never check theme names — `Boolean(theme().paper)` decides the paper typography, highlighter and parchment; the torn edge alone is drawn by any palette whose `background` matches a recoloured slice set (qingci, xuanzhi, xuanmo and their `-dimmed` variants) and skipped elsewhere. The paper look is still opt-in: the layout says `{light: qingci, dark: xuanmo}` and zhi is picked with `app.theme` or the preferences overlay.
-**Programs run:** `git` / optional `jj` (branch, status, file index, worktree lookups via `exec`), `hc` (core queries); on Windows PowerShell (`Get-NetTCPConnection`, `Get-Process`, `Get-CimInstance`, JSONL scan, `where`); on macOS/Linux/remote machines `sh` + `awk` + `command -v`, optional `sqlite3`, `vm_stat`/`top`/`sysctl`/`ps` or `/proc`, `lsof`/`ss`, `open`/`xdg-open`, `kill`. No Python at runtime, no network.
-**Art:** small icons come from Herdr's own SVGs (`mods/files/file.svg`, `mods/changes/changes.svg`, `mods/workspace-chrome/*.svg`, `mods/inkstone-chrome/{terminal,pin,spinner}.svg` plus small stroke glyphs for window buttons drawn inline). Space sprites, the project folder and the header bell are GPUI rectangles from `sprites.js` / `bellGlyph`, not assets. One image ships: `pixel-icons/codex.svg` (8×8, `#7a9dff`), wired to OMP through `programs.json` as `"omp": { "icon": "pixel-icons/codex.svg", "tint": false }`. The paper look adds ~3.2MB of SVGs taken from Looseleaf (MIT, license copied alongside): `mods/inkstone-chrome/ink/` holds 39 files — 17 parchment widths (144→400, step 16), 8 avatar discs + ring + 2 status dots, 6 ink-slip buttons, 2 pencil rules, 2 badges, LICENSE — `mods/inkstone-edge/ink/` holds the 8 torn-edge pieces, and `ink-{qingci,xuanzhi,xuanmo}/` the same 8 slices recoloured per palette: paper fill one step lighter than that theme's `background`, creases in its `muted`, so each palette gets the deckle without a single new colour. Parchment is chosen by nearest width and stretched, so no requested width can 404.
+Themes: `themes/qingci.json` (light) and `themes/xuanmo.json` (dark) are named in the layout's `theme`; `themes/zhi.json` is the optional paper theme.
 
 ## Watch out
 
-- **Selecting the space already showing must be a no-op.** Any `space.select`/`tab.select`, even to the same target, rebuilds the terminal view and replays the scrollback — the result looks like the terminal scrolling from the beginning. Guard every click path.
-- **`layout.resize` needs breathing room in the layout.** A `min` larger than the target clamps the resize silently: a `min` of 200 makes `layout.resize {px: 44}` a no-op and rail mode never triggers. Keep `min` at 44.
-- **Rail mode must be derived from width, not a flag.** Reading `layout()`'s `sidebar.size.px` keeps dragging the edge and clicking the button consistent.
-- **The palette is duplicated.** `PALETTE_LIGHT`/`PALETTE_DARK`, `luminance` and `tint` exist in both `inkstone-workbench` and `inkstone-tabs` because mods can't share modules. A change in one place silently diverges.
-- **Session matching checks `argv` first, then OSC title.** Live sessions match `argv`/`foreground.argv` for the session ID first and fall back to the first 24 characters of the terminal title plus `cwd`. Remote spaces also scan over `{ on }` via `exec`.
-- **Fixed status widths.** 152/64/84/148 are layout `px` values; change both the mod's text and the layout when longer content no longer fits.
-- **`inkstone-inbox`'s overlay is 400×320.** At larger sizes the empty state swims.
-- **`shared("sidebar.width")` starts undefined** — default it to 268 rather than reading it directly.
-- The drawer starts hidden (`hidden: true` on `panel`); `openPanel` must therefore both select the page and show the node, and the page must be read from `stack.active` rather than tracked separately, or the buttons drift out of sync after a keyboard switch.
-- **Do not swap the sprites for SVGs.** The 8×8 patterns are drawn as rectangles on purpose; a bell SVG rendered at 14px came out as a smooth blob with the pixel steps antialiased away. The same applies to the program icon: `image(...)` at 12px blurred it, at 16px (2× of 8 units) it is sharp.
-- **`programs.json` is a patch, not a file to copy blindly.** Current installers only add missing `omp` and `codebuddy` keys, preserving existing entries even with `-Force` / `--force`; `refresh.ps1` only merges those two keys back. Other program entries and top-level settings stay untouched. `pixel-icons/` must ship with it or the OMP icon path dangles and Herdr falls back to its own glyph.
-- **`inkstone-edge`'s `mod.json` must stay `{ "place": "none" }`.** Any other `place` makes Herdr splice the block into the layout automatically, and deleting the mod then leaves a hole in the layout.
-- **`titlebar` and `traffic_lights` belong on the layout document's outermost node** — the same level as `id`, `type` and `children`. Put them on the inner `root` row and they are silently ignored: the OS titlebar keeps floating above the layout, `window().buttons` stays `false`, and the three − □ × in `inkstone-tabs` never render. Moved out, the titlebar disappears and minimize/maximize/close sit in the tab strip right after the panel buttons.
-- **Paper is gated on a theme slot, not a theme name.** Every paper branch reads `Boolean(theme().paper)` and falls back to ordinary slots, because the Looseleaf art is hardcoded light hex — vendored artwork cannot follow a dark theme. Keep the fallback branch free of expressions that would throw when the slot is missing (no `t.mark.slice(...)`, no `t.paper` arithmetic).
-- **The three parchment slices must agree to the pixel.** Brand, list and footer draw three crops of one 1600px sheet (`top`, `mid` offset `-520`, `foot`); a 1px difference in any `on_size_change` shows a seam band. The content layer paints `theme().paper` behind itself so the sheet's own gradient steps never show as a stripe. Rail mode (<160px) skips parchment entirely — a 44px torn edge stretches visibly.
-- **Edge slices are matched by background, and all three sets recolour together.** A palette whose `background` equals a preset row gets that slice set; `muted` only breaks ties between rows sharing a background, and `xuanzhi-dimmed` / `xuanmo-dimmed` are registered as their own rows. Recolour every set at once — paper one step lighter than the theme background (`#edf4ef` / `#fcf8f0` / `#1e1d25`), creases in its `muted` at 0.16/0.18/0.26, outline 0.26 → 0.34 (xuanmo keeps its `#050408` 0.65) — and keep the 9 `PRESETS` / `EDGE_PRESETS` copies in sync. Changing one directory leaves the terminal deckled and the sidebar cards plain.
-- **A always-on pane-header button must reserve the hover group's width.** The header is an `h_flex` with `gap 8`; when the four hover buttons appear, the row grows and every button to their left shifts by 4×22 + 4×8 = 120px. The OMP history button sat right there, so a click aimed at it landed on `close` and killed the terminal. Render four empty 22px divs at the same slots while not hovered — one merged 88px block is not enough, because the parent's `gap` only applies between siblings.
-- **No arrow on an old turn? Check live scrollback first.** Run `hc read <term> --lines 20000 --json` against the exact current terminal. `complete: false` means the returned scrollback is partial, not that log parsing failed. Filter large JSONL logs in a subprocess; `readTextFile` is for small caches only.
-- **PowerShell commands sent through `exec` lose their double quotes.** Windows' argument parsing strips `"` before PowerShell sees it, so the command looks unterminated, PowerShell waits on stdin and the call only returns on timeout. Build all quoting from `[string][char]34`, and prefix command strings with `[Console]::OutputEncoding=[Text.Encoding]::UTF8;` — otherwise a Chinese path comes back as mojibake and the lookup fails silently.
-- **Locate the OMP session by `pane.cwd`, not by title search.** `~/.omp/agent/sessions/<cwd with [:\/] replaced by ->` holds only that project's sessions; scanning the whole store and falling back to “most recently written file” silently shows another project's conversation when the title is still empty.
+- The history panel reads local OMP session logs on Windows only.
+- OpenCode sessions need `sqlite3` on the machine that holds them.
+- The installers never delete themes from an earlier install. If the torn edges look wrong after upgrading, delete the old `inkstone-*` folders from `themes/` and reinstall with `-Force`; the layout needs Herdr 0.1.16 or later, which is when `themes` became importable from a mod.
+- Most UI text is Chinese (待你处理, 审查, 会话, 收藏). The layout works in any locale, but those labels stay Chinese.
 
-## Troubleshooting
+## Done when
 
-Something looks off after installing (classic case: no torn paper edge around the terminal, no Agents block with Needs you / In flight / Done in the lower sidebar). Run these three checks on the machine that misbehaves:
-
-```powershell
-$cfg = "$HOME\.config\herdr-app"
-# 1) does the layout carry the four page strips? expect 4
-(Select-String -Path "$cfg\layouts\oh-my-herdr.json" -Pattern 'page-left|page-right|page-top|page-bottom').Count
-# 2) is the edge mod the version with the qingci slices? expect more than 0 (0 means the old one)
-(Select-String -Path "$cfg\mods\inkstone-edge\main.js" -Pattern 'ink-qingci').Count
-# 3) any mod load errors? expect empty
-(herdr-app status | ConvertFrom-Json).errors
-```
-
-macOS / Linux equivalents:
-
-```sh
-cfg="$HOME/.config/herdr-app"
-grep -c 'page-left\|page-right\|page-top\|page-bottom' "$cfg/layouts/oh-my-herdr.json"
-grep -c 'ink-qingci' "$cfg/mods/inkstone-edge/main.js"
-herdr-app status | grep -o '"errors":\[[^]]*\]'
-```
-
-| Result | Cause | Fix |
-|---|---|---|
-| 1 is not 4, or 2 is 0 | an older install is in place; `install.ps1` / `install.sh` skipped the existing files | `.\install.ps1 -Force` (`./install.sh --force`), then `herdr-app do layout.switch '{"name":"oh-my-herdr"}'`, or restart herdr-app |
-| 3 is not empty | herdr older than 0.1.16, no `themes` export, the edge mod fails to load | update herdr |
-| all three fine, still no edge | the active palette may not match an edge preset | compare with `herdr-app do app.theme --name qingci` and check `inkstone-edge/main.js` `PRESETS` |
-
-Either way the config only takes effect after a reload: switch the layout once, or restart herdr-app.
-
-Deploying from the repo to a machine: `refresh.ps1` only syncs **live → repo**. Going the other way is a manual copy (back up to `~/.config/herdr-app/.backup-<date>/` first) or `install.ps1 -Force`.
+- `herdr-app status` reports no errors.
+- With Qingci, torn paper edges are visible around the terminal area and along the sidebar cards; switching to Zhi turns them into the paper look.
+- `Ctrl+Shift+P` lists Review, History and Sessions.
+- Clicking a waiting agent lands on its terminal.

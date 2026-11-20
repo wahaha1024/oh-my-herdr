@@ -1,12 +1,10 @@
-# Oh My Herdr
-> **开发分支专用（`dev`）**：本文件随 `dev` 分支跟踪，用来让两台电脑共享关键代码位置、改动记录与排查步骤。`main` 上另有一份**公开版** `RECIPE.md`——那是布局商店读取并整页渲染的配方；这里的内容不进 `main`，`RECIPE.zh.md` 也只留在 `dev`。合并方式见文末「合并到 main」。改完后**不要自动 push 到 `origin`**，等口头同意再推。公开仓库放 `mods/`、`themes/`、`layouts/`、`pixel-icons/`、`programs.json`、安装脚本、中英 README、公开 `RECIPE.md` 与 LICENSE。
->
+# Oh My Herdr 开发记录
+
+> **只留在 `dev` 分支**：这里记关键代码位置、改动历史与排查步骤，供维护者在多台电脑之间共享。`main` 上的 `RECIPE.md` 是布局商店读取并整页渲染的**公开描述**，本文件的内容不进 `main`。改完后不自动 push，等明确同意再推。
 
 一扇给自己用的工作台：左边按「机器 → 目录 → 空间 → 终端」分层，终端右侧有 380px 抽屉（文件、会话、收藏），底部是 28px 状态栏。默认亮色月白（qingci），另带玄墨（xuanmo）与可选的纸墨（zhi）。
 
 ![](preview.png)
-
-[English RECIPE](RECIPE.md)
 
 ## 下一步（2026-11-20）
 
@@ -40,17 +38,17 @@
 
 ### 合并到 main
 
-`main` 保留公开版 `RECIPE.md`，且不能收到 `RECIPE.zh.md`：
+`main` 只放公开版 `RECIPE.md`，开发记录 `dev.md` 不进 `main`：
 
 ```sh
 git switch main
 git merge --no-commit dev
 git checkout --ours RECIPE.md     # 保留公开版
-git rm -f RECIPE.zh.md            # 笔记留在 dev
+git rm -f dev.md                  # 开发记录留在 dev
 git commit
 ```
 
-两个分支的 `.gitignore` 现在只忽略 `RECIPE.zh.md`；`RECIPE.md` 两边都追踪。
+`RECIPE.md` 在两个分支都追踪且内容一致（来自 `main`）；`dev.md` 只在 `dev` 追踪，合并时删掉即可。
 
 ## 2026-11-20 审查修复交接
 
@@ -61,6 +59,8 @@ git commit
 - **安装与同步**：Shell 试运行既不创建目标目录，也不写跳过统计文件。Windows 安装先校验三个源目录，零写入明确警告；程序表兼容 UTF-8 与 BOM。`refresh.ps1` 不将个人程序夹带进发行补丁。保留当前工作树另行加入的 CodeBuddy 注册与程序表仅补缺失项策略。
 - **撕边配色适配**：三套内置切片统一为「纸面取该主题底色亮一档 + 折痕用主题 `muted`」。此前 `ink-xuanzhi`、`ink-xuanmo` 的纸面填充与自身底色完全相同、折痕不透明度只有 0.05~0.07，深色下等于没有撕边；玄墨的折痕还是纯黑，在近黑底上没有对比，改为 `muted` `#8b8597`。判定改为 `background` 命中即启用、`muted` 只做精确优先，`xuanzhi-dimmed` 与 `xuanmo-dimmed` 各登记一行。9 份 `PRESETS` 对 9 个主题求值结果完全一致，三套切片按同一比例渲染对照；实机 qingci 与 xuanzhi 已确认可见。
 - **新建空间与新建文件夹**：新增 [`inkstone-space`](mods/inkstone-space/main.js)，含两个模式。顶部 `+` 打开 `space` 模式：目录可手输、走系统选择器或点最近项，可选本机/远端机器与启动程序，默认取当前窗格目录。项目头或目录头右键新增「新建文件夹…」「在此新建空间…」（[`inkstone-workbench`](mods/inkstone-workbench/main.js) 传 `{folder, machine}` 给 [`inkstone-menu`](mods/inkstone-menu/main.js) 的 `dir` 分支），`folder` 模式在给定父目录下建子目录并沿用其机器。成功后调 `space.new`、写 `shared("inkstone.recentFolders")`、关闭浮层。两条硬约束：不要在宿主事件回调里 `await exec`——宿主会等回调返回，点击后面板永远停在「创建中…」；把异步流程放进自己的 `make(cx)`，回调立即返回，错误在 `.catch` 里落到 `this.err`。建目录用幂等的 `mkdir -p`（Windows 上由 Git Bash 提供），失败再回落 `cmd /c mkdir`，其「已存在」退出码 1 视为成功；远程机器不代建目录，只提示到那台机器上创建。
+- **项目归组与显式归属**：工作树不再各占一行——`refresh()` 里再用 `git rev-parse --git-common-dir` 认出主仓库，`projectOf()` 把它归到 `.git` 的父目录（裸仓库与 `--separate-git-dir` 直接用该目录），`groupsOf()` 按项目根分组，同时保留每个工作树自己的分支标签。`shared("inkstone.bindings")` 存「空间的归属目录」，右键空间「设置归属目录…」（[`inkstone-menu`](mods/inkstone-menu/main.js) 的 `space` 分支）打开 [`inkstone-space`](mods/inkstone-space/main.js) 的 `bind` 模式；`place()` 先看归属表，只有实时 cwd 与空间目录相同或在其下才采用，智能体 `cd` 到项目外不再把空间拽到别的组。仓库与工作树缓存键都带机器前缀，归属表参与 `refresh()` 的 `key`，切换归属立即重算。新建空间默认继承当前空间的机器，`shared("inkstone.recentFolders")` 改成按机器分档（旧的数组自动视为本机一档）。
+- **机器根目录**：`shared("inkstone.roots")` 按机器名记一个目录（`""` 指本机）。右键机器行「设置根目录…」（[`inkstone-menu`](mods/inkstone-menu/main.js) 的 `machine` 分支打开 [`inkstone-space`](mods/inkstone-space/main.js) 的 `root` 模式）把它设成 `E:\DSH` 这样的起点；`machinesView()` 随即在这台机器下面先插一行（`rootRow: true`），即使还没有空间也留位——右键它就是 `dir` 分支，可以直接「新建文件夹…」「在此新建空间…」，不必先有项目。根目录若已被某个项目组占用就不再重复插入。空组不显示 `0/0` 计数，提示行写「根目录 · 右键新建子项目」。
 - **验证边界**：改动路径均有针对性原生检查与隔离行为探针；本机没有 macOS、远端 Windows，Unix 命令以 Git Bash 验证，不等同原生平台认证；WSL 未安装。远端失败会写明机器及 `sh`/`awk` 前提，不再静默显示空列表。破坏性动作只用可丢弃进程、会话记录验证。
 - **Windows 实际界面验证**：通过独立 `HERDR_APP_HOME` 与 `HC_SESSION` 载入工作树，`status.errors=[]`；检查 qingci/xuanmo/zhi、缩窄收起与拉宽恢复文件抽屉，以及设置、会话、资源、端口、历史入口的原生界面。无 HEAD 仓库显示已暂存中文路径，修改该文件后审查窗口无需点击刷新即可更新。测试窗格只运行 PowerShell，历史实际窗口验证的是无对应会话的空态，不冒充交互式 OMP 对话。测试窗口与核心会话用完销毁，不操作用户现有窗口。
 
