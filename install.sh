@@ -3,10 +3,12 @@
 # 用法： ./install.sh                    # 不覆盖已有文件
 #        ./install.sh --force            # 覆盖同名文件
 #        ./install.sh --target DIR       # 装到别处
+#        ./install.sh --dry-run          # 只显示要写入的路径
 set -e
 
 TARGET="${HERDR_CONFIG:-$HOME/.config/herdr-app}"
 FORCE=0
+DRY=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -14,7 +16,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --target=*) TARGET="${1#--target=}" ;;
     --target) shift; TARGET="$1" ;;
-    -h|--help) sed -n '2,5p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -30,22 +32,22 @@ fi
 
 # 一个文件都没有时才复制；--force 时覆盖。
 # 跳过的会记到临时文件里，末尾整体提示一次——升级时最容易被这一点坑到。
-SKIPS="${TMPDIR:-/tmp}/oh-my-herdr-skip.$$"
-: > "$SKIPS"
+if [ -z "$DRY" ]; then
+  SKIPS=$(mktemp "${TMPDIR:-/tmp}/oh-my-herdr-skip.XXXXXX")
+  trap 'rm -f "$SKIPS"' EXIT
+fi
 put() {
   from=$1; to=$2
   if [ -e "$to" ] && [ "$FORCE" = 0 ]; then
     echo "  skip $to"
-    echo x >> "$SKIPS"
+    [ -n "$DRY" ] || echo x >> "$SKIPS"
     return 0
   fi
-  mkdir -p "$(dirname "$to")"
-  if [ -n "$DRY" ]; then
-    echo "  write $to"
-  else
+  if [ -z "$DRY" ]; then
+    mkdir -p "$(dirname "$to")"
     cp "$from" "$to"
-    echo "  write $to"
   fi
+  echo "  write $to"
 }
 
 echo "layouts/"
@@ -84,44 +86,61 @@ done
 
 echo "programs.json"
 if [ -z "$PY" ]; then
-  echo "  no python found — copy pixel-icons/ beside herdr-app, then add this under \"programs\" by hand:"
+  echo "  no python found — copy pixel-icons/ beside herdr-app, then merge these into \"programs\" (add only the keys you are missing):"
   echo '  "omp": { "icon": "pixel-icons/codex.svg", "tint": false }'
+  echo '  "codebuddy": { "name": "CodeBuddy", "icon": "icons/agent.svg", "tint": true, "tile": "#1c1d21", "color": "#d6d8db", "run": ["codebuddy"],'
+  echo '               "match": ["codebuddy-code", "cbc", "codebuddy.cmd", "codebuddy-code.cmd", "cbc.cmd", "codebuddy.ps1", "codebuddy-code.ps1", "cbc.ps1"] }'
 else
-  PROG_SRC="$SRC/programs.json" PROG_DST="$TARGET/programs.json" DRY="$DRY" "$PY" - <<'PY'
+  PROG_SRC="$SRC/programs.json" PROG_DST="$TARGET/programs.json" DRY="$DRY" FORCE="$FORCE" PYTHONIOENCODING=utf-8 "$PY" -B - <<'PY'
 import json, os, shutil, sys
 
 src, dst = os.environ["PROG_SRC"], os.environ["PROG_DST"]
 dry = os.environ.get("DRY")
+KEYS = ("omp", "codebuddy")
 
-ours = json.load(open(src, encoding="utf-8"))["programs"]["omp"]
+with open(src, encoding="utf-8-sig") as f:
+    ours = json.load(f)["programs"]
 cur = {}
 if os.path.exists(dst):
     try:
-        cur = json.load(open(dst, encoding="utf-8"))
+        with open(dst, encoding="utf-8-sig") as f:
+            cur = json.load(f)
     except Exception as e:
         sys.exit(f"  {dst} is not valid JSON ({e}) — left alone")
     if not isinstance(cur, dict):
         sys.exit(f"  {dst} is not an object — left alone")
 
 progs = cur.setdefault("programs", {})
-if "omp" in progs:
-    print(f"  skip omp (already {json.dumps(progs['omp'], ensure_ascii=False)})")
-else:
-    progs["omp"] = ours
-    if dry:
-        print(f"  would write {dst}")
+if not isinstance(progs, dict):
+    sys.exit(f"  {dst}: programs is not an object — left alone")
+
+add = []
+for k in KEYS:
+    if k in progs:
+        print(f"  skip {k} (already {json.dumps(progs[k], ensure_ascii=False)})")
     else:
-        if os.path.exists(dst):
-            shutil.copyfile(dst, dst + ".bak")
-        with open(dst, "w", encoding="utf-8") as f:
-            json.dump(cur, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        print(f"  wrote {dst}" + (" (backup: programs.json.bak)" if os.path.exists(dst + ".bak") else ""))
+        add.append(k)
+if not add:
+    sys.exit(0)
+print(f"  add {', '.join(add)}")
+if dry:
+    print(f"  would write {dst}")
+    sys.exit(0)
+if os.path.exists(dst):
+    shutil.copyfile(dst, dst + ".bak")
+for k in add:
+    progs[k] = ours[k]
+with open(dst, "w", encoding="utf-8") as f:
+    json.dump(cur, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+print(f"  wrote {dst}" + (" (backup: programs.json.bak)" if os.path.exists(dst + ".bak") else ""))
 PY
 fi
 
-SKIPPED=$(wc -l < "$SKIPS" | tr -d ' ')
-rm -f "$SKIPS"
+SKIPPED=0
+if [ -z "$DRY" ]; then
+  SKIPPED=$(wc -l < "$SKIPS" | tr -d ' ')
+fi
 
 echo
 if [ "$SKIPPED" -gt 0 ] && [ "$FORCE" = 0 ] && [ -z "$DRY" ]; then

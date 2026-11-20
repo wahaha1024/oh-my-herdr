@@ -1,5 +1,23 @@
 {
   "programs": {
-    "omp": { "icon": "pixel-icons/codex.svg", "tint": false }
+    "omp": { "icon": "pixel-icons/codex.svg", "tint": false },
+    "codebuddy": {
+      "name": "CodeBuddy",
+      "icon": "icons/agent.svg",
+      "tint": true,
+      "tile": "#1c1d21",
+      "color": "#d6d8db",
+      "run": ["codebuddy"],
+      "match": [
+        "codebuddy-code",
+        "cbc",
+        "codebuddy.cmd",
+        "codebuddy-code.cmd",
+        "cbc.cmd",
+        "codebuddy.ps1",
+        "codebuddy-code.ps1",
+        "cbc.ps1"
+      ]
+    }
   }
 }

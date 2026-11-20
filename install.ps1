@@ -17,6 +17,11 @@ $Target = [System.IO.Path]::GetFullPath($Target)
 if (-not (Test-Path (Join-Path $Target "settings.json"))) {
   throw "不像 Herdr 的配置目录（缺 settings.json）：$Target`n先用 Herdr 打开一次，它会把这里建好。"
 }
+foreach ($dir in 'layouts', 'mods', 'themes') {
+  if (-not (Test-Path -LiteralPath (Join-Path $src $dir) -PathType Container)) {
+    throw "安装包缺少 $dir/：$src`n请下载完整的 Oh My Herdr 安装包，不要只下载 install.ps1。"
+  }
+}
 
 $copied = 0
 $skipped = 0
@@ -59,39 +64,63 @@ Copy-Tree (Join-Path $src "themes") (Join-Path $Target "themes")
 Write-Host "像素图标 pixel-icons/"
 Copy-Tree (Join-Path $src "pixel-icons") (Join-Path $Target "pixel-icons")
 
-# programs.json：只加「OMP 用像素 Codex 图标」这一条，别人的程序表不动。
+# 只补 programs.omp 和 programs.codebuddy 两条；已有条目一律保留，-Force 也不覆盖。
+# 程序表是用户自己的配置，覆盖它会丢掉别人加的图标和启动参数。
 $progSrc = Join-Path $src "programs.json"
 $progDst = Join-Path $Target "programs.json"
+$progKeys = @('omp', 'codebuddy')
 Write-Host ""
 Write-Host "程序图标 programs.json"
-if (-not (Test-Path $progDst)) {
-  Write-Host "  写入  programs.json（OMP 显示像素 Codex 图标）"
-  $script:copied++
-  if (-not $DryRun) { Copy-Item $progSrc $progDst -Force }
-} else {
-  $pw = Get-Content $progSrc -Raw | ConvertFrom-Json
-  $ph = Get-Content $progDst -Raw | ConvertFrom-Json
-  if (-not $ph.programs) {
-    $ph | Add-Member -NotePropertyName programs -NotePropertyValue ([pscustomobject]@{})
+$pw = Get-Content -LiteralPath $progSrc -Raw -Encoding UTF8 | ConvertFrom-Json
+$hadProgramsFile = Test-Path -LiteralPath $progDst
+$ph = [pscustomobject]@{}
+if ($hadProgramsFile) {
+  $raw = Get-Content -LiteralPath $progDst -Raw -Encoding UTF8
+  if (-not $raw.TrimStart().StartsWith('{')) {
+    throw "programs.json 的根必须是对象，原文件未修改。"
   }
-  $old = $ph.programs.PSObject.Properties["omp"]
-  if ($null -eq $old) {
-    Write-Host "  加上  programs.omp"
-    if (-not $DryRun) {
-      Copy-Item $progDst "$progDst.bak" -Force
-      $ph.programs | Add-Member -NotePropertyName omp -NotePropertyValue $pw.programs.omp
-      $json = $ph | ConvertTo-Json -Depth 20
-      [System.IO.File]::WriteAllText($progDst, $json, (New-Object System.Text.UTF8Encoding($false)))
-      Write-Host "  原文件备份在 programs.json.bak"
-    }
-  } else {
-    Write-Host ("  跳过  programs.omp 已存在（现在是 " + ($old.Value | ConvertTo-Json -Compress -Depth 5) + "）")
+  try { $ph = $raw | ConvertFrom-Json } catch {
+    throw "programs.json 无法解析，原文件未修改：$($_.Exception.Message)"
+  }
+  if ($ph -isnot [pscustomobject]) {
+    throw "programs.json 的根必须是对象，原文件未修改。"
+  }
+}
+if ($null -eq $ph.PSObject.Properties['programs']) {
+  $ph | Add-Member -NotePropertyName programs -NotePropertyValue ([pscustomobject]@{})
+} elseif ($ph.programs -isnot [pscustomobject]) {
+  throw "programs.json 的 programs 必须是对象，原文件未修改。"
+}
+$add = @()
+foreach ($k in $progKeys) {
+  if ($null -ne $ph.programs.PSObject.Properties[$k]) {
+    Write-Host "  跳过  programs.$k 已存在"
     $script:skipped++
+  } else {
+    Write-Host "  加上  programs.$k"
+    $add += $k
+    $script:copied++
   }
+}
+if ($add.Count -gt 0 -and -not $DryRun) {
+  if ($hadProgramsFile) {
+    Copy-Item -LiteralPath $progDst -Destination "$progDst.bak" -Force
+    Write-Host '  原文件备份在 programs.json.bak'
+  }
+  foreach ($k in $add) {
+    $ph.programs | Add-Member -NotePropertyName $k -NotePropertyValue $pw.programs.PSObject.Properties[$k].Value
+  }
+  $json = $ph | ConvertTo-Json -Depth 100
+  [System.IO.File]::WriteAllText($progDst, $json, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 Write-Host ""
-Write-Host ("完成：写入 $copied 个文件，跳过 $skipped 个。")
+if ($DryRun) {
+  Write-Host "预览：计划写入 $copied 个文件，跳过 $skipped 个。"
+} else {
+  Write-Host "完成：写入 $copied 个文件，跳过 $skipped 个。"
+  if ($copied -eq 0) { Write-Warning '没有写入任何文件。' }
+}
 if ($skipped -gt 0 -and -not $Force -and -not $DryRun) {
   Write-Host ""
   Write-Host "注意：跳过的文件还是旧版本。" -ForegroundColor Yellow
