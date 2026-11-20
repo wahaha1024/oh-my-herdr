@@ -72,6 +72,17 @@ function items(p, git) {
         ...(local ? [["在文件管理器中打开", "inkstone.open", { folder: tg.folder }, false]] : []),
       ];
     }
+    case "machine": {
+      // 机器层右键：这里的动作以「这台机器的根目录」为目标，用它在下面起新项目。
+      const on = tg.machine ?? null;
+      const root = tg.root ?? null;
+      return [
+        ["新建文件夹…", "inkstone.space", { mode: "folder", folder: root, machine: on }, false],
+        ["在此新建空间…", "inkstone.space", { mode: "space", folder: root, machine: on }, false],
+        ["设置根目录…", "inkstone.space", { mode: "root", machine: on }, true],
+        ...(root ? [["复制路径", "inkstone.copy", { text: root }, false]] : []),
+      ];
+    }
     case "space":
       return [
         ["重命名空间", "space.rename", { id: tg.id }, false],
@@ -83,6 +94,8 @@ function items(p, git) {
             ]
           : []),
         ...(git === "linked" ? [["移除工作树", "worktree", { space: tg.id, action: "remove" }, false]] : []),
+        // 归属目录决定这个空间在侧栏归到哪个项目，独立于它此刻的 cwd。
+        ["设置归属目录…", "inkstone.space", { mode: "bind", space: tg.id, folder: tg.folder ?? null, machine: tg.machine ?? null }, true],
         ["关闭空间", "space.close", { id: tg.id }, true],
       ];
     default:

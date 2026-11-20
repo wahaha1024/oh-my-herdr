@@ -2,15 +2,34 @@
 // 为什么要单独一张面板：OMP 的会话按「启动时的工作目录」归档，而项目常常不在那个目录里。
 // 起空间时把「终端从哪个目录起」与「会话属于哪个项目」一次说清，比事后 cd 修正可靠。
 //
-// props: { mode?: "space" | "folder", folder?: string, machine?: string | null }
+// props: { mode?: "space" | "folder" | "bind" | "root", folder?: string, machine?: string | null, space?: string }
 //   space  — 目录可手输 / 系统选择器 / 最近用过；机器与起始程序可选。
 //   folder — 在 folder 下建一个新目录，建成后在其中开空间。
+//   bind   — 给已有空间指定「归属目录」：侧栏按它归组，不再跟着终端 cwd 跑。
+//   root   — 给一台机器指定根目录：侧栏在它下面先留一行，右键即可新建子项目。
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { run, props, closeOverlay, theme, machines, focused, knownAgents, pickFolder, exec, shared, setShared, window, home } from "herdr";
+import { run, props, closeOverlay, theme, machines, spaces, focused, knownAgents, pickFolder, exec, shared, setShared, window, home } from "herdr";
 
 const RECENT = "inkstone.recentFolders";
+const BINDINGS = "inkstone.bindings";
+const ROOTS = "inkstone.roots";
 const isWin = () => window()?.platform === "windows";
+
+// 最近目录按机器分开记：本机的 E:\项目 在远端没有任何意义。
+const recentFor = (on) => {
+  const all = shared(RECENT);
+  if (Array.isArray(all)) return on ? [] : all.slice(0, 6);
+  return (all?.[on ?? ""] ?? []).slice(0, 6);
+};
+
+const rememberRecent = (on, folder) => {
+  const all = shared(RECENT);
+  const map = Array.isArray(all) ? { "": all } : { ...(all ?? {}) };
+  const key = on ?? "";
+  map[key] = [folder, ...(map[key] ?? []).filter((x) => x !== folder)].slice(0, 6);
+  setShared(RECENT, map);
+};
 
 // 本机允许 ~ 与 ~/x；远程不展开——本机的 home 展开到远端就是错的目录。
 function expand(text, on) {
@@ -42,17 +61,21 @@ async function mkdir(path, on) {
 export default class NewSpace extends View {
   init(_props, cx) {
     const p = props() ?? {};
-    this.mode = p.mode === "folder" ? "folder" : "space";
-    this.machine = p.machine ?? null;
+    this.mode = ["folder", "bind", "root"].includes(p.mode) ? p.mode : "space";
+    this.space = p.space ?? "";
+    // 新建空间默认跟着当前空间走：在远端项目里按 + 通常也是想在远端开。
+    this.machine = this.mode === "space"
+      ? (p.machine ?? (spaces().find((s) => s.active)?.machine ?? null))
+      : (p.machine ?? null);
     this.busy = false;
     this.err = "";
     this.agents = [];
     this.agent = null;
-    this.recent = (shared(RECENT) ?? []).slice(0, 6);
+    this.recent = recentFor(this.machine);
     this.dir = InputState.new({ placeholder: this.machine ? "远端目录，例如 /home/me/project" : "目录，例如 E:\\项目" });
     this.dir.set_value(p.folder ?? (this.machine ? "" : (focused()?.cwd ?? home())));
     this.name = InputState.new({ placeholder: "新文件夹名" });
-    this.dir.on("submit", () => this.create(cx));
+    this.dir.on("submit", () => (this.mode === "bind" ? this.bind(cx) : this.mode === "root" ? this.setRoot(cx) : this.create(cx)));
     this.name.on("submit", () => this.create(cx));
     cx.timer.after(30, () => (this.mode === "folder" ? this.name : this.dir).focus());
     this.loadAgents(cx);
@@ -78,23 +101,66 @@ export default class NewSpace extends View {
     this.machine = name;
     this.err = "";
     this.agent = null;
+    this.recent = recentFor(name);
     this.dir.set_value(name ? "" : (focused()?.cwd ?? home()));
     this.loadAgents(cx);
     cx.notify();
   }
 
-  async browse(cx) {
+  browse(cx) {
     if (this.machine) {
       this.err = "系统选择器只在本机可用，远端目录请手输";
       cx.notify();
       return;
     }
-    const hit = await pickFolder({ prompt: this.mode === "folder" ? "在这里建文件夹" : "在新目录开空间" }).catch(() => null);
-    if (hit) {
-      this.dir.set_value(hit);
-      this.err = "";
+    // 与 create 同理：选择器要等用户操作，回调必须立刻返回。
+    pickFolder({ prompt: this.mode === "folder" ? "在这里建文件夹" : "在新目录开空间" })
+      .then((hit) => {
+        if (!hit) return;
+        this.dir.set_value(hit);
+        this.err = "";
+        cx.notify();
+      })
+      .catch(() => null);
+  }
+
+  // 归属目录：只写 shared，侧栏下一次渲染就按它归组。
+  bind(cx) {
+    const dir = expand(this.dir.value(), this.machine);
+    if (!dir) {
+      this.err = "请填写目录";
       cx.notify();
+      return;
     }
+    const all = { ...(shared(BINDINGS) ?? {}), [this.space]: dir };
+    setShared(BINDINGS, all);
+    closeOverlay(props()?.overlay);
+  }
+
+  unbind(_cx) {
+    const all = { ...(shared(BINDINGS) ?? {}) };
+    delete all[this.space];
+    setShared(BINDINGS, all);
+    closeOverlay(props()?.overlay);
+  }
+
+  // 机器根目录：只写 shared，侧栏下一次渲染就在这台机器下面留出那一行。
+  setRoot(cx) {
+    const dir = expand(this.dir.value(), this.machine);
+    if (!dir) {
+      this.err = "请填写目录";
+      cx.notify();
+      return;
+    }
+    setShared(ROOTS, { ...(shared(ROOTS) ?? {}), [this.machine ?? ""]: dir });
+    closeOverlay(props()?.overlay);
+  }
+
+  clearRoot(_cx) {
+    const all = { ...(shared(ROOTS) ?? {}) };
+    delete all[this.machine ?? ""];
+    setShared(ROOTS, all);
+    closeOverlay(props()?.overlay);
   }
 
   create(cx) {
@@ -146,7 +212,7 @@ export default class NewSpace extends View {
     const args = { folder: target, machine: this.machine ?? "" };
     if (this.mode === "space" && this.agent?.run) args.argv = this.agent.run;
     run("space.new", args);
-    setShared(RECENT, [target, ...(shared(RECENT) ?? []).filter((x) => x !== target)].slice(0, 6));
+    rememberRecent(this.machine, target);
     closeOverlay(props()?.overlay);
   }
 
@@ -214,6 +280,10 @@ export default class NewSpace extends View {
   render(cx) {
     const t = theme();
     const folder = this.mode === "folder";
+    const bind = this.mode === "bind";
+    const root = this.mode === "root";
+    const bound = Boolean(this.space && (shared(BINDINGS) ?? {})[this.space]);
+    const hasRoot = Boolean((shared(ROOTS) ?? {})[this.machine ?? ""]);
     const local = this.machine === null;
     const list = machines().filter((m) => m.name !== null);
     return v_flex()
@@ -223,20 +293,25 @@ export default class NewSpace extends View {
       .p(12)
       .gap(9)
       .text_size(12)
-      .child(div().text_size(13).font_semibold().text_color(t.foreground).child(folder ? "新建文件夹" : "新建空间"))
-      .child(div().text_size(11).text_color(t.dim).child(folder
-        ? "在上面的目录里建一个子目录，建好后在其中开空间。"
-        : "空格子里的目录就是终端起步的地方；OMP 会话按它归档，选对项目目录能少走弯路。"))
+      .child(div().text_size(13).font_semibold().text_color(t.foreground).child(root ? "设置机器根目录" : bind ? "设置归属目录" : folder ? "新建文件夹" : "新建空间"))
+      .child(div().text_size(11).text_color(t.dim).child(root
+        ? "侧栏会在这台机器下面先留出这一行：右键它就能新建子文件夹或空间，不必先有项目。"
+        : bind
+          ? "侧栏按这个目录归组；终端 cd 到别处也还留在同一项目下。"
+          : folder
+            ? "在上面的目录里建一个子目录，建好后在其中开空间。"
+            : "空格子里的目录就是终端起步的地方；OMP 会话按它归档，选对项目目录能少走弯路。"))
       .child(h_flex().gap(8).items_center()
         .child(this.label(folder ? "位置" : "目录"))
         .child(this.field(this.dir))
         .child(this.chip("sp-browse", "浏览…", false, (_e, c) => this.browse(c))))
-      .when(!folder, (el) => el
+      .when(!folder && !bind, (el) => el
         .child(h_flex().gap(8).items_center()
           .child(this.label("机器"))
           .child(div().flex_1().flex().flex_wrap().gap(6)
             .child(this.chip("sp-m-local", "本机", local, () => this.pickMachine(null, cx)))
-            .children(list.map((m, i) => this.chip(`sp-m-${i}`, m.name, this.machine === m.name, () => this.pickMachine(m.name, cx))))))
+            .children(list.map((m, i) => this.chip(`sp-m-${i}`, m.name, this.machine === m.name, () => this.pickMachine(m.name, cx)))))))
+      .when(!folder && !bind && !root, (el) => el
         .child(h_flex().gap(8).items_start()
           .child(this.label("程序"))
           .child(div().flex_1().flex().flex_wrap().gap(6)
@@ -246,14 +321,21 @@ export default class NewSpace extends View {
         .child(h_flex().gap(8).items_center()
           .child(this.label("名称"))
           .child(this.field(this.name))))
-      .when(Boolean(this.recent.length) && !folder, (el) => el
+      .when(Boolean(this.recent.length) && !folder && !root, (el) => el
         .child(h_flex().gap(8).items_center()
           .child(this.label("最近"))
           .child(div().flex_1().flex().flex_wrap().gap(6)
             .children(this.recent.map((p, i) => this.chip(`sp-r-${i}`, p, false, () => { this.dir.set_value(p); this.err = ""; cx.notify(); }))))))
       .when(Boolean(this.err), (el) => el.child(div().text_size(11).text_color(t.blocked).child(this.err)))
       .child(h_flex().gap(8).justify_end()
+        .when(bind && bound, (el) => el.child(this.button("sp-unbind", "清除归属", false, (_e, c) => this.unbind(c))))
+        .when(root && hasRoot, (el) => el.child(this.button("sp-unroot", "清除根目录", false, (_e, c) => this.clearRoot(c))))
         .child(this.button("sp-cancel", "取消", false, () => closeOverlay(props()?.overlay)))
-        .child(this.button("sp-create", this.busy ? "创建中…" : (folder ? "创建并打开" : "创建"), true, (_e, c) => this.create(c))));
+        .child(this.button(
+          "sp-create",
+          bind ? "设定归属" : root ? "设定根目录" : (this.busy ? "创建中…" : (folder ? "创建并打开" : "创建")),
+          true,
+          (_e, c) => (bind ? this.bind(c) : root ? this.setRoot(c) : this.create(c)),
+        )));
   }
 }

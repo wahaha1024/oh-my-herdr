@@ -19,10 +19,44 @@ const mkey = (on, path) => `${on ?? ""}\u0000${path ?? ""}`;
 const base = (path) => (path ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path || "~";
 const samePath = (a, b) => (a ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() === (b ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
-// 一个空间此刻所在的目录：它第一个终端的实时目录，否则创建时的目录。
-function place(s, ps) {
+// 空间归属哪个项目：显式归属 > 项目目录内的实时目录 > 空间目录。
+// 智能体把 cwd 挪到项目之外时不再跟着跳组——「会话归到别处」正是这么来的。
+const norm = (p) => String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+const under = (path, parent) => {
+  const a = norm(path), b = norm(parent);
+  return Boolean(a) && Boolean(b) && a.startsWith(`${b}/`);
+};
+const bindsOf = () => shared("inkstone.bindings") ?? {};
+// 机器根目录：每台机器可以指定一个目录，侧栏在它下面先留一行，右键就能在那里新建子项目。
+const rootsOf = () => shared("inkstone.roots") ?? {};
+
+// 一个仓库在侧栏里只占一个项目：工作树的 --show-toplevel 是它自己，只有 --git-common-dir
+// 才指向主仓库。主仓库给相对路径 ".git"，工作树给绝对路径，两种都归到同一个父目录。
+function projectOf(value) {
+  const root = String(value?.root ?? "").trim();
+  if (!root) return null;
+  const raw = String(value?.common ?? "").trim();
+  if (!raw) return root;
+  const sep = root.includes("\\") ? "\\" : "/";
+  const abs = /^([A-Za-z]:[\\/]|[\\/])/.test(raw)
+    ? raw
+    : `${root.replace(/[\\/]+$/, "")}${sep}${raw.replace(/^\.\//, "")}`;
+  // 结尾的 "." 是裸仓库的写法（--git-common-dir 给 "."），先归一。
+  const clean = abs.replace(/[\\/]+\.?$/, "").replace(/[\\/]+$/, "");
+  // 普通仓库与工作树都以 ".git" 结尾；裸仓库 / --separate-git-dir 直接用该目录。
+  if (clean.split(/[\\/]/).pop() !== ".git") return clean;
+  return clean.replace(/[\\/][^\\/]+$/, "") || root;
+}
+
+function place(s, ps, binds) {
+  // 显式归属由「设置归属目录…」写入 shared，重启后仍然有效。
+  const bound = binds?.[s.id];
+  if (bound) return bound;
   const tabs = new Set((s.tabs ?? []).map((c) => c.id));
-  return ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder;
+  const live = ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd;
+  if (!live) return s.folder;
+  if (!s.folder) return live;
+  return samePath(live, s.folder) || under(live, s.folder) ? live : s.folder;
 }
 
 // Git 增强默认关闭（OMH 偏好里可开）：不在 herdr 里用 git 功能时，
@@ -211,19 +245,29 @@ export default class Workbench extends View {
     this.mode = "git";
     const ps = panes();
     const list = spaces();
-    const key = JSON.stringify([list.map((s) => [s.id, place(s, ps), s.machine ?? null]), machines().map((m) => [m.name, m.layout])]);
+    const binds = bindsOf();
+    const folders = new Map(); // 机器::目录 -> { folder, on }
+    for (const s of list) {
+      const f = place(s, ps, binds);
+      if (f) folders.set(mkey(s.machine ?? null, f), { folder: f, on: s.machine ?? null });
+    }
+    const key = JSON.stringify([
+      [...folders].map(([k, v]) => [k, v.folder]),
+      Object.keys(binds).sort().map((k) => [k, binds[k]]),
+      machines().map((m) => [m.name, m.layout]),
+    ]);
     // 目录探测缓存 5 分钟、工作树列表 30 秒。只看 key 的话定时器形同虚设：
     // 空间没变就永远不再扫，新建的工作树要等下次增删空间才出现。
-    const here = [...new Set(list.map((s) => place(s, ps)))];
-    const repoStale = here.some((f) => {
-      if (!f) return false;
-      const r = this.repos[f];
+    // 缓存键必须与写入处一致（带机器前缀），否则每项都判过期、每次刷新重扫所有仓库。
+    const repoStale = [...folders.keys()].some((fk) => {
+      const r = this.repos[fk];
       return !r || Date.now() - r.at >= 300000;
     });
     // 非 Git 目录也过期重试：用户中途 git init 之后不该永远是「不在 Git 仓库中」。
     const treeStale = Object.values(this.repos).some((r) => {
-      if (!r?.value) return false;
-      const tr = this.trees[r.value.root];
+      const p = r?.value ? projectOf(r.value) : null;
+      if (!p) return false;
+      const tr = this.trees[mkey(r.on ?? null, p)];
       return !tr || Date.now() - tr.at >= 30000;
     });
     if (key === this.key && !repoStale && !treeStale) return;
@@ -231,16 +275,15 @@ export default class Workbench extends View {
     this.busy = true;
     cx.spawn(async (cx) => {
       try {
-        const folders = new Map(); // 机器::目录 -> { folder, on }
-        for (const s of list) {
-          const f = place(s, ps);
-          folders.set(mkey(s.machine ?? null, f), { folder: f, on: s.machine ?? null });
-        }
         for (const [fk, { folder, on }] of folders) {
-          if (!folder) continue;
           const cached = this.repos[fk];
           if (cached && (cached.value || Date.now() - cached.at < 300000)) continue;
           const top = await exec("git", [...git, "rev-parse", "--show-toplevel"], { cwd: folder, on }).catch(() => null);
+          // 同一仓库的多个工作树必须归到一个项目：「--show-toplevel」给的是各工作树自己，
+          // 靠「--git-common-dir」的父目录才能认出主仓库。
+          const common = top?.code === 0
+            ? await exec("git", [...git, "rev-parse", "--git-common-dir"], { cwd: folder, on }).catch(() => null)
+            : null;
           const br = top?.code === 0
             ? await exec("git", [...git, "branch", "--show-current"], { cwd: folder, on }).catch(() => null)
             : null;
@@ -249,18 +292,26 @@ export default class Workbench extends View {
             ? await exec("git", [...git, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"], { cwd: folder, on }).catch(() => null)
             : null;
           const [ahead, behind] = counts?.code === 0 ? counts.stdout.trim().split(/\s+/).map(Number) : [0, 0];
+          const root = top?.code === 0 ? top.stdout.trim() : null;
           this.repos[fk] = {
             at: Date.now(),
             on,
-            value: top?.code === 0
-              ? { root: top.stdout.trim(), branch: br?.stdout.trim() || null, ahead: ahead || 0, behind: behind || 0 }
+            value: root
+              ? {
+                root,
+                project: projectOf({ root, common: common?.code === 0 ? common.stdout.trim() : null }),
+                branch: br?.stdout.trim() || null,
+                ahead: ahead || 0,
+                behind: behind || 0,
+              }
               : null,
           };
         }
         // 项目根也按机器分开：两台机器上同名的仓库不能互相顶掉工作树列表。
         const roots = new Map();
         for (const r of Object.values(this.repos)) {
-          if (r?.value?.root) roots.set(mkey(r.on ?? null, r.value.root), { root: r.value.root, on: r.on ?? null });
+          const p = r?.value ? projectOf(r.value) : null;
+          if (p) roots.set(mkey(r.on ?? null, p), { root: p, on: r.on ?? null });
         }
         for (const [rk, { root, on }] of roots) {
           const seen = this.trees[rk];
@@ -380,20 +431,22 @@ export default class Workbench extends View {
   // 项目 -> 工作树；不在 git 里的空间按目录单列。缓存键带机器，两台机器上的同名目录不会串。
   groupsOf(list) {
     const ps = panes();
+    const binds = bindsOf();
     const byRoot = new Map();
     for (const s of list) {
-      const here = place(s, ps);
+      const here = place(s, ps, binds);
       const on = s.machine ?? null;
       const cached = this.repos[mkey(on, here)];
       const repo = gitOn() ? cached?.value : null;
-      const root = repo?.root ?? here ?? s.folder ?? "~";
+      // 工作树归到主仓库的项目根，不再各占一行（project 在 refresh 里用 --git-common-dir 算好）。
+      const root = (repo && (repo.project || repo.root)) || here || s.folder || "~";
       const rk = mkey(on, root);
       if (!byRoot.has(rk)) byRoot.set(rk, { root, on, repo, spaces: [], trees: [] });
       byRoot.get(rk).spaces.push({
         space: s,
         folder: here,
         branch: gitOn() ? (repo?.branch ?? s.branch) : null,
-        name: repo?.root ? base(repo.root) : base(here ?? s.folder),
+        name: base(root),
         ahead: repo?.ahead ?? 0,
         behind: repo?.behind ?? 0,
         repo: Boolean(repo),
@@ -405,7 +458,9 @@ export default class Workbench extends View {
       g.trees = seen;
       // 还没扫过 / 不是仓库 / 只有主工作树：三种空态要说清，不能都写成「无」。
       g.scanned = Boolean(cached);
-      g.repo = g.repo ?? this.repos[mkey(g.on, g.root)]?.value ?? null;
+      g.repo = g.repo
+        ?? g.spaces.map((x) => this.repos[mkey(g.on, x.folder)]?.value).find(Boolean)
+        ?? null;
       // 工作树列出的路径里，没有空间打开的那些补在下面。
       for (const w of seen) {
         if (!g.spaces.some((x) => samePath(x.folder, w.path))) g.spaces.push({ tree: w, folder: w.path, branch: w.branch, on: g.on });
@@ -430,8 +485,15 @@ export default class Workbench extends View {
     }
     order.sort((a, b) => (a.name === null ? -1 : b.name === null ? 1 : a.name.localeCompare(b.name, "zh")));
     return order.map((m) => {
-      const mine = list.filter((s) => (s.machine ?? null) === (m.name ?? null));
-      return { name: m.name ?? null, state: m.state, spaces: mine, groups: this.groupsOf(mine), key: m.name ?? LOCAL };
+      const on = m.name ?? null;
+      const mine = list.filter((s) => (s.machine ?? null) === on);
+      const groups = this.groupsOf(mine);
+      // 机器根目录本身也占一行：那里还没有空间时，也要能右键在它下面建子目录。
+      const root = rootsOf()[on ?? ""] ?? null;
+      if (root && !groups.some((g) => samePath(g.root, root))) {
+        groups.unshift({ root, on, repo: null, spaces: [], trees: [], scanned: true, rootRow: true });
+      }
+      return { name: on, state: m.state, root, spaces: mine, groups, key: m.name ?? LOCAL };
     });
   }
 
@@ -547,7 +609,7 @@ export default class Workbench extends View {
       .tooltip(`${folder ?? s.folder}${branch ? `\n${branch}` : ""}`)
       .accessibility_label(`${label} · ${count} 个终端 · ${statusLabel(s.status)}`)
       .on_click(() => (on ? null : run("space.select", { id: s.id })))
-      .on_mouse_down("right", () => this.menu({ id: s.id }))
+      .on_mouse_down("right", () => this.menu({ id: s.id, folder: folder ?? s.folder ?? null, machine: s.machine ?? null }, "space"))
       // 折叠是空间自己的开关：与「切换到空间」分开，免得想看子项就得跳过去。
       .child(div()
         .id(`wb-f-${s.id}`)
@@ -636,7 +698,7 @@ export default class Workbench extends View {
       .tooltip(`${m.name ?? "本机"} · ${stateWord}`)
       .accessibility_label(`${m.key} ${open} 个空间`)
       .on_click((_e, c) => this.toggleMachine(m, c))
-      .child(svg(m.name ? "mods/inkstone-chrome/server.svg" : "mods/inkstone-chrome/monitor.svg").size(13).flex_none().text_color(t.muted))
+      .on_mouse_down("right", () => this.menu({ machine: m.name ?? null, root: m.root ?? null }, "machine"))
       .child(div()
         .flex_1()
         .min_w(0)
@@ -700,7 +762,7 @@ export default class Workbench extends View {
       .child(svg(folded ? "mods/workspace-chrome/chevron-right.svg" : "mods/workspace-chrome/chevron-down.svg").size(11).flex_none().text_color(t.dim))
       .child(glyph(FOLDER, fill ?? t.muted, { div, v_flex, h_flex }, 2))
       .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(base(g.root)))
-      .child(div().flex_none().text_size(10).text_color(t.dim).child(`${open}/${g.spaces.length}`));
+      .child(div().flex_none().text_size(10).text_color(t.dim).child(g.spaces.length ? `${open}/${g.spaces.length}` : ""));
   }
 
   // rail 模式：一个空间只剩它的标记，名字、终端数与分支收进 tooltip。
@@ -720,7 +782,7 @@ export default class Workbench extends View {
       .tooltip(`${label} · ${count} 个终端 · ${statusLabel(s.status)}`)
       .accessibility_label(`${label} · ${count} 个终端`)
       .on_click(() => (on ? null : run("space.select", { id: s.id })))
-      .on_mouse_down("right", () => this.menu({ id: s.id }))
+      .on_mouse_down("right", () => this.menu({ id: s.id, folder: s.folder ?? null, machine: s.machine ?? null }, "space"))
       .child(this.mark(s.id, t, { mode: mark, art, fill, idx: colorIndex, letter: label, status: s.status, tip: `${count} 个终端` }));
   }
 
@@ -754,6 +816,18 @@ export default class Workbench extends View {
     else if (g.trees.length <= 1) text = "没有其他工作树 · 右键项目新建";
     if (!text) return null;
     return div().pl(30 + IND).pr(8).py(2).text_size(11).text_color(t.dim).child(text);
+  }
+
+  // 机器根目录那一行：下面还没有空间时，说清这里是新建子项目的起点。
+  rootHint(g, t) {
+    if (g.spaces.length) return this.hintRow(g, t);
+    return div()
+      .pl(30 + IND)
+      .pr(8)
+      .py(2)
+      .text_size(11)
+      .text_color(t.dim)
+      .child("根目录 · 右键新建子项目");
   }
 
   // 新建空间的墨线纸片：一张手绘方片，悬停换描深一档（Looseleaf 的 ib-c）。
@@ -815,7 +889,7 @@ export default class Workbench extends View {
       if (gi > 0 && !PAPER(t)) rows.push(div().h(1).flex_none().mx(8).my(6).bg(t.border));
       rows.push(this.projectRow(g, t, fill));
       if (this.fold.has(g.root)) continue;
-      const hint = this.hintRow(g, t);
+      const hint = g.rootRow ? this.rootHint(g, t) : this.hintRow(g, t);
       if (hint) rows.push(hint);
       let trees = 0;
       for (const item of g.spaces) {
