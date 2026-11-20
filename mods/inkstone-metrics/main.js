@@ -72,6 +72,7 @@ export default class Metrics extends View {
     this.used = null;
     this.total = null;
     this.procs = [];
+    this.stopVersion = 0;
     this.loadTotal(cx);
     this.sample(cx);
     cx.timer.every(20000, (cx) => this.sample(cx));
@@ -121,8 +122,10 @@ export default class Metrics extends View {
   loadProcs(cx) {
     const p = plat();
     const cmd = p === "windows" ? ["powershell", PROCS] : ["sh", ["-c", UNIX_PROCS]];
+    const version = this.stopVersion;
     cx.spawn(async (cx) => {
       const r = await exec(cmd[0], cmd[1], { timeout: 15000 }).catch(() => null);
+      if (version !== this.stopVersion) return;
       this.procs = (r?.stdout ?? "")
         .split(/\r?\n/)
         .map((line) => line.trim())
@@ -136,17 +139,46 @@ export default class Metrics extends View {
     });
   }
 
-  stop(pid, cx) {
-    const p = plat();
-    const job = p === "windows"
-      ? exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`])
-      : exec("kill", ["-9", String(pid)]);
-    job
-      .catch(() => {})
-      .then(() => {
-        this.procs = this.procs.filter((x) => x.pid !== pid);
-        cx.notify();
-      });
+  async stop(cx) {
+    const target = this.stopTarget;
+    if (!target || this.stopping) return;
+    this.stopTarget = null;
+    this.stopError = "";
+    if (!this.procs.some((p) => p.pid === target.pid && p.name === target.name)) {
+      this.stopError = "进程列表已变化，请重新选择。";
+      cx.notify();
+      return;
+    }
+    const { pid, name } = target;
+    this.stopping = true;
+    cx.notify();
+    try {
+      const opts = { timeout: 5000 };
+      const r = plat() === "windows"
+        ? await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction Stop`], opts)
+        : await exec("kill", ["-9", String(pid)], opts);
+      if (r.code !== 0) throw new Error(r.stderr.trim() || `退出码 ${r.code}`);
+      this.stopVersion++;
+      this.procs = this.procs.filter((p) => p.pid !== pid);
+    } catch (e) {
+      this.stopError = `结束 ${name}（PID ${pid}）失败：${e?.message ?? e}`;
+    } finally {
+      this.stopping = false;
+      cx.notify();
+    }
+  }
+
+  stopPrompt(t) {
+    const target = this.stopTarget;
+    if (!target && !this.stopError && !this.stopping) return div();
+    return v_flex().flex_none().px(12).py(6).gap(4).bg(t.raised)
+      .child(div().text_size(12).text_color(t.blocked)
+        .child(target ? `强制结束 ${target.name}（PID ${target.pid}）？` : this.stopError || "正在结束进程…"))
+      .when(Boolean(target), (el) => el.child(h_flex().gap(8)
+        .child(div().id("metrics-stop-cancel").h(28).px(8).flex().items_center().rounded(5).bg(t.hover).cursor_pointer()
+          .on_click((_e, c) => { this.stopTarget = null; c.notify(); }).child("取消"))
+        .child(div().id("metrics-stop-confirm").h(28).px(8).flex().items_center().rounded(5).bg(t.blocked).text_color(t.solid_foreground).cursor_pointer()
+          .on_click((_e, c) => this.stop(c)).child("确认结束"))));
   }
 
   tone(t) {
@@ -219,6 +251,7 @@ export default class Metrics extends View {
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => closeOverlay(props()?.overlay))
           .child("Esc")))
+      .child(this.stopPrompt(t))
       .child(v_flex()
         .flex_1()
         .min_h(0)
@@ -269,14 +302,19 @@ export default class Metrics extends View {
               .child(div()
                 .id(`proc-stop-${p.pid}`)
                 .px(7)
-                .py(2)
+                .h(28).flex_none().flex().items_center()
                 .rounded(5)
                 .text_size(11)
                 .text_color(t.dim)
                 .cursor_pointer()
                 .hover((s) => s.bg(t.blocked).text_color(t.solid_foreground))
                 .tooltip("结束该进程")
-                .on_click(() => this.stop(p.pid, cx))
+                .on_click((_e, c) => {
+                  if (this.stopping) return;
+                  this.stopTarget = p;
+                  this.stopError = "";
+                  c.notify();
+                })
                 .child("结束")))
             : [div().px(8).py(8).text_size(12).text_color(t.dim).child("读取中…")])));
   }

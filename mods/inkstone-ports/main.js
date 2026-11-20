@@ -122,6 +122,7 @@ export default class Ports extends View {
     this.list = [];
     this.failed = false;
     this.loaded = false;
+    this.stopVersion = 0;
     this.refresh(cx);
     cx.timer.every(15000, (cx) => this.refresh(cx));
   }
@@ -130,13 +131,24 @@ export default class Ports extends View {
     if (this.busy) return;
     this.busy = true;
     const p = plat();
-    const job = p === "windows"
-      ? exec("powershell", POWERSHELL, { timeout: 8000 })
-      : p === "macos"
-        ? exec("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"], { timeout: 8000 })
-        : exec("sh", ["-c", "if command -v lsof >/dev/null 2>&1; then lsof -nP -iTCP -sTCP:LISTEN -F pcn; else echo __SS__; ss -ltnp 2>/dev/null; fi"], { timeout: 8000 });
+    const version = this.stopVersion;
     cx.spawn(async (cx) => {
-      const r = await job.catch((e) => ({ code: -1, stdout: "", stderr: String(e) }));
+      const timeout = { timeout: 8000 };
+      let r = p === "windows"
+        ? await exec("powershell", POWERSHELL, timeout).catch(() => null)
+        : await exec("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"], timeout).catch(() => null);
+      const emptyLsof = p !== "windows" && r?.code === 1 && !r.stdout.trim() && !r.stderr.trim();
+      let fromSs = false;
+      // Linux 上 lsof 可能没有安装，或看不到其他用户的监听套接字。
+      if (p === "linux" && r?.code !== 0) {
+        const ss = await exec("ss", ["-ltnp"], timeout).catch(() => null);
+        if (ss?.code === 0) { r = ss; fromSs = true; }
+      }
+      if (version !== this.stopVersion) {
+        this.busy = false;
+        this.refresh(cx);
+        return;
+      }
       let next = [];
       const out = (r?.stdout ?? "").trim();
       if (r?.code === 0 && out) {
@@ -150,17 +162,15 @@ export default class Ports extends View {
           } catch (e) {
             console.warn(`inkstone-ports: JSON ${e}`);
           }
-        } else if (out.startsWith("__SS__")) {
-          next = parseSs(out.slice(6).trim());
+        } else if (fromSs) {
+          next = parseSs(out);
         } else {
           next = parseLsof(out);
         }
       }
       this.loaded = true;
-      // macOS 上没有任何进程监听时 lsof 返回退出码 1 且 stdout 为空，不算探测失败。
-      const emptyLsof = p === "macos" && r?.code === 1 && !out && !(r?.stderr ?? "").trim();
-      if (next.length || emptyLsof || r?.code === 0) this.failed = false;
-      else if (r?.code !== 0) this.failed = true;
+      // lsof 在没有监听项时返回 1 且无输出；ss 用 0 表示有效空列表。
+      this.failed = r?.code !== 0 && !emptyLsof;
       this.list = next;
       this.busy = false;
       cx.notify();
@@ -175,18 +185,46 @@ export default class Ports extends View {
     else exec("xdg-open", [url]).catch(() => {});
   }
 
-  stop(id, port, cx) {
-    if (!id) return;
-    const p = plat();
-    const job = p === "windows"
-      ? exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${id} -Force -ErrorAction SilentlyContinue`])
-      : exec("kill", ["-9", String(id)]);
-    job
-      .catch(() => {})
-      .then(() => {
-        this.list = this.list.filter((x) => !(x.pid === id && x.port === port));
-        cx.notify();
-      });
+  async stop(cx) {
+    const target = this.stopTarget;
+    if (!target || this.stopping) return;
+    this.stopTarget = null;
+    this.stopError = "";
+    const { pid, port, name } = target;
+    if (!this.list.some((x) => x.pid === pid && x.port === port && x.name === name)) {
+      this.stopError = "端口列表已变化，请重新选择。";
+      cx.notify();
+      return;
+    }
+    this.stopping = true;
+    cx.notify();
+    try {
+      const opts = { timeout: 5000 };
+      const r = plat() === "windows"
+        ? await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction Stop`], opts)
+        : await exec("kill", ["-9", String(pid)], opts);
+      if (r.code !== 0) throw new Error(r.stderr.trim() || `退出码 ${r.code}`);
+      this.stopVersion++;
+      this.list = this.list.filter((x) => x.pid !== pid);
+    } catch (e) {
+      this.stopError = `结束 ${name}（PID ${pid}，端口 ${port}）失败：${e?.message ?? e}`;
+    } finally {
+      this.stopping = false;
+      cx.notify();
+    }
+  }
+
+  stopPrompt(t) {
+    const target = this.stopTarget;
+    if (!target && !this.stopError && !this.stopping) return div();
+    return v_flex().flex_none().px(12).py(6).gap(4).bg(t.raised)
+      .child(div().text_size(12).text_color(t.blocked)
+        .child(target ? `强制结束 ${target.name}（PID ${target.pid}，端口 ${target.port}）？` : this.stopError || "正在结束进程…"))
+      .when(Boolean(target), (el) => el.child(h_flex().gap(8)
+        .child(div().id("ports-stop-cancel").h(28).px(8).flex().items_center().rounded(5).bg(t.hover).cursor_pointer()
+          .on_click((_e, c) => { this.stopTarget = null; c.notify(); }).child("取消"))
+        .child(div().id("ports-stop-confirm").h(28).px(8).flex().items_center().rounded(5).bg(t.blocked).text_color(t.solid_foreground).cursor_pointer()
+          .on_click((_e, c) => this.stop(c)).child("确认结束"))));
   }
 
   // 状态栏形态：一个图标 + 端口数，点开清单。读不到时显示「!」而不是 0，
@@ -229,7 +267,7 @@ export default class Ports extends View {
       .when(web, (el) => el.child(div()
         .id(`port-open-${x.port}`)
         .px(8)
-        .py(3)
+        .h(28).flex_none().flex().items_center()
         .rounded(6)
         .bg(t.raised)
         .text_size(11)
@@ -239,18 +277,23 @@ export default class Ports extends View {
         .tooltip("在浏览器中打开")
         .on_click(() => this.open(x.port))
         .child("打开")))
-      .child(div()
-        .id(`port-stop-${x.port}`)
+      .when(Number.isSafeInteger(x.pid) && x.pid > 0, (el) => el.child(div()
+        .id(`port-stop-${x.port}-${x.pid}`)
         .px(8)
-        .py(3)
+        .h(28).flex_none().flex().items_center()
         .rounded(6)
         .text_size(11)
         .text_color(t.dim)
         .cursor_pointer()
         .hover((s) => s.bg(t.blocked).text_color(t.solid_foreground))
-        .tooltip("停止服务：结束该进程")
-        .on_click(() => this.stop(x.pid, x.port, cx))
-        .child("停止"));
+        .tooltip("结束监听进程")
+        .on_click((_e, c) => {
+          if (this.stopping) return;
+          this.stopTarget = x;
+          this.stopError = "";
+          c.notify();
+        })
+        .child("结束")));
   }
 
   popup(t, cx) {
@@ -280,6 +323,7 @@ export default class Ports extends View {
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => closeOverlay(props()?.overlay))
           .child("Esc")))
+      .child(this.stopPrompt(t))
       .child(v_flex()
         .flex_1()
         .min_h(0)

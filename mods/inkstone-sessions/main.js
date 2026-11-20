@@ -17,10 +17,12 @@ import { exec, run, theme, spaces, panes, notify, terminals, window, checking, a
 const MAX_PER = 100;
 const MAX_CODEX = 120;
 const CACHE_TTL_MS = 45000;
+const BIN_RETRY_MS = 60000;
 const CACHE_FILE = () => `${appHome()}/data/inkstone-sessions-cache.json`;
 const MEM_CACHE = new Map();
 let DISK_LOADED = false;
 let DISK_RAW = null;
+let DISK_WRITE = Promise.resolve();
 const SEP = "\u001f";
 const plat = () => window()?.platform ?? "windows";
 
@@ -234,6 +236,7 @@ const AWK = [
 ].join("\n");
 
 const SH_SCAN = [
+  'command -v awk >/dev/null 2>&1 || { printf "%s\\n" "awk not found" >&2; exit 127; }',
   "TARGET=$1",
   "SEP=$(printf '\\037')",
   "LEAF=''",
@@ -304,7 +307,7 @@ export default class Sessions extends View {
     this.timeRange = "all";
     this.query = "";
     this.copied = null;
-    this.bins = {};
+    this.bins = new Map();
     this.resumed = new Set();
     this.scannedKey = null;
     this.manage = false;
@@ -325,7 +328,6 @@ export default class Sessions extends View {
       const on = this.activeMachine(sp);
       const target = this.activeFolder(sp);
       const key = `${on ?? ""}|${target}`;
-      this.detect(on);
       this.activateKey(key, cx, false);
     } else {
       this.loading = false;
@@ -354,35 +356,41 @@ export default class Sessions extends View {
 
   async loadDiskCache() {
     if (DISK_LOADED) return;
-    try {
-      const raw = await readTextFile(CACHE_FILE());
-      DISK_RAW = raw;
-      if (raw) {
-        const obj = JSON.parse(raw);
-        if (obj && typeof obj === "object") {
-          for (const [k, v] of Object.entries(obj)) {
-            if (!v || !Array.isArray(v.items)) continue;
-            if (!MEM_CACHE.has(k)) {
-              MEM_CACHE.set(k, { ts: Number(v.ts) || 0, items: this.normCacheItems(v.items) });
-            }
-          }
-        }
-      }
-    } catch {}
+    await this.readDiskCache().catch(() => {});
     DISK_LOADED = true;
   }
 
-  async flushDiskCache() {
+  async readDiskCache() {
+    const raw = await readTextFile(CACHE_FILE());
+    DISK_RAW = raw ?? null;
+    if (!raw) return;
+    let obj;
+    try { obj = JSON.parse(raw); } catch { return; }
+    for (const [k, v] of Object.entries(obj ?? {})) {
+      if (!v || !Array.isArray(v.items)) continue;
+      const ts = Number(v.ts) || 0;
+      if (!MEM_CACHE.has(k) || ts > MEM_CACHE.get(k).ts) {
+        MEM_CACHE.set(k, { ts, items: this.normCacheItems(v.items) });
+      }
+    }
+  }
+
+  flushDiskCache() {
     if (checking()) return;
-    try {
-      const entries = [...MEM_CACHE.entries()]
-        .sort((a, b) => (b[1]?.ts || 0) - (a[1]?.ts || 0))
-        .slice(0, 6);
-      const obj = {};
-      for (const [k, v] of entries) {
-        obj[k] = {
-          ts: v.ts || 0,
-          items: (v.items ?? []).slice(0, 180).map((s) => ({
+    DISK_WRITE = DISK_WRITE.then(() => this.persistDiskCache());
+    return DISK_WRITE;
+  }
+
+  async persistDiskCache() {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (attempt > 0 || DISK_RAW === null) await this.readDiskCache();
+        const entries = [...MEM_CACHE.entries()]
+          .sort((a, b) => b[1].ts - a[1].ts)
+          .slice(0, 6);
+        const json = JSON.stringify(Object.fromEntries(entries.map(([k, v]) => [k, {
+          ts: v.ts,
+          items: v.items.slice(0, 180).map((s) => ({
             src: s.src,
             m: s.m,
             id: s.id,
@@ -390,18 +398,14 @@ export default class Sessions extends View {
             cwd: s.cwd,
             files: (s.files ?? (s.file ? [s.file] : [])).slice(0, 2),
           })),
-        };
-      }
-      const json = JSON.stringify(obj);
-      try {
+        }])));
         await writeTextFile(CACHE_FILE(), json, DISK_RAW);
         DISK_RAW = json;
+        return;
       } catch {
-        const latest = await readTextFile(CACHE_FILE()).catch(() => null);
-        await writeTextFile(CACHE_FILE(), json, latest).catch(() => {});
-        DISK_RAW = json;
+        DISK_RAW = null;
       }
-    } catch {}
+    }
   }
 
   writeCache(key, list) {
@@ -412,6 +416,16 @@ export default class Sessions extends View {
 
   activateKey(key, cx, inRender = false) {
     this.scannedKey = key;
+    const context = this.scanContext = {};
+    this.reloading = null;
+    this.detect();
+    this.list = [];
+    this.loading = true;
+    this.failed = false;
+    this.failReason = "";
+    this.selected.clear();
+    this.confirmOne = null;
+    this.confirmBatch = false;
     const hit = MEM_CACHE.get(key);
     if (hit && hit.items.length) {
       this.list = hit.items;
@@ -424,7 +438,7 @@ export default class Sessions extends View {
     if (!DISK_LOADED) {
       this.loading = this.list.length === 0;
       this.loadDiskCache().then(() => {
-        if (this.scannedKey !== key) return;
+        if (this.scanContext !== context) return;
         const diskHit = MEM_CACHE.get(key);
         if (diskHit && diskHit.items.length) {
           this.list = diskHit.items;
@@ -458,47 +472,57 @@ export default class Sessions extends View {
 
   // 各家的可执行文件位置：按机器分别探测，点会话时用它开终端。
   detect(on = this.activeMachine()) {
-    const mkey = on || "local";
-    if (this.bins[mkey]) return;
-    this.bins[mkey] = {};
+    let entry = this.bins.get(on);
+    if (!entry) {
+      entry = { paths: {}, retryAt: 0 };
+      this.bins.set(on, entry);
+    }
+    const now = Date.now();
+    if (now < entry.retryAt) return;
+    entry.retryAt = now + BIN_RETRY_MS;
     const useWin = !on && plat() === "windows";
     for (const [key, src] of Object.entries(SOURCES)) {
-      if (!src.bin) continue;
+      if (!src.bin || entry.paths[key]) continue;
       const job = useWin
         ? exec("where", [src.bin], { timeout: 5000 })
         : exec("sh", ["-c", `command -v ${src.bin}`], { on, timeout: 5000 });
       job
         .then((r) => {
-          const line = String(r?.stdout ?? "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-          if (line) this.bins[mkey][key] = line;
+          const line = r.code === 0 ? r.stdout.trim().split(/\r?\n/, 1)[0].trim() : "";
+          if (line) entry.paths[key] = line;
         })
         .catch(() => {});
     }
   }
 
   reload(cx, opts = {}) {
-    if (this.reloading) return;
-    const silent = Boolean(opts?.silent) && this.list.length > 0;
-    this.reloading = true;
-    if (!silent) this.loading = this.list.length === 0;
     const sp = this.activeSpace();
     const on = this.activeMachine(sp);
     const target = this.activeFolder(sp);
     const scanKey = `${on ?? ""}|${target}`;
-    this.scannedKey = scanKey;
+    if (scanKey !== this.scannedKey) return this.activateKey(scanKey, cx);
+    if (this.reloading) return;
+    const context = this.scanContext;
+    const silent = Boolean(opts?.silent) && this.list.length > 0;
+    this.reloading = context;
+    if (!silent) this.loading = this.list.length === 0;
     this.detect(on);
     const useWin = !on && plat() === "windows";
+    const fail = (reason) => {
+      if (silent && !on) return;
+      this.failed = true;
+      this.failReason = on ? `「${on}」上的会话扫描需要 sh 和 awk。${reason}` : reason;
+    };
     const job = useWin
       ? exec("powershell", buildPsScan(target), { timeout: 25000 })
       : exec("sh", ["-c", SH_SCAN, "sh", target], { on, timeout: 25000 });
     job
       .then((r) => {
+        if (this.scanContext !== context) return;
         if (r?.code !== 0) {
-          if (!silent) {
-            this.failed = true;
-            const err = String(r?.stderr ?? "").trim().split(/\r?\n/).filter(Boolean).pop() ?? "";
-            this.failReason = err ? `退出码 ${r?.code ?? "?"}：${err}` : `退出码 ${r?.code ?? "未知"}`;
-          }
+          const err = String(r?.stderr ?? "").trim().split(/\r?\n/).filter(Boolean).pop();
+          const code = `退出码 ${r?.code ?? "未知"}`;
+          fail(err ? `${code}：${err}` : code);
           return;
         }
         const un = useWin ? (s) => s : (s) => String(s ?? "").replace(/\\(["\\])/g, "$1");
@@ -528,13 +552,12 @@ export default class Sessions extends View {
         this.failReason = "";
       })
       .catch((e) => {
-        if (!silent) {
-          this.failed = true;
-          this.failReason = String(e?.message || e || "执行异常");
-        }
+        if (this.scanContext !== context) return;
+        fail(String(e?.message || e || "执行异常"));
       })
       .finally(() => {
-        this.reloading = false;
+        if (this.scanContext !== context) return;
+        this.reloading = null;
         this.loading = false;
         cx.notify();
       });
@@ -592,8 +615,7 @@ export default class Sessions extends View {
       notify({ title: "本地对话归档", body: `已复制记录 ID：${s.id}`, level: "info" });
       return;
     }
-    const mkey = this.activeMachine() || "local";
-    const bin = this.bins[mkey]?.[s.src] ?? src.bin;
+    const bin = this.bins.get(this.activeMachine())?.paths[s.src] ?? src.bin;
     const args = { argv: [bin, ...src.argv(s.id)], place: "tab" };
     if (s.cwd) args.folder = s.cwd;
     this.resumed.add(s.id);
@@ -639,6 +661,7 @@ export default class Sessions extends View {
     this.deleting = true;
     cx.notify();
     const on = this.activeMachine();
+    const context = this.scanContext;
     const useWin = !on && plat() === "windows";
     const fileItems = items.filter((s) => s.src !== "opencode");
     const ocItems = items.filter((s) => s.src === "opencode" && s.file && s.id);
@@ -652,38 +675,65 @@ export default class Sessions extends View {
     const okFiles = new Set();
     const okOc = new Set();
     let errMsg = "";
+    const remoteHint = on ? `无法在「${on}」完成删除，请确认远端在线且可运行 sh。` : "";
     try {
       if (useWin) {
-        const b64 = toB64(JSON.stringify({ files, oc }));
-        const ps = [
-          "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
-          `$req = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')) | ConvertFrom-Json`,
-          "foreach ($p in @($req.files)) {",
-          "  if (-not $p) { continue }",
-          "  try {",
-          "    if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction Stop }",
-          "    \"OK`t$p\"",
-          "  } catch { \"ERR`t$p`t$($_.Exception.Message)\" }",
-          "}",
-          "$sq = Get-Command sqlite3 -ErrorAction SilentlyContinue",
-          "foreach ($g in @($req.oc)) {",
-          "  if (-not $sq -or -not $g.db -or -not (Test-Path -LiteralPath $g.db)) { continue }",
-          "  $inList = (@($g.ids) | ForEach-Object { \"'\" + ([string]$_).Replace(\"'\", \"''\") + \"'\" }) -join ','",
-          "  if (-not $inList) { continue }",
-          "  try {",
-          "    & $sq.Source $g.db \"PRAGMA foreign_keys=ON; DELETE FROM session WHERE id IN ($inList);\" 2>$null",
-          "    if ($LASTEXITCODE -eq 0) { foreach ($id in @($g.ids)) { \"OC`t$id\" } }",
-          "    else { \"ERR`toc`texit $LASTEXITCODE\" }",
-          "  } catch { \"ERR`toc`t$($_.Exception.Message)\" }",
-          "}",
-        ].join("\n");
-        const r = await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { timeout: 20000 });
-        for (const ln of String(r?.stdout ?? "").split(/\r?\n/)) {
-          if (ln.startsWith("OK\t")) okFiles.add(ln.slice(3));
-          else if (ln.startsWith("OC\t")) okOc.add(ln.slice(3));
-          else if (ln.startsWith("ERR\t") && !errMsg) errMsg = ln.split("\t").slice(2).join(" ");
+        const removeBatch = async (batch, db) => {
+          const files = db ? [] : batch;
+          const oc = db ? [{ db, ids: batch }] : [];
+          const b64 = toB64(JSON.stringify({ files, oc }));
+          // 在 Windows 32767 字符限制内为脚本、引号和可执行文件路径留余量。
+          if (b64.length > 24000) {
+            if (batch.length === 1) {
+              errMsg ||= "会话路径或标识过长，无法删除";
+              return;
+            }
+            const mid = Math.floor(batch.length / 2);
+            await removeBatch(batch.slice(0, mid), db);
+            await removeBatch(batch.slice(mid), db);
+            return;
+          }
+          const ps = [
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+            `$req = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')) | ConvertFrom-Json -ErrorAction Stop`,
+            "foreach ($p in @($req.files)) {",
+            "  if (-not $p) { continue }",
+            "  try {",
+            "    if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction Stop }",
+            "    \"OK`t$p\"",
+            "  } catch { \"ERR`t$p`t$($_.Exception.Message)\" }",
+            "}",
+            "if (-not $req.oc) { exit 0 }",
+            "$sq = Get-Command sqlite3 -ErrorAction SilentlyContinue",
+            'if (-not $sq) { "ERR`toc`t找不到 sqlite3"; exit 0 }',
+            "foreach ($g in @($req.oc)) {",
+            '  if (-not (Test-Path -LiteralPath $g.db)) { "ERR`toc`t找不到数据库：$($g.db)"; continue }',
+            "  $inList = (@($g.ids) | ForEach-Object { \"'\" + ([string]$_).Replace(\"'\", \"''\") + \"'\" }) -join ','",
+            "  if (-not $inList) { continue }",
+            "  try {",
+            "    & $sq.Source $g.db \"PRAGMA foreign_keys=ON; DELETE FROM session WHERE id IN ($inList);\" 2>$null",
+            "    if ($LASTEXITCODE -eq 0) { foreach ($id in @($g.ids)) { \"OC`t$id\" } }",
+            "    else { \"ERR`toc`texit $LASTEXITCODE\" }",
+            "  } catch { \"ERR`toc`t$($_.Exception.Message)\" }",
+            "}",
+            "exit 0",
+          ].join("\n");
+          try {
+            const r = await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { timeout: 20000 });
+            for (const ln of r.stdout.split(/\r?\n/)) {
+              if (ln.startsWith("OK\t")) okFiles.add(ln.slice(3));
+              else if (db && ln.startsWith("OC\t")) okOc.add(`${db}\0${ln.slice(3)}`);
+              else if (ln.startsWith("ERR\t")) errMsg ||= ln.split("\t").slice(2).join(" ");
+            }
+            if (r.code !== 0) errMsg ||= r.stderr.trim() || `PowerShell 退出码 ${r.code}`;
+          } catch (e) {
+            errMsg ||= String(e?.message ?? e);
+          }
+        };
+        for (let i = 0; i < files.length; i += 50) await removeBatch(files.slice(i, i + 50), null);
+        for (const { db, ids } of oc) {
+          for (let i = 0; i < ids.length; i += 50) await removeBatch(ids.slice(i, i + 50), db);
         }
-        if (r?.code !== 0 && !errMsg) errMsg = String(r?.stderr ?? "").trim();
       } else {
         if (files.length) {
           const shDel = 'for p in "$@"; do if [ -e "$p" ]; then rm -f -- "$p" && printf "OK\\t%s\\n" "$p" || printf "ERR\\t%s\\n" "$p"; else printf "OK\\t%s\\n" "$p"; fi; done';
@@ -692,13 +742,13 @@ export default class Sessions extends View {
             if (ln.startsWith("OK\t")) okFiles.add(ln.slice(3));
             else if (ln.startsWith("ERR\t") && !errMsg) errMsg = `删除失败：${ln.slice(4)}`;
           }
-          if (r?.code !== 0 && !errMsg) errMsg = String(r?.stderr ?? "").trim();
+          if (r?.code !== 0 && !errMsg) errMsg = String(r?.stderr ?? "").trim() || `sh 退出码 ${r?.code ?? "未知"}`;
         }
         for (const g of oc) {
           const inList = g.ids.map((id) => `'${String(id).replace(/'/g, "''")}'`).join(",");
           const sql = `PRAGMA foreign_keys=ON; DELETE FROM session WHERE id IN (${inList});`;
           const r = await exec("sqlite3", [g.db, sql], { on, timeout: 10000 });
-          if (r?.code === 0) for (const id of g.ids) okOc.add(id);
+          if (r?.code === 0) for (const id of g.ids) okOc.add(`${g.db}\0${id}`);
           else if (!errMsg) errMsg = String(r?.stderr ?? "").trim() || "OpenCode 删除失败";
         }
       }
@@ -706,13 +756,13 @@ export default class Sessions extends View {
       for (const s of items) {
         const k = `${s.src}:${s.id}`;
         if (s.src === "opencode") {
-          if (okOc.has(s.id)) deletedKeys.add(k);
+          if (okOc.has(`${s.file}\0${s.id}`)) deletedKeys.add(k);
         } else {
           const fs = (s.files ?? (s.file ? [s.file] : [])).filter(safeSessionFile);
           if (fs.length && fs.every((f) => okFiles.has(f))) deletedKeys.add(k);
         }
       }
-      if (deletedKeys.size) {
+      if (this.scanContext === context && deletedKeys.size) {
         this.list = this.list.filter((s) => !deletedKeys.has(`${s.src}:${s.id}`));
         for (const k of deletedKeys) this.selected.delete(k);
         this.writeCache(this.scannedKey, this.list);
@@ -721,12 +771,12 @@ export default class Sessions extends View {
       if (deletedKeys.size === items.length) {
         notify({ title: "已删除会话", body: `共删除 ${deletedKeys.size} 条会话记录`, level: "info" });
       } else if (deletedKeys.size > 0) {
-        notify({ title: "部分会话已删除", body: `成功 ${deletedKeys.size} 条，失败 ${items.length - deletedKeys.size} 条${errMsg ? `：${errMsg}` : ""}`, level: "warn" });
+        notify({ title: "部分会话已删除", body: `成功 ${deletedKeys.size} 条，失败 ${items.length - deletedKeys.size} 条。${remoteHint}${errMsg}`, level: "warn" });
       } else {
-        notify({ title: "删除会话失败", body: errMsg || "未找到可删除的会话文件", level: "error" });
+        notify({ title: "删除会话失败", body: remoteHint + (errMsg || "未找到可删除的会话文件"), level: "error" });
       }
     } catch (e) {
-      notify({ title: "删除会话失败", body: String(e?.message ?? e), level: "error" });
+      notify({ title: "删除会话失败", body: remoteHint + String(e?.message ?? e), level: "error" });
     } finally {
       this.deleting = false;
       cx.notify();
@@ -925,7 +975,7 @@ export default class Sessions extends View {
     const on = this.activeMachine(sp);
     const here = this.activeFolder(sp);
     const key = `${on ?? ""}|${here}`;
-    if (!checking() && key !== this.scannedKey && !this.reloading) {
+    if (!checking() && key !== this.scannedKey) {
       this.activateKey(key, cx, true);
     }
     const scoped = this.scoped();
@@ -1169,6 +1219,11 @@ export default class Sessions extends View {
             }))
             .child(nSel > 0 ? `删除 (${nSel})` : "删除"))));
       })
+      .when(this.failed, (el) => el.child(v_flex().px(10).py(6).gap(4).flex_none()
+        .child(div().text_size(12).text_color(t.blocked).child(this.list.length
+          ? "刷新会话失败，仍显示上次结果。"
+          : "扫描会话失败，点右上角「刷新」重试。"))
+        .when(Boolean(this.failReason), (box) => box.child(div().text_size(11).text_color(t.dim).child(this.failReason)))))
       .child(v_flex()
         .flex_1()
         .min_h(0)
@@ -1178,7 +1233,7 @@ export default class Sessions extends View {
         .overflow_y_scrollbar()
         .children(list.length
           ? list.map((s, i) => this.row(s, i, t, cx))
-          : [this.emptyState(t, hasFilter, scoped.length, cx)]))
+          : this.failed ? [] : [this.emptyState(t, hasFilter, scoped.length, cx)]))
       .child(h_flex()
         .h(24)
         .flex_none()
@@ -1241,11 +1296,6 @@ export default class Sessions extends View {
   }
 
   emptyState(t, hasFilter, scopedCount, cx) {
-    if (this.failed) {
-      return v_flex().p(10).gap(4)
-        .child(div().text_size(12).text_color(t.blocked).child("扫描会话失败，点右上角「刷新」重试。"))
-        .when(Boolean(this.failReason), (el) => el.child(div().text_size(11).text_color(t.dim).child(this.failReason)));
-    }
     if (this.loading) {
       return div().p(10).text_size(12).text_color(t.dim).child("正在扫描会话…");
     }

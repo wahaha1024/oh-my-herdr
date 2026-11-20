@@ -52,21 +52,32 @@ git commit
 
 两个分支的 `.gitignore` 现在只忽略 `RECIPE.zh.md`；`RECIPE.md` 两边都追踪。
 
+## 2026-11-20 审查修复交接
+
+- **数据安全**：历史复制直接用 `cx.write_to_clipboard`，不再写对话明文临时文件。历史、会话、设置均能从比较并交换（CAS）快照冲突中恢复；设置串行写入，只在最新数据上重放本次字段修改。历史尚未对位时不再误报保留 0 行。
+- **会话与文件生命周期**：切换上下文或关闭时取消旧监听，丢弃旧空间或旧历史源的迟到结果；搜索先于版本控制探测完成时会重建索引。CLI 探测未命中 60 秒后重试。Windows 批量删除每批至多 50 个路径或 ID，编码负载超过 24000 字符时继续拆分；单条仍超限则明确失败，不执行删除。
+- **实时审查**：底栏摘要每 25 秒刷新，按位置缓存子仓库发现结果、逐仓库读取；打开的审查窗口每 5 秒刷新并保留选择。`liveDiff()` 用空树对照覆盖尚无 HEAD 的 SHA-1/SHA-256 仓库，`gitPath()` 处理引号路径，`core.quotePath=false` 保留中文。本机 Unix 的「本轮」读取走 `sh` 位置参数；未跟踪预览失败可重试，并明确 800 行显示上限与宿主 1 MiB 读取上限。不引入差异正文磁盘缓存。
+- **进程操作与布局**：资源、端口统一使用「结束」及同样式明确确认；执行失败保留行并显示原因。Linux 将有效的 `lsof` 空结果与失败区分，必要时回落 `ss`。本轮调整的关闭、打开、结束命中区至少 28 逻辑像素；标签只响应横向占优的滚轮。抽屉同步合并到单次任务，不在渲染中发布局命令；工作列窄于抽屉宽度加 432 像素时临时收起，拉宽后恢复原页。
+- **安装与同步**：Shell 试运行既不创建目标目录，也不写跳过统计文件。Windows 安装先校验三个源目录，零写入明确警告；程序表兼容 UTF-8 与 BOM。`refresh.ps1` 不将个人程序夹带进发行补丁。保留当前工作树另行加入的 CodeBuddy 注册与程序表仅补缺失项策略。
+- **撕边配色适配**：三套内置切片统一为「纸面取该主题底色亮一档 + 折痕用主题 `muted`」。此前 `ink-xuanzhi`、`ink-xuanmo` 的纸面填充与自身底色完全相同、折痕不透明度只有 0.05~0.07，深色下等于没有撕边；玄墨的折痕还是纯黑，在近黑底上没有对比，改为 `muted` `#8b8597`。判定改为 `background` 命中即启用、`muted` 只做精确优先，`xuanzhi-dimmed` 与 `xuanmo-dimmed` 各登记一行。9 份 `PRESETS` 对 9 个主题求值结果完全一致，三套切片按同一比例渲染对照；实机 qingci 与 xuanzhi 已确认可见。
+- **验证边界**：改动路径均有针对性原生检查与隔离行为探针；本机没有 macOS、远端 Windows，Unix 命令以 Git Bash 验证，不等同原生平台认证；WSL 未安装。远端失败会写明机器及 `sh`/`awk` 前提，不再静默显示空列表。破坏性动作只用可丢弃进程、会话记录验证。
+- **Windows 实际界面验证**：通过独立 `HERDR_APP_HOME` 与 `HC_SESSION` 载入工作树，`status.errors=[]`；检查 qingci/xuanmo/zhi、缩窄收起与拉宽恢复文件抽屉，以及设置、会话、资源、端口、历史入口的原生界面。无 HEAD 仓库显示已暂存中文路径，修改该文件后审查窗口无需点击刷新即可更新。测试窗格只运行 PowerShell，历史实际窗口验证的是无对应会话的空态，不冒充交互式 OMP 对话。测试窗口与核心会话用完销毁，不操作用户现有窗口。
+
 ## 2026-11-19 跨机交接
 
-在仓库运行 `git switch dev` 和 `git pull --ff-only origin dev`。如果另一台电脑已经安装过，请先备份 Herdr 配置，再预览安装（Windows：`.\install.ps1 -DryRun -Force`；macOS/Linux：`./install.sh --dry-run --force`），确认后去掉预览参数安装，然后切一次布局或重启。默认安装会跳过同名文件并提示，`-Force` / `--force` 才会覆盖布局、模块和主题；现有 `programs.omp` 仍保留。`refresh.ps1` 的方向相反：它把实机配置同步回仓库，不用它安装远端更新。不要跨机复制 `data/` 缓存或 OMP 会话日志。
+在仓库运行 `git switch dev` 和 `git pull --ff-only origin dev`。如果另一台电脑已经安装过，请先备份 Herdr 配置，再预览安装（Windows：`.\install.ps1 -DryRun -Force`；macOS/Linux：`./install.sh --dry-run --force`），确认后去掉预览参数安装，然后切一次布局或重启。默认安装会跳过同名文件并提示，`-Force` / `--force` 才会覆盖布局、模块和主题；现有 `programs.omp` 与 `programs.codebuddy` 仍保留。`refresh.ps1` 的方向相反：它把实机配置同步回仓库，程序表仅合并这两个白名单键并保留仓库其他项，不用它安装远端更新。不要跨机复制 `data/` 缓存或 OMP 会话日志。
 
 ### 历史发言与阅读窗口（`d41c014`、`4459530`）
 
 - **入口与操作**：本地 Windows 的 OMP 窗格头时钟按钮打开面板（[`inkstone-pane`](mods/inkstone-pane/main.js)）。[`inkstone-history`](mods/inkstone-history/main.js) 的 `rounds()` 按用户消息组轮，将回复、工具和压缩记录归位；`firstKeptEntryId` 要能对到该轮的用户或助手消息。搜索覆盖提问、回复、工具；方向键选轮，Enter、双击或箭头回到终端；「阅读」或 `r` 打开宽 62%、高 86% 的窗口。阅读窗通过 `shared("inkstone.history.read")` 复用已解析内容和跳转位置，不再扫日志。圆点表示尚未对上终端回滚区，不代表丢了会话记录。不要用剪贴板模拟 `/tree`：OMP 会把粘贴后回车的文本当作普通提问，也没有指定树节点的恢复参数。
-- **读取与刷新**：`load()` 先按 `pane.cwd` 和标题定位文件（`FOUND` 的命中有效期 120 秒），有缓存就先画列表。`readMessages()` 优先用 Node 子进程，从 `seen` 字节起读；`seen` 必须落在最后一个完整换行之后，半行留给下一次，文件比偏移短则回到 0。Node 不可用时用 PowerShell 全量读取；两条路径都先筛消息和压缩记录，再把精简 JSON 交回界面，不能用 `readTextFile` 读整个会话。`watchFolder` 将目录事件合并到 2 秒后刷新；15 秒标题检查只在标题变化时重新定位。`syncAlign()` 在回滚行数和对位长度没变时复用结果，需读时使用 `hc read` 的 1500 毫秒缓存。
-- **落盘**：`PARSED` 最多 4 个会话；`${appHome()}/data/inkstone-history-cache.json` 按路径保存 `{v:1, entries:{…}}`，最多保留最新 3 个，整份序列化文本超过 900000 字符就跳过写入（避免读回时撞上 1 MiB 上限）。刷新写入至少间隔 5000 毫秒，关窗尝试补写。`writeTextFile(path, text, expected)` 的 `expected` 必须是读取到的磁盘原文，`null` 只用于新建；首写成功、后续 `seen` 一直不动时先检查这里。
+- **读取与刷新**：`load()` 先按 `pane.cwd` 和标题定位文件（`FOUND` 的命中有效期 120 秒），有缓存就先画列表。`readMessages()` 优先用 Node 子进程，从 `seen` 字节起读；`seen` 必须落在最后一个完整换行之后，半行留给下一次，文件比偏移短则回到 0。Node 不可用时用 PowerShell 全量读取；两条路径都先筛消息和压缩记录，再把精简 JSON 交回界面，不能用 `readTextFile` 读整个会话。`follow()` 只保留一个可取消的 `watchFolder` 句柄，将目录事件合并到 2 秒后刷新；标题或目录变化后丢弃旧读取并重启监听，15 秒检查也负责监听失效后的重试。`syncAlign()` 在回滚行数和对位长度没变时复用结果，需读时使用 `hc read` 的 1500 毫秒缓存。
+- **落盘**：`PARSED` 最多 4 个会话；`${appHome()}/data/inkstone-history-cache.json` 按路径保存 `{v:1, entries:{…}}`，最多保留最新 3 个；`utf8Bytes()` 按整份序列化文本的 UTF-8 字节数限制到 900000，中文与 emoji 也不会突破 `readTextFile` 的 1 MiB 上限。刷新写入至少间隔 5000 毫秒，关窗尝试补写。`writeTextFile(path, text, expected)` 的 `expected` 必须是读取到的磁盘原文，`null` 只用于新建；冲突时重新读取并合并重试一次，只在成功后推进快照。
 - **样式**：改 `FS`、`sectionLabel()`、`row()`、`markRow()` 和 `renderRead()`。选中项/跳转用 `accent`，有回复用 `done`，工具用 `working`；纸墨保留荧光笔选中底，搜索底用 `popover`。保持系统默认字体和三套主题的颜色槽，别给 GPUI 传 `bg("transparent")`。
 - **接手验证**：在实际配置目录跑 `herdr-app check mods/inkstone-history`，并看 `herdr-app status` 的 `errors`。打开有长回复和压缩点的 OMP 会话，检查搜索、Esc 清搜索、`r` 开大窗和 Esc 关闭，以及箭头只出现在已对位的行；分别看 `qingci`、`xuanmo`、`zhi`。旧机约 40 MB 日志的解析探针是 421 毫秒全量、103 毫秒空尾读，不是首屏耗时。要比较另一台电脑的速度，分别计无缓存首开、有磁盘缓存重启后首开和同进程重开；验证半行时用日志副本，不改原会话。
 
 ### 侧栏、审查和会话抽屉
 
-- **空间 / 智能体**（`de3c9a5`、`d41c014`）：[`sidebar-lists`](layouts/oh-my-herdr.json) 中空间和智能体权重 5:4、间距 0；[`inkstone-workbench`](mods/inkstone-workbench/main.js) 按机器 → 目录 → 空间分组，[`inkstone-agents`](mods/inkstone-agents/main.js) 单列待处理、运行中、已完成。两张卡接缝靠 `EDGE_B` / `EDGE_TOP` 各裁到 8px；别只改外层间距。终端边条在 [`artDir()`](mods/inkstone-edge/main.js)：有 `paper` 走原纸边，否则配对 `background` / `muted`，匹配才用 `ink-qingci`、`ink-xuanzhi`、`ink-xuanmo` 切片。
+- **空间 / 智能体**（`de3c9a5`、`d41c014`）：[`sidebar-lists`](layouts/oh-my-herdr.json) 中空间和智能体权重 5:4、间距 0；[`inkstone-workbench`](mods/inkstone-workbench/main.js) 按机器 → 目录 → 空间分组，[`inkstone-agents`](mods/inkstone-agents/main.js) 单列待处理、运行中、已完成。两张卡接缝靠 `EDGE_B` / `EDGE_TOP` 各裁到 8px；别只改外层间距。终端边条在 [`artDir()`](mods/inkstone-edge/main.js)：有 `paper` 走原纸边；否则按 `background` 命中 `ink-qingci`、`ink-xuanzhi`、`ink-xuanmo` 三套切片，`muted` 只在同背景多档时做精确优先，`*-dimmed` 变体各登记一行。
 - **审查**（`3963819`、`d41c014`）：[`inkstone-review`](mods/inkstone-review/main.js) 从底栏打开，Git 改动以实时 `git diff HEAD` 为主，未跟踪文件的正文点开才读；支持统一和左右对照。`turnEdits()` / `turnPaths()` 从最新用户消息边界提取 `edit` / `write` / `apply_patch` 的路径，只用来发现仓库和置顶该轮文件，不替代 Git 状态。排查「本轮为空」时，先查 Windows 路径是否按 UTF-8 返回、尾部窗口是否读到用户边界。`tailLines()` 在子进程里滤出用户和 `tool_execution_start` 行，别把完整尾部跨 IPC 送回（`exec` 输出上限 8 MiB）。
 - **会话抽屉**（`d41c014`）：[`inkstone-sessions`](mods/inkstone-sessions/main.js) 支持 CodeBuddy、本地/远程扫描和独立的列表缓存 `data/inkstone-sessions-cache.json`（45 秒有效期）。维护删除功能时，只用测试记录验证单条/批量确认：它删除的是实际会话记录，不只是隐藏列表项。右侧抽屉只有文件、会话、收藏；变更走底栏审查，驾驶舱走顶栏弹出层。双语 README 保持面向用户，排障细节留在 RECIPE。
 
@@ -126,13 +137,14 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 + 会话实况识别优先匹配启动参数中的会话 ID，其次匹配终端 OSC 标题前 24 字与 cwd；标题被手动改掉且无参数启动时会当成新会话开。
 + 远程空间会在已连机器上通过 `exec(..., { on })` 扫描会话与文件目录。
 + 图案、项目文件夹、铃铛都是 GPUI 矩形拼的，不走 svg；改图案只改 `sprites.js` 里的字符串数组（`.` 透空、`x` 主色、`o` 白、`k` 近黑），每行 8 列。
-+ `programs.json` 是可选补丁：安装只加 `omp` 一条，已有 `omp` 条目原样保留；`pixel-icons/` 必须一起装，否则 `icon` 路径悬空，终端行与标签会退回默认图标。
++ `programs.json` 是可选补丁：当前安装器只补缺失的 `omp`、`codebuddy` 两项，已有条目即使指定 `-Force` / `--force` 也保留；`refresh.ps1` 只合并这两个白名单键，其他程序与顶层设置不动。`pixel-icons/` 必须一起装，否则 OMP 的 `icon` 路径悬空，终端行与标签会退回默认图标。
 + 复制了 `gpui-kit.d.ts` 之外的全部资产；mod 目录里没有 `.d.ts` / `jsconfig.json`，编辑器里没有类型提示，运行不受影响。
 + `inkstone-edge` 的 `mod.json` 必须是 `{ "place": "none" }`：写别的值 Herdr 会把这块自动插进布局，删掉 mod 后布局就坏。
 + `titlebar` 与 `traffic_lights` 必须写在布局文档的最外层节点上（与 `id`、`type`、`children` 同级）。写到里面的 `root` row 上会被静默忽略：系统标题栏照旧浮在布局上方，`window().buttons` 为 `false`，`inkstone-tabs` 那三个 − □ × 永远不渲染。挪到外层后标题栏消失，最小化 / 最大化 / 关闭落在标签条右端「驾驶舱」之后，与面板按钮同一行。
 + 纸感只由「主题里有没有 `paper` 槽」决定（`Boolean(theme().paper)`），mod 从不认主题名。`themes/zhi.json` 多带 11 个自定义槽（`paper` / `desk` / `ink` / `pencil` / `rule` / `stroke` / `mark` / `bracket` / `up` / `down` / `seal`）；没定义 `paper` 的主题自动走 fallback，不会留浅色纸边，也不会去取不存在的羊皮纸档（`nearest()` 取最近档，永不 404）。
-+ 撕边不要求 `paper` 槽：内置明暗配色按 `background` 和 `muted` 匹配 `inkstone-edge` 的 `PRESETS`，无匹配才留空。
-+ 纸感与撕边资产合计约 3.2MB：`mods/inkstone-chrome/ink/`（39 个文件：羊皮纸 17 档、头像 11、墨线纸片 6、铅笔线 2、徽章 2、LICENSE）、`mods/inkstone-edge/ink/`（8 片撕边 + LICENSE）与 `mods/inkstone-edge/ink-qingci/`（同 8 片的青瓷配色版），都从 Looseleaf（MIT）搬来；`inkstone-pane` 另有 5 个 22px 图标。
++ 撕边不要求 `paper` 槽：内置明暗配色按 `background` 命中 `inkstone-edge` 的 `PRESETS`，`muted` 只用于同背景多档精确优先；实机已有的 `xuanzhi-dimmed`、`xuanmo-dimmed` 各登记一行复用同档切片，其余主题留空。
++ 三套切片的配色要一起改：纸面填充取该主题底色的亮一档（qingci `#edf4ef`、xuanzhi `#fcf8f0`、xuanmo `#1e1d25`），折痕用主题 `muted` 的 0.16 / 0.18 / 0.26，外轮廓 0.26 → 0.34（玄墨保留原 `#050408` 0.65）。只改一个目录会留下「终端有边、侧栏卡片没有」的中间态；改完还要同步 9 份 `PRESETS`（`inkstone-edge` 的 `PRESETS` 与另外 8 个模块的 `EDGE_PRESETS`）。
++ 纸感与撕边资产合计约 3.2MB：`mods/inkstone-chrome/ink/`（39 个文件：羊皮纸 17 档、头像 11、墨线纸片 6、铅笔线 2、徽章 2、LICENSE）、`mods/inkstone-edge/ink/`（8 片撕边 + LICENSE）与 `mods/inkstone-edge/ink-{qingci,xuanzhi,xuanmo}/`（同 8 片的青瓷、宣纸、玄墨配色版），都从 Looseleaf（MIT）搬来；`inkstone-pane` 另有 5 个 22px 图标。
 + **常驻的窗格头按钮要给悬停按钮组留位**：窗格头是 `h_flex` + `gap 8`，四个悬停按钮一出现整行变宽，左侧所有按钮右移 4×22 + 4×8 = 120px。OMP 那枚历史按钮正好在那个位置，点它落到 `close` 上，终端当场被杀。不悬停时要在同样的槽位放四个空的 22px div；合并成一个 88px 不够，因为父级 `gap` 只加在相邻兄弟之间。
 + **旧发言没有箭头时，先看终端保留区**：对当前终端执行 `hc read <term> --lines 20000 --json`；返回 `complete: false` 说明只拿到保留的部分，不代表日志解析失败。不要测同 cwd 下已经结束的兄弟终端。大日志由子进程筛选，`readTextFile` 只读小缓存。
 + **经 `exec` 传给 PowerShell 的命令串里不能有双引号**：Windows 命令行解析会先把 `"` 剥掉，PowerShell 认为语句没结束而挂起等输入，调用只能等超时才返回。所有引号用 `[string][char]34` 拼。命令串前面还要加 `[Console]::OutputEncoding=[Text.Encoding]::UTF8;`，否则中文路径回来是乱码，查找静默失败。
@@ -173,7 +185,7 @@ herdr-app status | grep -o '"errors":\[[^]]*\]'
 |---|---|---|
 | 1 不是 4，或 2 等于 0 | 之前装过旧版，`install.ps1` / `install.sh` 跳过了同名文件 | `.\install.ps1 -Force`（`./install.sh --force`），然后 `herdr-app do layout.switch '{"name":"oh-my-herdr"}'`，或重启 herdr-app |
 | 3 有内容 | herdr 低于 0.1.16，没有 `themes` 导出，撕边 mod 加载失败 | 升级 herdr |
-| 三条都正常、仍无撕边 | 当前主题未命中切片的配色 | 用 `herdr-app do app.theme '{"name":"qingci"}'` 对照，检查 `inkstone-edge/main.js` 的 `PRESETS` |
+| 三条都正常、仍无撕边 | 当前主题未命中切片的配色 | 用 `herdr-app do app.theme --name qingci` 对照，检查 `inkstone-edge/main.js` 的 `PRESETS` |
 
 改完配置要让它重新加载：`layout.switch` 切一次布局，或重启 herdr-app。
 

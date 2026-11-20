@@ -91,7 +91,7 @@ export default class InkstoneFiles extends View {
     this.folders = new Set();
     this.pending = new Set();
     this.marks = {};
-    this.vcs = null;
+    this.vcs = undefined; // 尚在检测；null 才表示普通目录。
     this.index = [];
     this.indexReady = false;
     this.indexLoading = false;
@@ -116,21 +116,34 @@ export default class InkstoneFiles extends View {
     });
   }
 
+  stopWatching() {
+    const watching = this.watching;
+    this.watching = null;
+    watching?.handle?.cancel();
+  }
+
+  async close() {
+    this.context = null;
+    this.stopWatching();
+  }
+
   watch(root, cx) {
-    if (this.on || this.watched === root) return;
-    this.watched = root;
+    if (this.on || this.watching) return;
     const context = this.context;
+    const watching = this.watching = { handle: null };
     cx.spawn(async (cx) => {
       try {
-        while (this.context === context) {
-          await watchFolder(root);
-          if (this.current(context)) {
-            this.indexReady = false;
-            this.refresh(cx);
-          }
+        while (this.watching === watching && this.current(context)) {
+          watching.handle = watchFolder(root);
+          const changes = await watching.handle;
+          if (!changes.length || this.watching !== watching || !this.current(context)) break;
+          this.indexReady = false;
+          this.refresh(cx);
         }
       } catch {
-        if (this.context === context) this.watched = null;
+        // 目录太大或监听不可用：已有定时刷新会补上，下一轮再试。
+      } finally {
+        if (this.watching === watching) this.watching = null;
       }
     });
   }
@@ -157,17 +170,20 @@ export default class InkstoneFiles extends View {
 
   loadIndex(cx) {
     const context = this.context;
-    if (!context?.cwd || this.indexLoading) return;
+    if (!context?.cwd || this.indexLoading || this.vcs === undefined) return;
     this.indexLoading = true;
     const vcs = this.vcs;
     cx.spawn(async (cx) => {
       try {
         const list = await scanIndex(context.cwd, context.on, vcs);
-        if (!this.current(context)) return;
+        if (!this.current(context) || this.vcs !== vcs) return;
         this.index = list;
         this.indexReady = true;
       } finally {
-        if (this.context === context) this.indexLoading = false;
+        if (this.context === context) {
+          this.indexLoading = false;
+          if (this.current(context) && this.vcs !== vcs) this.loadIndex(cx);
+        }
         cx.notify();
       }
     });
@@ -215,6 +231,7 @@ export default class InkstoneFiles extends View {
     const { cwd, on } = location();
     const next = locKey();
     if (next !== this.context?.key) {
+      this.stopWatching();
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on };
@@ -224,12 +241,11 @@ export default class InkstoneFiles extends View {
       this.folders = new Set(saved?.folders);
       this.pending = new Set();
       this.marks = {};
-      this.vcs = null;
+      this.vcs = undefined;
       this.index = [];
       this.indexReady = false;
       this.indexLoading = false;
       this.show(null);
-      this.watched = null;
       this.error = null;
       this.limited = false;
       this.loading = false;
@@ -247,7 +263,11 @@ export default class InkstoneFiles extends View {
         }
         const { vcs, marks } = await this.detectMarks(cwd, on);
         if (!this.current(context)) return;
-        this.vcs = vcs;
+        if (vcs !== this.vcs) {
+          this.vcs = vcs;
+          this.index = [];
+          this.indexReady = false;
+        }
         this.marks = marks;
         this.error = null;
         this.watch(cwd, cx);

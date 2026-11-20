@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, agents, run, openOverlay, exec, theme, window, shared, layout, settings } from "herdr";
+import { spaces, panes, agents, run, openOverlay, exec, theme, window, shared, layout, settings, checking } from "herdr";
 
 // 8×8 像素铃铛，与侧栏空间图案同一套画法：GPUI 矩形逐格拼，边缘是硬的。
 // 不走 svg——矢量缩放会抗锯齿，8px 的铃铛会被糊成圆润的钟形。
@@ -88,6 +88,8 @@ function spaceFill(t, id) {
 // 右侧抽屉的页容器：新布局是一个 stack（切页 = 一条 layout.select）；
 // 老布局是三块互斥 block（只能靠 hidden 开关来"选页"）。两套都认。
 const PANELS = ["files", "sessions", "favorites"];
+// 终端至少留 360 逻辑像素；72 包含画纸边缘、内边距和抽屉分隔。
+const DRAWER_RESERVE = 432;
 
 function pageStack(panel) {
   if (panel?.type === "stack" && (panel.children ?? []).some((c) => PANELS.includes(c.id))) return panel;
@@ -127,6 +129,8 @@ export default class Tabs extends View {
   init(_p, cx) {
     this.pressed = null;
     this.scroll = ScrollHandle.new();
+    this.workWidth = null;
+    this.drawerConstrained = false;
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
@@ -180,45 +184,79 @@ export default class Tabs extends View {
     });
   }
 
-  // One tab per wheel notch. A touchpad or smooth-scrolling mouse sends many
-  // small events per gesture: a short swipe or one smoothed notch (about
-  // 25 px) switches one tab, a longer swipe keeps going a tab per 60 px, at
-  // most one every 100 ms so each shows.
-  wheel(e) {
-    if (e.delta_lines) {
-      if (e.delta_lines.y) run(e.delta_lines.y > 0 ? "tab.prev" : "tab.next");
+  // 纵向滚动交给宿主；触控板的纯横向手势才累积距离切换标签。
+  wheel(e, cx) {
+    const s = this.swipe;
+    if (e.touch_phase === "ended" || e.touch_phase === "cancelled") {
+      s.acc = s.steps = 0;
       return;
     }
-    const s = this.swipe, now = Date.now();
-    // Phases often arrive only as moves (a macOS touchpad included): a pause
-    // or a turn starts a new gesture.
-    if (e.touch_phase === "started" || now - s.at > 250 || e.delta.y * s.acc < 0) Object.assign(s, { acc: 0, steps: 0 });
+    const { x, y } = e.delta_lines ?? e.delta;
+    if (Math.abs(x) <= Math.abs(y)) return;
+    cx.stop_propagation();
+    if (e.delta_lines) {
+      run(x > 0 ? "tab.prev" : "tab.next");
+      return;
+    }
+    const now = Date.now();
+    if (e.touch_phase === "started" || now - s.at > 250 || x * s.acc < 0) Object.assign(s, { acc: 0, steps: 0 });
     s.at = now;
-    s.acc += e.delta.y;
+    s.acc += x;
     const need = s.steps ? 60 : 20;
     if (Math.abs(s.acc) < need || now - s.last < 100) return;
     s.acc -= Math.sign(s.acc) * need;
     s.steps++;
     s.last = now;
-    run(e.delta.y > 0 ? "tab.prev" : "tab.next");
+    run(x > 0 ? "tab.prev" : "tab.next");
   }
 
-  // The side panel is remembered per space: switching shows that space's choice
-  // (closed if it never had one), and opening or closing it records it.
-  syncPanel(space, panel, enabled) {
+  drawerFits(panel) {
+    return this.workWidth === null || this.workWidth >= (panel?.size?.px ?? 380) + DRAWER_RESERVE;
+  }
+
+  rememberPanel(space, page) {
+    if (this.panels[space] === page) return;
+    this.panels[space] = page;
+    localStorage.setItem("panels", JSON.stringify(this.panels));
+  }
+
+  queuePanelSync(cx) {
+    if (this.panelQueued || checking()) return;
+    this.panelQueued = true;
+    cx.timer.after(0, () => {
+      this.panelQueued = false;
+      const root = layout();
+      this.syncPanel(spaces().find((s) => s.active), find(root, "panel"), root);
+    });
+  }
+
+  // 空间记住选中的页，缩窄窗口的临时收起不覆盖这个选择。
+  syncPanel(space, panel, root) {
     if (!space || !panel) return;
-    const now = shownPanel(panel, enabled);
-    if (space.id !== this.space) {
-      const first = this.space === undefined;
-      this.space = space.id; this.pending = null;
-      if (!(first && !(space.id in this.panels))) {
-        const stored = this.panels[space.id] ?? null, want = enabled.includes(stored) ? stored : null;
-        if (want !== now) {
-          this.pending = { want, until: Date.now() + 1000 };
-          if (want) openPanel(want, layout());
-          else closePanel();
-          return;
-        }
+    const now = shownPanel(panel, PANELS);
+    const first = this.space === undefined;
+    const switched = space.id !== this.space;
+    const constrained = !this.drawerFits(panel);
+    const resized = constrained !== this.drawerConstrained;
+    this.space = space.id;
+    this.drawerConstrained = constrained;
+    if (switched || resized) this.pending = null;
+    if (first && !(space.id in this.panels)) this.rememberPanel(space.id, now);
+    if (constrained) {
+      if (!panel.hidden && (!this.pending || Date.now() >= this.pending.until)) {
+        this.pending = { want: null, until: Date.now() + 1000 };
+        closePanel();
+      }
+      return;
+    }
+    if (switched || resized) {
+      const stored = this.panels[space.id];
+      const want = PANELS.includes(stored) ? stored : null;
+      if (want !== now) {
+        this.pending = { want, until: Date.now() + 1000 };
+        if (want) openPanel(want, root);
+        else closePanel();
+        return;
       }
     }
     // Until the restore lands (or something else won), the old state isn't a choice.
@@ -226,9 +264,7 @@ export default class Tabs extends View {
       if (this.pending.want !== now && Date.now() < this.pending.until) return;
       this.pending = null;
     }
-    if (this.panels[space.id] === now) return;
-    this.panels[space.id] = now;
-    localStorage.setItem("panels", JSON.stringify(this.panels));
+    this.rememberPanel(space.id, now);
   }
 
   branchChip(t) {
@@ -295,7 +331,7 @@ export default class Tabs extends View {
       .when(list.length > 0, (el) => el.child(div().text_size(12).font_semibold().child(String(list.length))));
   }
 
-  render() {
+  render(cx) {
     const t = theme();
     const space = spaces().find(p => p.active);
     const fill = space ? spaceFill(t, space.id) : null;
@@ -335,7 +371,11 @@ export default class Tabs extends View {
         .child(div().max_w(200).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
-        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
+        .when(c.active, el => el.child(div().id(`close-${c.id}`).size(28).flex_none().flex().items_center().justify_center()
+          .rounded(5).text_color(t.dim).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground))
+          .tooltip("关闭标签").accessibility_label("关闭标签")
+          .on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); })
+          .child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.
@@ -343,32 +383,50 @@ export default class Tabs extends View {
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel");
-    // 右侧抽屉的页：文件 / 变更 / 会话 / 收藏 / 驾驶舱。
-    // inkstone-changes 自己判断仓库与改动，不受「Git 工作树」开关影响，按钮常驻。
     const enabled = PANELS;
+    const drawerFits = this.drawerFits(panel);
     const icons = { files: "mods/files/file.svg", sessions: "mods/inkstone-chrome/terminal.svg", favorites: "mods/inkstone-chrome/pin.svg" };
     const names = { files: "文件", sessions: "会话", favorites: "收藏" };
-    this.syncPanel(space, panel, enabled);
+    const drawerPage = shownPanel(panel, enabled);
+    const pending = this.pending;
+    const waiting = pending && pending.want !== drawerPage && Date.now() < pending.until;
+    if (space && panel && (space.id !== this.space || !drawerFits !== this.drawerConstrained ||
+      (!waiting && (drawerFits ? pending || this.panels[space.id] !== drawerPage : !panel.hidden)))) {
+      this.queuePanelSync(cx);
+    }
     // 图标按钮固定在右侧：点已激活的页收起抽屉，点别的页切过去。
     // 用图标而非文字：中文词会挤掉标签页的位置（靠 tooltip 与无障碍名说明）。
     const panelButton = (id) => {
-      const on = shownPanel(panel, enabled) === id;
-      return h_flex().id(`panel-${id}`).h(26).flex_none().px(7).gap(5).items_center().rounded(6).cursor_pointer()
-        .bg(on ? (PAPER(t) ? `${MARK}9e` : t.selected) : t.chrome).text_color(on ? t.foreground : t.muted)
-        .hover(s => s.bg(PAPER(t) ? `${MARK}4d` : t.hover)).on_mouse_down("left", stop)
-        .on_click(() => {
-          if (on) closePanel();
-          else openPanel(id, layout());
-        }).tooltip(`${names[id]}面板`).accessibility_label(`${names[id]}面板`)
+      const on = drawerPage === id;
+      return h_flex().id(`panel-${id}`).h(26).flex_none().px(7).gap(5).items_center().rounded(6)
+        .bg(on ? (PAPER(t) ? `${MARK}9e` : t.selected) : t.chrome).text_color(drawerFits ? (on ? t.foreground : t.muted) : t.dim)
+        .on_mouse_down("left", stop)
+        .when(drawerFits, (el) => el.cursor_pointer().hover(s => s.bg(PAPER(t) ? `${MARK}4d` : t.hover)).on_click(() => {
+          const current = layout();
+          const drawer = find(current, "panel");
+          const activeSpace = spaces().find((s) => s.active);
+          if (!activeSpace || !drawer || !this.drawerFits(drawer)) return;
+          const want = shownPanel(drawer, enabled) === id ? null : id;
+          this.rememberPanel(activeSpace.id, want);
+          this.pending = { want, until: Date.now() + 1000 };
+          if (want) openPanel(want, current);
+          else closePanel();
+        })).tooltip(drawerFits ? `${names[id]}面板` : `窗口过窄，拉宽后可打开${names[id]}面板`)
+        .accessibility_label(`${names[id]}面板`)
         .child(svg(icons[id]).size(14).flex_none())
         .child(div().text_size(11).child(names[id]));
     };
-    return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(PAPER(t) ? t.paper : t.chrome)
+    return h_flex().id("inkstone-tabs-root").size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(PAPER(t) ? t.paper : t.chrome)
+      .on_size_change((size, cx) => {
+        if (this.workWidth === size.width) return;
+        this.workWidth = size.width;
+        cx.notify();
+      })
       // 窗口按钮贴右边缘：系统标题栏去掉后（titlebar none），这排就是唯一的最小化/关闭入口。
       .when(Boolean(w?.buttons), (el) => el.pr(6))
       .when(!PAPER(t), el => el.border_b(1).border_color(t.border))
       .on_mouse_up("left", () => { this.pressed = null; })
-      .on_scroll_wheel(e => this.wheel(e))
+      .on_scroll_wheel((e, cx) => this.wheel(e, cx))
       // 当前空间的颜色点：和侧栏那一行、tab 数徽章是同一个颜色，终端区也有了归属。
       .when(Boolean(space), el => el.child(div()
         .id("space-mark")

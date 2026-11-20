@@ -102,10 +102,9 @@ function find(node, id) {
 export default class InkstoneSettings extends View {
   init(_props, cx) {
     this.doc = null;
-    this.raw = null;
     this.err = null;
     this.conf = null;
-    this.confRaw = null;
+    this.pendingWrite = Promise.resolve();
     // 读文件是异步的：读完必须 notify，否则视图停在「读取布局…」。
     this.load(cx);
   }
@@ -116,7 +115,6 @@ export default class InkstoneSettings extends View {
         this.err = `找不到布局文件：${FILE()}`;
       } else {
         try {
-          this.raw = text;
           this.doc = JSON.parse(text);
         } catch (e) {
           this.err = `布局文件不是合法 JSON：${e}`;
@@ -129,43 +127,51 @@ export default class InkstoneSettings extends View {
     });
 
     // settings.json 只用于「界面」组：拿不到就退回运行时 settings()。
-    readTextFile(SETTINGS_FILE()).then((text) => {
-      this.confRaw = text;
+    this.loadSettings(cx);
+  }
+
+  async loadSettings(cx) {
+    try {
+      const text = await readTextFile(SETTINGS_FILE());
       this.conf = text ? JSON.parse(text) : { ...readSettings() };
-      cx.notify();
-    }).catch((e) => {
+    } catch (e) {
       this.conf = { ...readSettings() };
       this.err = this.err ?? `读取 settings.json 失败：${e}`;
-      cx.notify();
-    });
+    }
+    cx.notify();
   }
 
-  // 写回布局文件，必要时重载布局让 terminal_menu 生效。
-  save(cx, reload) {
-    if (!this.doc) return;
-    const text = JSON.stringify(this.doc, null, 2) + "\n";
-    writeTextFile(FILE(), text, this.raw).then(() => {
-      this.raw = text;
-      if (reload) run("layout.switch", { name: LAYOUT });
-    }).catch((e) => {
-      this.err = `写入失败：${e}`;
-      cx.notify();
+  // 每次只改点击对应的字段。先串行本窗口的写入；外部写入撞上 CAS 时再重读一次。
+  save(file, slot, change, cx, after) {
+    this.pendingWrite = this.pendingWrite.then(async () => {
+      try {
+        for (let attempt = 0; ; attempt++) {
+          const raw = await readTextFile(file);
+          if (raw === null && slot === "doc") throw new Error(`找不到布局文件：${file}`);
+          const next = raw === null ? { ...readSettings() } : JSON.parse(raw);
+          if (change(next) === false) return;
+          try {
+            await writeTextFile(file, JSON.stringify(next, null, 2) + "\n", raw);
+          } catch (e) {
+            if (attempt === 0) continue;
+            throw e;
+          }
+          this[slot] = next;
+          this.err = null;
+          after?.(next);
+          return;
+        }
+      } catch (e) {
+        this.err = `写入 ${slot === "doc" ? "布局" : "settings.json"} 失败：${e?.message ?? e}`;
+      } finally {
+        cx.notify();
+      }
     });
+    return this.pendingWrite;
   }
 
-  // 写回 settings.json：Herdr 盯着这个文件，改完热载。
-  saveSettings(patch, cx) {
-    const next = { ...(this.conf ?? readSettings()), ...patch };
-    const text = JSON.stringify(next, null, 2) + "\n";
-    writeTextFile(SETTINGS_FILE(), text, this.confRaw).then(() => {
-      this.conf = next;
-      this.confRaw = text;
-      this.err = null;
-      cx.notify();
-    }).catch((e) => {
-      this.err = `写入 settings.json 失败：${e}`;
-      cx.notify();
-    });
+  saveSettings(change, cx) {
+    return this.save(SETTINGS_FILE(), "conf", change, cx);
   }
 
   // Git 增强是 shared 开关（侧栏 30 秒内跟着变），不用写文件。
@@ -195,17 +201,17 @@ export default class InkstoneSettings extends View {
   }
 
   setRightClick(mode, cx) {
-    if (!this.doc || this.rightClick() === mode) return;
-    this.doc.terminal_menu = mode === "paste" ? "inkstone-paste" : "inkstone-menu";
-    cx.notify();
-    this.save(cx, true);
+    return this.save(FILE(), "doc", (doc) => {
+      doc.terminal_menu = mode === "paste" ? "inkstone-paste" : "inkstone-menu";
+    }, cx, () => run("layout.switch", { name: LAYOUT }));
   }
 
   pickTheme(name, cx) {
     const light = ["qingci", "zhi", "xuanzhi", "xuanzhi-dimmed"].includes(name);
     if (this.doc) {
-      this.doc.theme = { ...(this.doc.theme ?? {}), [light ? "light" : "dark"]: name };
-      this.save(cx, true);
+      this.save(FILE(), "doc", (doc) => {
+        doc.theme = { ...(doc.theme ?? {}), [light ? "light" : "dark"]: name };
+      }, cx, () => run("layout.switch", { name: LAYOUT }));
     }
     setShared("inkstone.theme", name);
     run("app.theme", { name });
@@ -224,13 +230,11 @@ export default class InkstoneSettings extends View {
   }
 
   toggleStatus(id, cx) {
-    const node = find(this.doc, id);
-    if (!node) return;
-    node.hidden = Boolean(this.shown(id));
-    if (node.hidden) run("layout.hide", { id });
-    else run("layout.show", { id });
-    cx.notify();
-    this.save(cx, false);
+    return this.save(FILE(), "doc", (doc) => {
+      const node = find(doc, id);
+      if (!node) return false;
+      node.hidden = !node.hidden;
+    }, cx, (doc) => run(find(doc, id).hidden ? "layout.hide" : "layout.show", { id }));
   }
 
   // —— 绘制 ——
@@ -298,33 +302,35 @@ export default class InkstoneSettings extends View {
     const zoom = Number(conf.zoom ?? 1);
     const font = conf.ui_font ?? FONTS[0];
     const ligatures = Boolean(conf.font_ligatures);
-    const fontIndex = Math.max(0, FONTS.indexOf(font));
     return v_flex().flex_1().min_w(0).h_full().gap(12)
       .child(v_flex().w_full().gap(5)
         .child(this.heading(t, "外观", "与 Herdr 的 Settings 是同一份 settings.json"))
         .child(h_flex().w_full().gap(6)
-          .child(this.seg(t, "app-light", "浅色", !dark, (_e, cx) => this.saveSettings({ appearance: "light" }, cx)))
-          .child(this.seg(t, "app-dark", "深色", dark, (_e, cx) => this.saveSettings({ appearance: "dark" }, cx)))))
+          .child(this.seg(t, "app-light", "浅色", !dark, (_e, cx) => this.saveSettings((c) => { c.appearance = "light"; }, cx)))
+          .child(this.seg(t, "app-dark", "深色", dark, (_e, cx) => this.saveSettings((c) => { c.appearance = "dark"; }, cx)))))
       .child(v_flex().w_full().gap(5)
         .child(this.heading(t, "缩放与字体", "整窗缩放 · 界面字体 · 连字"))
         .child(h_flex().w_full().gap(6).items_center()
-          .child(this.seg(t, "zoom-out", "−", false, (_e, cx) => {
-            const i = ZOOMS.findIndex((z) => z >= zoom - 0.001);
-            this.saveSettings({ zoom: ZOOMS[Math.max(0, (i < 0 ? ZOOMS.length : i) - 1)] }, cx);
-          }))
+          .child(this.seg(t, "zoom-out", "−", false, (_e, cx) => this.saveSettings((c) => {
+            const i = ZOOMS.findIndex((z) => z >= Number(c.zoom ?? 1) - 0.001);
+            c.zoom = ZOOMS[Math.max(0, (i < 0 ? ZOOMS.length : i) - 1)];
+          }, cx)))
           .child(div().h(26).px(10).flex().items_center().rounded(6).bg(t.raised).text_size(11)
             .text_color(t.foreground).child(`${Math.round(zoom * 100)}%`))
-          .child(this.seg(t, "zoom-in", "＋", false, (_e, cx) => {
-            const i = ZOOMS.findIndex((z) => z > zoom + 0.001);
-            this.saveSettings({ zoom: ZOOMS[i < 0 ? ZOOMS.length - 1 : i] }, cx);
-          }))
+          .child(this.seg(t, "zoom-in", "＋", false, (_e, cx) => this.saveSettings((c) => {
+            const i = ZOOMS.findIndex((z) => z > Number(c.zoom ?? 1) + 0.001);
+            c.zoom = ZOOMS[i < 0 ? ZOOMS.length - 1 : i];
+          }, cx)))
           .child(div().w(8).flex_none())
-          .child(this.seg(t, "font-next", font, false, (_e, cx) => this.saveSettings({ ui_font: FONTS[(fontIndex + 1) % FONTS.length] }, cx)))
+          .child(this.seg(t, "font-next", font, false, (_e, cx) => this.saveSettings((c) => {
+            const i = Math.max(0, FONTS.indexOf(c.ui_font ?? FONTS[0]));
+            c.ui_font = FONTS[(i + 1) % FONTS.length];
+          }, cx)))
           .child(div().h(26).px(8).flex().items_center().rounded(6).text_size(12)
             .bg(ligatures ? t.selected : t.raised).text_color(ligatures ? t.foreground : t.muted)
             .cursor_pointer().hover((s) => s.bg(t.hover))
             .tooltip("字体连字（==、-> 之类合成一个符号）")
-            .on_click((_e, cx) => this.saveSettings({ font_ligatures: !ligatures }, cx))
+            .on_click((_e, cx) => this.saveSettings((c) => { c.font_ligatures = !c.font_ligatures; }, cx))
             .child(ligatures ? "连字 开" : "连字 关"))))
       .child(v_flex().w_full().gap(2)
         .child(this.heading(t, "工作台", "侧栏显示哪些内容"))

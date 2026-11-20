@@ -140,8 +140,22 @@ const FOUND = new Map();        // `标题|cwd` -> { file, title, size, at }
 const CACHE_TTL = 120000;       // 会话文件查找结果的复用时长
 // readTextFile 只读得回 1 MiB，超了就解析失败、也就再也覆盖不回去：
 // 宁可这次不落盘（冷开退化成一次 node 全量解析，约 0.5 s），也不写一份读不回来的缓存。
-const CACHE_MAX = 900000;
+const CACHE_MAX_BYTES = 900000;
 const CACHE_FILE = () => `${appHome()}/data/inkstone-history-cache.json`;
+
+function utf8Bytes(s) {
+  let bytes = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) bytes++;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && s.charCodeAt(i + 1) >= 0xdc00 && s.charCodeAt(i + 1) <= 0xdfff) {
+      bytes += 4;
+      i++;
+    } else bytes += 3;
+  }
+  return bytes;
+}
 
 async function nodeOk() {
   if (NODE.ok !== null) return NODE.ok;
@@ -180,21 +194,27 @@ async function saveCache() {
   saveDirty = false;
   savedAt = Date.now();
   if (checking()) return; // `herdr-app check` 会真的跑 init，别在检查时写盘
-  try {
-    const db = await diskCache();
-    for (const [k, e] of PARSED) db.entries[k] = { seen: e.seen, at: e.at, items: e.items };
-    const rows = Object.entries(db.entries).filter(([, e]) => e && Array.isArray(e.items));
-    rows.sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
-    const keep = {};
-    for (const [k, e] of rows.slice(0, 3)) keep[k] = e;
-    db.entries = keep;
-    const json = JSON.stringify(db);
-    if (json.length > CACHE_MAX) return;
-    // expected 传上次读到的原文：null 只在文件不存在时有效，文件已存在时会被拒。
-    await writeTextFile(CACHE_FILE(), json, diskRaw);
-    diskRaw = json;
-  } catch {
-    /* 写不进去只影响下次冷开的速度，面板本身不受影响 */
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const db = await diskCache();
+      const entries = { ...db.entries };
+      for (const [k, e] of PARSED) {
+        if (!entries[k] || e.at >= (entries[k].at || 0)) entries[k] = e;
+      }
+      const rows = Object.entries(entries).filter(([, e]) => e && Array.isArray(e.items));
+      rows.sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+      const next = { v: 1, entries: Object.fromEntries(rows.slice(0, 3)) };
+      const json = JSON.stringify(next);
+      if (utf8Bytes(json) > CACHE_MAX_BYTES) return;
+      await writeTextFile(CACHE_FILE(), json, diskRaw);
+      diskRaw = json;
+      diskMemo = next;
+      return;
+    } catch {
+      // 重新读取并合并其他实例写入的条目；不把未落盘的快照当作 expected。
+      diskRaw = null;
+      diskMemo = null;
+    }
   }
 }
 
@@ -576,6 +596,13 @@ function align(messages, lines) {
   return out;
 }
 
+function historyStatus(can, lines, pending = "对齐中…") {
+  if (can) return "这一轮还在终端里";
+  if (lines === null) return pending;
+  if (lines < 0) return "读不到终端历史";
+  return `已滚出终端（仅留 ${lines} 行）`;
+}
+
 export default class History extends View {
   init(_props, cx) {
     this.handle = cx.focus_handle();
@@ -603,8 +630,7 @@ export default class History extends View {
     this.sel = -1;
     this.align = [];
     this.raw = [];
-    this.histLines = 0;
-    this.alignedLines = -1;
+    this.histLines = null;
     this.alignTot = -1; // 上次对位时终端的 scroll.total，用来判断要不要重算
     this.busy = false;
     this.loading = true;
@@ -615,8 +641,8 @@ export default class History extends View {
     this.query = "";
     this.typing = false;
     this.closed = false; // 面板关掉后要停掉目录监听
-    this.following = false;
-    this.pendingReload = false;
+    this.following = null;
+    this.pendingReload = null;
     this.handle = cx.focus_handle();
     this.input = InputState.new({ placeholder: "搜索提问、回复或工具…" });
     this.input.on("change", (_e, c) => {
@@ -640,15 +666,18 @@ export default class History extends View {
     }
     // 窗格头按钮靠这条记录判断"再点一次是收起"。
     setShared("inkstone.history", { term: this.term, id: this.oid });
-    this.load(cx);
-    // 会话文件是目录事件驱动的（见 follow），这里只兜「标题变了 = 换了会话」，
-    // 纯内存比较，不起进程。
-    cx.timer.every(15000, (c) => this.checkTitle(c));
+    this.checkTitle(cx);
+    // 目录事件驱动读取；定时器只检测换会话，并在没有监听时补读。
+    cx.timer.every(15000, (c) => {
+      this.checkTitle(c);
+      if (!this.following && !this.busy && this.pane()) this.queueReload(c);
+    });
   }
 
   // 关掉自己，并让窗格头按钮回到未开状态。
   shut() {
     this.closed = true;
+    this.stopFollowing();
     this.release();
     // 关窗时把还没落盘的解析结果写掉，下次冷开就能直接出列表。
     if (saveDirty) saveCache();
@@ -659,6 +688,7 @@ export default class History extends View {
   // 否则窗格头按钮会一直以为自己还开着，第一次点变成「关一个不存在的窗口」。
   async close() {
     this.closed = true;
+    this.stopFollowing();
     this.release();
     if (saveDirty) saveCache();
   }
@@ -693,8 +723,10 @@ export default class History extends View {
   }
 
   async load(cx, silent = false) {
-    if (this.busy) return; // 目录事件和标题变化都可能同时调进来
+    if (this.busy || this.closed) return;
     this.busy = true;
+    const source = this.source;
+    const current = () => !this.closed && this.source === source;
     let file = "";
     if (!silent) {
       this.loading = true;
@@ -708,13 +740,13 @@ export default class History extends View {
       const found = this.file
         ? { file: this.file, title: this.title }
         : p ? await findSessionCached(p.title, p.cwd) : null;
+      if (!current()) return;
       if (!found) {
         this.messages = [];
         this.marks = [];
         this.raw = [];
         this.align = [];
-        this.histLines = 0;
-        this.alignedLines = -1;
+        this.histLines = null;
         this.note = "没找到这个会话的记录";
         return;
       }
@@ -724,6 +756,7 @@ export default class History extends View {
       if (found.size) this.size = found.size;
       // 1) 缓存里的列表先上屏（内存或上次落盘的），冷开不用干等一次全量解析。
       const db = await diskCache();
+      if (!current()) return;
       const entry = PARSED.get(file) ?? db.entries[file] ?? null;
       const cached = entry && Array.isArray(entry.items) && entry.items.length ? entry : null;
       if (cached) {
@@ -734,7 +767,9 @@ export default class History extends View {
       }
       // 2) 只解析上次之后新增的字节；node 不可用时 from = 0，整份重来（等同改造前的行为）。
       const from = (await nodeOk()) ? (cached?.seen ?? 0) : 0;
+      if (!current()) return;
       const got = await readMessages(file, from);
+      if (!current()) return;
       if (!got) throw new Error("会话文件读不出来");
       const items = got.from > 0 && cached ? cached.items.concat(got.items) : got.items;
       PARSED.set(file, { seen: got.seen, at: Date.now(), items });
@@ -748,27 +783,35 @@ export default class History extends View {
       // 能不能跳回终端要对着终端现有的几千行算，算完给列表右侧的箭头用。
       await this.syncAlign(cx);
     } catch (e) {
+      if (!current()) return;
       // 读文件/读终端任何一步失手都要把 loading 收掉，否则面板会一直停在「读取会话…」。
       // 顺手把文件句柄和缓存都丢掉：下次重新按标题找，别对着一个坏路径重试。
       this.note = `读取失败：${e?.message ?? e}`;
       this.file = "";
+      this.stopFollowing();
       if (file) PARSED.delete(file);
     } finally {
       this.busy = false;
-      this.loading = false;
-      cx.notify();
+      if (current()) {
+        this.loading = false;
+        cx.notify();
+      } else if (!this.closed) {
+        this.load(cx);
+      }
     }
   }
 
   // 对位：哪一轮还在终端的保留区里、在第几行。
   // 终端保留区不跟着新消息变，行数和对位长度都没动就直接复用上一次的结果。
   async syncAlign(cx) {
+    const source = this.source;
     const p = this.pane();
     const tot = p?.scroll?.total ?? -1;
-    if (this.align.length === this.messages.length && this.histLines > 0 && this.alignTot === tot) return;
-    const h = await readHistory(this.term, 1500);
-    this.histLines = h ? h.lines.length : 0;
-    this.alignedLines = h ? h.lines.length : -1;
+    const previous = this.histLines;
+    if (previous !== null && previous > 0 && this.align.length === this.messages.length && this.alignTot === tot) return;
+    const h = await readHistory(this.term, previous === null || previous < 0 ? 0 : 1500);
+    if (this.closed || this.source !== source) return;
+    this.histLines = h ? h.lines.length : -1;
     this.align = h ? align(this.messages, h.lines) : [];
     this.alignTot = tot;
     cx.notify();
@@ -777,31 +820,40 @@ export default class History extends View {
   // 以前是每 5 秒起一个 PowerShell 问「文件长了没有」——一次进程 1.4–1.9s，白烧。
   // 现在监听会话目录：有写入才重载，并且 2 秒去抖（OMP 每写一行一条事件）。
   // 空闲时 0 次进程；对话过程中最多 1 次 / 2 秒。
+  stopFollowing() {
+    const following = this.following;
+    this.following = null;
+    following?.handle?.cancel();
+  }
+
   follow(cx) {
-    if (this.following || !this.file) return;
-    this.following = true;
+    if (this.closed || !this.file) return;
+    const dir = this.file.replace(/[\\/][^\\/]+$/, "");
+    if (this.following?.dir === dir) return;
+    this.stopFollowing();
+    const following = this.following = { dir, handle: null };
     cx.spawn(async (c) => {
       try {
-        while (!this.closed && this.file) {
-          const dir = this.file.replace(/[\\/][^\\/]+$/, "");
-          await watchFolder(dir);
-          if (this.closed) break;
+        while (this.following === following && !this.closed) {
+          following.handle = watchFolder(dir);
+          const changes = await following.handle;
+          if (!changes.length || this.following !== following || this.closed) break;
           this.queueReload(c);
         }
       } catch {
-        this.following = false;
-        this.note = "会话目录无法监听，切回终端后重新打开本面板";
-        c.notify();
+        // 监听失败时由标题检测计时器补一次读取，读完再尝试监听。
+      } finally {
+        if (this.following === following) this.following = null;
       }
     });
   }
 
   queueReload(cx) {
     if (this.pendingReload || this.closed) return;
-    this.pendingReload = true;
+    const pending = this.pendingReload = this.source;
     cx.timer.after(2000, (c) => {
-      this.pendingReload = false;
-      if (this.closed) return;
+      if (this.closed || this.pendingReload !== pending) return;
+      this.pendingReload = null;
       if (this.busy) {
         this.queueReload(c); // 正在读就别叠着读，等这一轮读完再来
         return;
@@ -810,33 +862,48 @@ export default class History extends View {
     });
   }
 
-  // 标题变了说明换了会话（或同一会话换了任务名）。会话首行没有 title 时别拿空串去比，
-  // 否则每 15 秒重载一次。
+  // 比较终端的标题和目录，而不是会话文件里的标题；文件标题可能为空或带不同前缀。
   checkTitle(cx) {
     const p = this.pane();
-    if (!p || !this.title) return;
-    if (bare(p.title) !== this.title) {
-      // 标题变了 = 换了会话，认得的那个文件作废，让 load 重新按标题找。
-      this.file = "";
-      this.load(cx, this.messages.length > 0);
-    }
+    const title = bare(p?.title);
+    const cwd = p?.cwd ?? "";
+    if (this.source?.title === title && this.source.cwd === cwd) return;
+    this.source = { title, cwd };
+    this.stopFollowing();
+    this.pendingReload = null;
+    this.file = "";
+    this.title = "";
+    this.size = 0;
+    this.messages = [];
+    this.marks = [];
+    this.raw = [];
+    this.sel = -1;
+    this.align = [];
+    this.histLines = null;
+    this.alignTot = -1;
+    this.note = "";
+    this.loading = true;
+    if (this.busy) cx.notify();
+    else this.load(cx);
   }
 
   async jump(i, cx) {
     const p = this.pane();
     if (!p) return;
+    const source = this.source;
     const h = await readHistory(this.term);
+    if (this.closed || this.source !== source) return;
     if (!h) {
       this.note = "读不到终端历史";
       cx.notify();
       return;
     }
     // 对位要遍历几千行，同一次打开里历史行数没变就直接复用上次的结果。
-    const reuse = this.alignedLines === h.lines.length && this.align.length === this.messages.length;
+    const reuse = this.histLines === h.lines.length && this.align.length === this.messages.length;
     const al = reuse ? this.align : align(this.messages, h.lines);
     if (!reuse) {
       this.align = al;
-      this.alignedLines = h.lines.length;
+      this.histLines = h.lines.length;
     }
     const idx = al[i] ?? -1;
     if (idx < 0) {
@@ -1064,22 +1131,11 @@ export default class History extends View {
       .child(div().flex_none().pr(8).text_size(10).text_color(t.dim).child(hhmm(mk.ts)));
   }
 
-  // 复制走临时文件：exec 没有 stdin，中文直接拼进命令行会被引号和代码页吃掉。
-  async copy(text, cx) {
+  copy(text, cx) {
     const body = String(text || "");
     if (!body) return;
-    const tmp = `${home()}\\.herdr-history-copy.txt`;
     try {
-      await writeTextFile(tmp, body, null);
-      await exec(
-        "powershell",
-        [
-          "-NoProfile",
-          "-Command",
-          `${PS}Set-Clipboard -Value (Get-Content -LiteralPath '${sq(tmp)}' -Raw -Encoding UTF8)`,
-        ],
-        { timeout: 15000 },
-      );
+      cx.write_to_clipboard(body);
       this.note = `已复制 ${body.length} 字`;
     } catch (e) {
       this.note = `复制失败：${e?.message ?? e}`;
@@ -1146,7 +1202,7 @@ export default class History extends View {
               .flex_none()
               .text_size(FS.sub)
               .text_color(can ? t.done : t.muted)
-              .child(can ? "这一轮还在终端里" : `已滚出终端（仅留 ${this.histLines} 行）`),
+              .child(historyStatus(can, this.histLines)),
           )
           .child(div().flex_1())
           .child(this.textButton(t, "hx-read", "阅读", (c) => this.openRead(i, c)))
@@ -1258,10 +1314,11 @@ export default class History extends View {
     // 对位结果已经在内存里，顺手把「这一轮在 scrollback 的第几行」也算好带过去，
     // 阅读窗口就不用为了点一次「跳到终端」再跑一遍 34 MB 的解析。
     let top = -1;
-    if (idx >= 0 && this.alignedLines > 0) {
-      const total = p?.scroll?.total ?? this.alignedLines;
+    const lines = this.histLines;
+    if (idx >= 0 && lines !== null && lines > 0) {
+      const total = p?.scroll?.total ?? lines;
       const rows = p?.scroll?.len || 39;
-      const abs = total - this.alignedLines + idx;
+      const abs = total - lines + idx;
       top = Math.max(0, Math.min(Math.max(0, total - rows), abs - 1));
     }
     setShared("inkstone.history.read", {
@@ -1272,7 +1329,7 @@ export default class History extends View {
       reply: m.reply || "",
       tools: m.tools || [],
       can: idx >= 0,
-      lines: this.alignedLines,
+      lines,
       top,
     });
     openOverlay({
@@ -1343,7 +1400,7 @@ export default class History extends View {
           .truncate()
           .text_size(FS.sub)
           .text_color(this.tip ? t.done : r.can ? t.muted : t.dim)
-          .child(this.tip || (r.can ? "这一轮还在终端里" : `已滚出终端（仅留 ${r.lines} 行）`)),
+          .child(this.tip || historyStatus(r.can, r.lines, "打开阅读时尚未对齐")),
       )
       .child(this.textButton(t, "hx-r-copy-q", "复制原文", (c) => this.copy(text, c)))
       .when(reply !== "", (el) => el.child(this.textButton(t, "hx-r-copy-a", "复制回复", (c) => this.copy(reply, c))))
