@@ -1,22 +1,60 @@
 # Oh My Herdr
-**少翻终端，多看结果。** Oh My Herdr 是一套给 [Herdr 桌面版](https://herdr.dev/) 用的中文工作台布局。保留熟悉的终端和空间，把找项目、续会话、读回复、审改动放到手边。
 
-[English](README.en.md) · 安装脚本：[Windows](install.ps1) · [macOS / Linux](install.sh)
+**Less terminal scrolling, more time with the results.** A workspace layout for the [Herdr desktop app](https://herdr.dev/): spaces grouped by folder, agents sorted by who needs you, and files, sessions and diffs in one drawer.
 
-![](screenshot.png)
+Herdr Desktop 0.1.16+ · Windows / macOS / Linux · MIT · [简体中文](README.zh-CN.md)
 
-## 和 Herdr 默认布局比，日常操作哪里更顺手？
-| 你想做什么 | Herdr 默认布局 | Oh My Herdr |
+![Oh My Herdr in the Qingci theme, with a collapsed space rail, split terminals and a file drawer](preview.png)
+
+## Install
+
+Ask your agent:
+
+```
+Read ~/.config/herdr-app/AGENTS.md, then add this layout: github.com/wahaha1024/oh-my-herdr
+```
+
+Or run the script yourself:
+
+```sh
+git clone https://github.com/wahaha1024/oh-my-herdr
+cd oh-my-herdr && ./install.ps1 -Force        # macOS / Linux: ./install.sh --force
+herdr-app do layout.switch '{"name":"oh-my-herdr"}'
+```
+
+`-Force` replaces the layout, mods and themes with this package's copies; `-DryRun` prints what would change and writes nothing. The installer needs an initialised config directory (`~/.config/herdr-app` with `settings.json`), so launch Herdr once before installing.
+
+## What changes from Herdr’s default layout?
+
+| When you want to… | Default Herdr | Oh My Herdr |
 | --- | --- | --- |
-| 在多个项目间切换 | 从机器与空间列表进入终端 | 空间按目录归组，展开就能看到终端；同一空间的配色贯穿侧栏、标签和窗格，侧栏还能收成图标轨 |
-| 找出现在该处理谁 | 在侧栏和标签上看智能体状态 | 左侧独立列出待处理、运行中、已完成；点待处理项直接回到对应终端 |
-| 边看终端边找文件 | 使用内置文件和变更面板 | 中文抽屉按需展开，可切换文件、会话和收藏；文件支持搜索、只读预览和一键复制 `@相对路径` |
-| 一眼认出当前窗格 | 使用默认窗格头和主题 | 窗格头直接显示程序、目录和状态；月白、玄墨随系统明暗切换，也可换成带撕纸边和荧光笔选中效果的[纸墨主题](screenshot-paper.png) |
+| Switch between projects | Navigate the machine and space list | Browse spaces grouped by folder and expand them to see terminals. Space colours carry through the sidebar, tabs and panes. Collapse the sidebar to an icon rail when you need the room. |
+| See who needs you | Check agent status in the sidebar and tabs | Scan separate waiting, running and done groups. Click a waiting agent to go straight to its terminal. |
+| Find a file without leaving the terminal | Use the built-in files and changes panels | Open one drawer for files, sessions and favourites. Search and preview files, then copy an `@relative/path` reference in one click. |
+| Recognise the current pane at a glance | Use the default pane header and theme | See the program, folder and status in each pane header. Qingci and Xuanmo follow the system’s light and dark modes; the optional [paper theme](screenshot-paper.png) adds torn edges and highlighter selection. |
 
+## New workflows, not just a new look
 
-## 不只是换主题：新增的工作流
-+ **想找上一轮的回答？直接搜，不用往上翻。** OMP「历史发言」可搜索提问、回复和工具调用，按轮查看，并标出上下文压缩点。长回复可以在大窗口里读；只要那一轮还在终端回滚区，就能跳回原位。历史面板目前仅支持 Windows 上的本地 OMP 会话。
-+ **不同智能体的旧会话，从同一个入口续聊。** 会话页汇总 OMP、Codex、Claude Code、CodeBuddy、Pi、项目归档以及可选的 OpenCode（需 `sqlite3`）。可按关键词和来源筛选，也可扫描已连接机器的会话。已经打开的就切回原终端，可恢复的旧会话直接续开或复制恢复命令。
-+ **先审智能体这一轮碰过的文件。** 「审查」窗口读取当前 Git 改动，把从 OMP 本轮日志识别到的改动文件置顶。支持统一视图和左右对照，暂存区、工作区与未跟踪文件都能看。
-+ **不用切出去查端口和资源。** 底栏直接看 CPU、内存和监听端口；点开端口列表，可以在浏览器打开本地服务。常用项目目录也能收藏，不必每次从侧栏重新找。
+- **Find an earlier reply without scrolling.** Search OMP prompts, replies and tool calls, read by turn, and see where context was compacted. Open long replies in a larger reader or jump back to a turn that’s still in terminal scrollback. This history panel currently supports local OMP sessions on Windows only.
+- **Resume different agents’ sessions from one place.** Search and filter sessions from OMP, Codex, Claude Code, CodeBuddy, Pi, project archives and optional OpenCode (requires `sqlite3`), including on connected machines. Focus a session that’s already open, or resume a supported past session directly or by copying its resume command.
+- **Review the files your agent just touched.** The review window reads the current Git diff and puts files identified from the latest OMP turn first. Switch between unified and side-by-side views, with staged, unstaged and untracked changes in one place.
+- **Check ports and resource use without switching away.** See CPU, memory and listening ports in the status bar, or open a local service in your browser from the port list. Favourite frequently used project folders so you don’t have to browse for them again.
 
+## Themes
+
+Qingci follows the system’s light mode and Xuanmo its dark mode; both ship with the layout. The optional [Zhi paper theme](screenshot-paper.png) adds torn paper edges and highlighter selection.
+
+![Oh My Herdr in the paper theme, with torn pane edges and a paper sidebar](screenshot-paper.png)
+
+![The same layout with the file drawer open](screenshot.png)
+
+## Notes
+
+- The history panel reads local OMP sessions on Windows only.
+- Sessions from OpenCode need `sqlite3` on the machine that holds the session.
+- The installers skip files that already exist unless you pass `-Force` / `--force`, and they never delete themes left by an older install.
+- To uninstall, remove `layouts/oh-my-herdr.json`, the `inkstone-*` folders under `mods/`, the `inkstone-*` and `zhi` themes, then run `herdr-app do layout.switch '{"name":"main"}'`.
+
+## License
+
+MIT

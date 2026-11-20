@@ -4,7 +4,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, agents, run, hc, checking, theme, themes, shared, setShared, layout } from "herdr";
+import { spaces, agents, run, hc, checking, theme, shared, setShared, layout } from "herdr";
 
 // 侧栏缩到 44px（图标轨）时只画计数与展开按钮：文字放不下，硬画会溢出到终端区。
 function findNode(node, id) {
@@ -51,13 +51,12 @@ let edgeCacheKey = "";
 let edgeCacheDir = null;
 function artEdgeDir(t) {
   if (t.paper) return "ink";
-  const key = t.background ?? "";
+  const bg = t.background ?? "", muted = t.muted ?? "";
+  const key = `${bg}|${muted}`;
   if (key !== edgeCacheKey) {
     edgeCacheKey = key;
-    const p = EDGE_PRESETS.find((x) => x.bg === key);
-    if (!p) { edgeCacheDir = null; return null; }
-    const cur = themes().find((x) => x.colors?.background === key);
-    edgeCacheDir = cur?.colors?.muted === p.muted ? p.dir : null;
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    edgeCacheDir = p ? p.dir : null;
   }
   return edgeCacheDir;
 }

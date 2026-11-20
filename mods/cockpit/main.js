@@ -8,7 +8,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, spaces, run, theme, themes, props, closeOverlay } from "herdr";
+import { agents, spaces, run, theme, props, closeOverlay } from "herdr";
 
 const LABEL = { working: "运行中", blocked: "待处理", done: "已完成", idle: "空闲" };
 const tone = (t, s) => (s === "blocked" ? t.blocked : s === "done" ? t.done : s === "working" ? t.working : t.idle ?? t.dim);
@@ -23,13 +23,12 @@ let edgeCacheKey = "";
 let edgeCacheDir = null;
 function artEdgeDir(t) {
   if (t.paper) return "ink";
-  const key = t.background ?? "";
+  const bg = t.background ?? "", muted = t.muted ?? "";
+  const key = `${bg}|${muted}`;
   if (key !== edgeCacheKey) {
     edgeCacheKey = key;
-    const p = EDGE_PRESETS.find((x) => x.bg === key);
-    if (!p) { edgeCacheDir = null; return null; }
-    const cur = themes().find((x) => x.colors?.background === key);
-    edgeCacheDir = cur?.colors?.muted === p.muted ? p.dir : null;
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    edgeCacheDir = p ? p.dir : null;
   }
   return edgeCacheDir;
 }

@@ -6,7 +6,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, agents, panes, machines, run, openOverlay, exec, theme, themes, shared, setShared, layout, window } from "herdr";
+import { spaces, agents, panes, machines, run, openOverlay, exec, theme, shared, setShared, layout, window } from "herdr";
 import { sprite, glyph, assign, NAMES, FOLDER } from "./sprites.js";
 
 const git = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
@@ -104,13 +104,12 @@ let edgeCacheKey = "";
 let edgeCacheDir = null;
 function artEdgeDir(t) {
   if (t.paper) return "ink";
-  const key = t.background ?? "";
+  const bg = t.background ?? "", muted = t.muted ?? "";
+  const key = `${bg}|${muted}`;
   if (key !== edgeCacheKey) {
     edgeCacheKey = key;
-    const p = EDGE_PRESETS.find((x) => x.bg === key);
-    if (!p) { edgeCacheDir = null; return null; }
-    const cur = themes().find((x) => x.colors?.background === key);
-    edgeCacheDir = cur?.colors?.muted === p.muted ? p.dir : null;
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    edgeCacheDir = p ? p.dir : null;
   }
   return edgeCacheDir;
 }

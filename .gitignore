@@ -3,6 +3,5 @@ desktop.ini
 .DS_Store
 layouts/.state/
 
-# 本地维护笔记：只留在本机，不进公开仓库
-RECIPE.md
+# 中文维护笔记：只留在 dev，不进公开仓库
 RECIPE.zh.md
