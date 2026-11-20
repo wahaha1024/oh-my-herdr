@@ -6,7 +6,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, focused, exec } from "herdr";
+import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, focused, exec, window } from "herdr";
 
 // A space's live folder: its first terminal's, else where it was made.
 function place(s) {
@@ -62,6 +62,16 @@ function items(p, git) {
         ["暂存标签", "tab.settle", { id: tg.id }, false],
         ["关闭标签", "tab.close", { id: tg.id }, true],
       ];
+    case "dir": {
+      // 目录头右键：这里的动作都以「目录」为目标，不是某个空间。
+      const local = !tg.machine;
+      return [
+        ["新建文件夹…", "inkstone.space", { mode: "folder", folder: tg.folder, machine: tg.machine ?? null }, false],
+        ["在此新建空间…", "inkstone.space", { mode: "space", folder: tg.folder, machine: tg.machine ?? null }, false],
+        ["复制路径", "inkstone.copy", { text: tg.folder ?? "" }, true],
+        ...(local ? [["在文件管理器中打开", "inkstone.open", { folder: tg.folder }, false]] : []),
+      ];
+    }
     case "space":
       return [
         ["重命名空间", "space.rename", { id: tg.id }, false],
@@ -99,6 +109,9 @@ function menuIcon(command) {
     : command === "terminal.right_click" ? "square-pen"
     : command === "terminal.park" ? "chevron-left"
     : command === "tab.settle" || command === "worktree" ? "archive"
+    : command === "inkstone.space" ? "folder-plus"
+    : command === "inkstone.open" ? "folder"
+    : command === "inkstone.copy" ? "file-text"
     : command === "app.help" ? "terminal"
     : command === "app.settings" || command === "app.theme" || command === "mod.open" ? "settings"
     : command === "app.palette" ? "search"
@@ -148,11 +161,26 @@ export default class Menu extends View {
       return;
     }
     closeOverlay(props()?.overlay);
+    if (it[1] === "inkstone.space") {
+      openOverlay({ mod: "inkstone-space", kind: "dialog", props: it[2] });
+      return;
+    }
+    if (it[1] === "inkstone.open") {
+      const plat = window()?.platform;
+      const cmd = plat === "windows" ? "explorer" : plat === "macos" ? "open" : "xdg-open";
+      // explorer 打开目录后以 1 退出，属于正常；失败不值得打断操作。
+      exec(cmd, [it[2].folder]).catch(() => null);
+      return;
+    }
+    if (it[1] === "inkstone.copy") {
+      cx.write_to_clipboard(it[2].text);
+      return;
+    }
     if (it[1] === "worktree") openOverlay({ mod: "worktree", kind: "dialog", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
     else run(it[1], it[2]);
   }
 
-  render(cx) {
+  render(_cx) {
     const t = theme();
     const list = items(props(), this.git);
     return v_flex()

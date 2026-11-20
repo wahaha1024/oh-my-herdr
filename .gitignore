@@ -5,3 +5,8 @@ layouts/.state/
 
 # 中文维护笔记：只留在 dev，不进公开仓库
 RECIPE.zh.md
+
+# 编辑器语言服务在 mods/ 下自动生成的类型垫片，不属于 mod 内容
+mods/*/gpui-kit.d.ts
+mods/*/jsconfig.json
+

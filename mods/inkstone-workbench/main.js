@@ -6,7 +6,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, agents, panes, machines, run, openOverlay, exec, theme, shared, setShared, layout, window } from "herdr";
+import { spaces, agents, panes, machines, run, openOverlay, exec, theme, shared, setShared, layout } from "herdr";
 import { sprite, glyph, assign, NAMES, FOLDER } from "./sprites.js";
 
 const git = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
@@ -313,13 +313,10 @@ export default class Workbench extends View {
     cx.notify();
   }
 
-  // 新建空间：机器不同就从那台机器的 home 起（否则会把远程目录当成本机路径），
-  // 同机器沿用当前聚焦终端的目录。空串 = 这台电脑。
+  // 新建空间：开「新建空间」面板，目录默认当前会话目录，可手输、可挑、可选最近。
+  // 机器不同就从那台机器的 home 起（否则会把远程目录当成本机路径）。
   newSpace(on) {
-    const focused = spaces().find((s) => s.active)?.machine ?? null;
-    const args = { machine: on ?? "" };
-    if (focused !== (on ?? null)) args.folder = "";
-    run("space.new", args);
+    openOverlay({ mod: "inkstone-space", kind: "dialog", props: { mode: "space", machine: on ?? null } });
   }
 
   // 空间配色：只存调色板序号（0..6），切明暗主题时色相不变、只换亮度档。
@@ -620,7 +617,7 @@ export default class Workbench extends View {
 
   // 机器层：This computer / 机器名，压在所有目录之上。左侧图标，右侧「在这台机器新建空间」、
   // 连接状态点、折叠箭头——只有这一层不缩进，目录与空间都往下让一档。
-  machineRow(m, t, cx) {
+  machineRow(m, t) {
     const folded = this.foldM.has(m.key);
     const open = m.spaces.length;
     const tone = m.state === "unavailable" ? t.blocked : m.state === "ready" ? t.accent : t.dim;
@@ -699,7 +696,7 @@ export default class Workbench extends View {
       .tooltip(g.root)
       .accessibility_label(`目录 ${base(g.root)} ${open}/${g.spaces.length}`)
       .on_click((_e, cx) => this.toggleFold(g.root, cx))
-      .on_mouse_down("right", () => this.menu({ id: g.spaces.find((x) => x.space)?.space.id, folder: g.root }, "space"))
+      .on_mouse_down("right", () => this.menu({ folder: g.root, machine: g.on }, "dir"))
       .child(svg(folded ? "mods/workspace-chrome/chevron-right.svg" : "mods/workspace-chrome/chevron-down.svg").size(11).flex_none().text_color(t.dim))
       .child(glyph(FOLDER, fill ?? t.muted, { div, v_flex, h_flex }, 2))
       .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(base(g.root)))
@@ -742,7 +739,7 @@ export default class Workbench extends View {
       .tooltip(`${base(g.root)}${folded ? " · 已折叠" : ""}`)
       .accessibility_label(`目录 ${base(g.root)}`)
       .on_click((_e, cx) => this.toggleFold(g.root, cx))
-      .on_mouse_down("right", () => this.menu({ id: g.spaces.find((x) => x.space)?.space.id, folder: g.root }, "space"))
+      .on_mouse_down("right", () => this.menu({ folder: g.root, machine: g.on }, "dir"))
       .child(glyph(FOLDER, fill ?? t.muted, { div, v_flex, h_flex }, 2));
   }
 
@@ -779,7 +776,7 @@ export default class Workbench extends View {
       .child(svg("mods/inkstone-chrome/plus.svg").size(16).relative());
   }
 
-  render(cx) {
+  render(_cx) {
     const t = theme();
     const groups = this.groups();
     const buckets = this.machinesView();
@@ -805,7 +802,7 @@ export default class Workbench extends View {
       // 机器层：本机与每台服务器各一段，目录分组收在它下面——新建空间时不会再
       // 悄悄建在最后一次点过的远程空间那台机器上。
       for (const m of buckets) {
-        rows.push(this.machineRow(m, t, cx));
+        rows.push(this.machineRow(m, t));
         if (this.foldM.has(m.key)) continue;
         if (!m.groups.length) {
           rows.push(div().pl(18 + IND).pr(8).py(2).text_size(11).text_color(t.dim).child(m.state === "unavailable" ? "连不上这台机器" : "这台机器上还没有空间"));
