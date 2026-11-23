@@ -11,7 +11,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import {
-  theme, run, props, closeOverlay, shared, setShared,
+  theme, run, props, closeOverlay, openOverlay, shared, setShared,
   appHome, readTextFile, writeTextFile, settings as readSettings,
 } from "herdr";
 
@@ -119,17 +119,17 @@ export default class InkstoneSettings extends View {
   load(cx) {
     readTextFile(FILE()).then((text) => {
       if (!text) {
-        this.err = `找不到布局文件：${FILE()}`;
+        this.err = pick(`找不到布局文件：${FILE()}`, `Layout file not found: ${FILE()}`);
       } else {
         try {
           this.doc = JSON.parse(text);
         } catch (e) {
-          this.err = `布局文件不是合法 JSON：${e}`;
+          this.err = pick(`布局文件不是合法 JSON：${e}`, `Layout file is not valid JSON: ${e}`);
         }
       }
       cx.notify();
     }).catch((e) => {
-      this.err = `读取布局失败：${e}`;
+      this.err = pick(`读取布局失败：${e}`, `Could not read the layout: ${e}`);
       cx.notify();
     });
 
@@ -143,7 +143,7 @@ export default class InkstoneSettings extends View {
       this.conf = text ? JSON.parse(text) : { ...readSettings() };
     } catch (e) {
       this.conf = { ...readSettings() };
-      this.err = this.err ?? `读取 settings.json 失败：${e}`;
+      this.err = this.err ?? pick(`读取 settings.json 失败：${e}`, `Could not read settings.json: ${e}`);
     }
     cx.notify();
   }
@@ -154,7 +154,7 @@ export default class InkstoneSettings extends View {
       try {
         for (let attempt = 0; ; attempt++) {
           const raw = await readTextFile(file);
-          if (raw === null && slot === "doc") throw new Error(`找不到布局文件：${file}`);
+          if (raw === null && slot === "doc") throw new Error(pick(`找不到布局文件：${file}`, `Layout file not found: ${file}`));
           const next = raw === null ? { ...readSettings() } : JSON.parse(raw);
           if (change(next) === false) return;
           try {
@@ -169,7 +169,7 @@ export default class InkstoneSettings extends View {
           return;
         }
       } catch (e) {
-        this.err = `写入 ${slot === "doc" ? pick("布局", "Layout") : "settings.json"} 失败：${e?.message ?? e}`;
+        this.err = pick(`写入 ${slot === "doc" ? pick("布局", "Layout") : "settings.json"} 失败：${e?.message ?? e}`, `Could not write ${slot === "doc" ? pick("布局", "Layout") : "settings.json"}: ${e?.message ?? e}`);
       } finally {
         cx.notify();
       }
@@ -277,7 +277,14 @@ export default class InkstoneSettings extends View {
         .child(div().size(12).mt(2).ml(on ? 16 : 2).rounded_full().bg(on ? t.accent_foreground : t.dim)));
   }
 
-  // 左栏：主题 + 终端右键。
+  // 左栏：主题 + 终端右键。  // 能力边界说明行：名字 + 一句话。纯展示，无交互。
+  capRow(t, name, body) {
+    return h_flex().w_full().gap(8).items_start()
+      .child(div().w(64).flex_none().text_size(11.5).font_semibold().text_color(t.foreground).child(name))
+      .child(div().flex_1().min_w(0).text_size(11).line_height("16px").text_color(t.dim).child(body));
+  }
+
+  left(t, cx) {
   left(t, cx) {
     const mode = this.rightClick();
     const current = this.currentTheme();
@@ -287,7 +294,7 @@ export default class InkstoneSettings extends View {
         .child(h_flex().w_full().gap(6).flex_wrap().children(THEMES().map((x) => div().id(`th-${x.name}`).h(28).px(9).flex_none().flex().items_center().justify_center().rounded(6)
           .text_size(12).bg(current === x.name ? t.selected : t.raised).text_color(current === x.name ? t.foreground : t.muted)
           .cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(x.hint)
-          .accessibility_label(`主题 ${x.label}`).tab_index(0)
+          .accessibility_label(pick(`主题 ${x.label}`, `Theme ${x.label}`)).tab_index(0)
           .on_key_down((e, cx) => { if (e.key === "enter" || e.key === "space") this.pickTheme(x.name, cx); })
           .on_click((_e, cx) => this.pickTheme(x.name, cx))
           .child(x.label)))))
@@ -349,8 +356,28 @@ export default class InkstoneSettings extends View {
       .child(v_flex().w_full().gap(2)
         .child(this.heading(t, pick("工作台", "Workbench"), pick("侧栏显示哪些内容", "What the sidebar shows")))
         .child(this.toggle(t, "git-trees", pick("Git 工作树", "Git worktrees"), pick("扫仓库工作树、显示分支标签；不用 git 时关掉更清爽", "Scans worktrees and shows branch tags; turn it off if you don't use git"), this.gitOn(), (_e, cx) => this.setGit(!this.gitOn(), cx))))
+      .child(v_flex().w_full().gap(5)
+        .child(this.heading(t, pick("能力与边界", "Capabilities & limits"), pick("功能落在哪儿，哪些场景读不到", "What works where, and what doesn't")))
+        .child(v_flex().w_full().gap(2)
+          .child(this.capRow(t, pick("历史发言", "Chat history"), pick("本地会话（Windows 与 macOS/Linux 均可）；远程终端读不到，可用会话面板替代", "Local sessions on Windows and macOS/Linux; remote terminals can't be read — use the sessions panel instead")))
+          .child(this.capRow(t, "OpenCode", pick("会话记录需要 OpenCode 装有 sqlite3，缺了就显示为空", "Session records need OpenCode's sqlite3; without it the list is empty")))
+          .child(this.capRow(t, "CodeBuddy", pick("不回报 OSC 终端状态，「待处理」角标对它不亮", "Doesn't report OSC terminal state, so the pending-work badge stays off for it")))
+          .child(this.capRow(t, pick("恢复布局", "Reset layout"), pick("切回默认布局（main），不关任何终端", "Switches back to the default layout (main); never closes a terminal"))))
+        .child(h_flex().w_full().gap(8).items_center()
+          .child(div().id("prefs-guide").h(26).px(12).flex().items_center().rounded(6).cursor_pointer()
+            .bg(t.raised).text_size(12).text_color(t.foreground)
+            .hover((s) => s.bg(t.hover))
+            .tooltip(pick("再看一遍上手说明", "Show the getting-started card again"))
+            .on_click(() => openOverlay({ mod: "inkstone-chrome", kind: "dialog", frame: "none", width: 480, height: 300, key: "omh-welcome", props: { welcome: true } }))
+            .child(pick("再看引导", "Show guide")))
+          .child(div().id("prefs-reset").h(26).px(12).flex().items_center().rounded(6).cursor_pointer()
+            .bg(t.raised).text_size(12).text_color(t.foreground)
+            .hover((s) => s.bg(t.hover))
+            .tooltip(pick("恢复默认布局（面板与状态栏复原，不关终端）", "Restore the default layout (panels and status bar; terminals stay open)"))
+            .on_click((_e, cx) => { run("layout.switch", { name: "main" }); cx.notify(); })
+            .child(pick("恢复默认布局", "Reset layout"))))
       .child(v_flex().w_full().gap(2)
-        .child(div().text_size(11).text_color(t.dim).child(`主题与右键写入 layouts/${LAYOUT}.json`))
+        .child(div().text_size(11).text_color(t.dim).child(pick(`主题与右键写入 layouts/${LAYOUT}.json`, `Theme and right-click writes go to layouts/${LAYOUT}.json`)))
         .child(div().text_size(11).text_color(t.dim).child(pick("界面项写入 settings.json，Herdr 会热载", "UI settings are written to settings.json and hot-reloaded by Herdr")))
         .when(Boolean(this.err), (el) => el.child(div().text_size(11).text_color(t.blocked).child(this.err))));
   }

@@ -17,7 +17,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
-import { panes, props, run, exec, hc, theme, home, appHome, checking, shared, readTextFile, writeTextFile, closeOverlay, openOverlay, setShared, watchFolder } from "herdr";
+import { panes, props, run, exec, hc, theme, home, appHome, checking, shared, readTextFile, writeTextFile, closeOverlay, openOverlay, setShared, watchFolder, window } from "herdr";
 
 // 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
 const LANG = "inkstone.lang";
@@ -142,6 +142,13 @@ process.stdout.write(JSON.stringify({ from: start, seen: seen, items: items }));
 `;
 
 const NODE = { ok: null };      // null = 还没探测过；探测结果之后固定，不再每次试
+const isWin = () => window()?.platform === "windows";   // 只有 Windows 有 PowerShell，其余平台走 sh
+// 远程终端的地址形如 `server|t1`：会话文件在远端机器上，本机读不到，历史发言不可用。
+const isRemoteTerm = (term) => String(term ?? "").includes("|");
+const remoteNote = () => pick(
+  "远程终端的会话记录存在对方机器上，这里读不到；想看发言请打开「会话」面板（同一数据源，可按程序过滤）。",
+  "A remote terminal's session files live on that machine and can't be read here; open the Sessions panel instead (same data, filterable by program).",
+);
 const PARSED = new Map();       // 文件绝对路径 -> { seen, at, items }，内存里最多 4 个会话
 const FOUND = new Map();        // `标题|cwd` -> { file, title, size, at }
 const CACHE_TTL = 120000;       // 会话文件查找结果的复用时长
@@ -178,6 +185,7 @@ let diskRaw = null;             // 上次读到的原文：writeTextFile 的 exp
 let saveDirty = false;
 let saving = false;
 let savedAt = 0;
+let saveTimer = null;           // 节流窗口末次更新的补写预约：没有它，最后一条消息要等关窗才落盘
 
 async function diskCache() {
   if (diskMemo) return diskMemo;
@@ -198,9 +206,9 @@ async function diskCache() {
 
 async function saveCache() {
   if (!saveDirty) return;
+  if (checking()) return; // `herdr-app check` 会真的跑 init，别在检查时写盘；也别清掉待写标记
   saveDirty = false;
   savedAt = Date.now();
-  if (checking()) return; // `herdr-app check` 会真的跑 init，别在检查时写盘
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const db = await diskCache();
@@ -228,9 +236,19 @@ async function saveCache() {
 // 活跃会话每 2 秒刷新一次，没必要每次都落盘：5 秒一次就够，关窗时再补一次。
 // 用节流而不是 cx.timer.after：定时器只在第一次刷新时排一次，之后如果没真正触发，
 // 缓存会一直停在旧 seen 上（实测 12 分钟没更新），节流不依赖任何回调。
+// 命中节流时预约一次窗口末尾的补写：否则最后一条消息之后不再有新消息，就一直留在内存里。
 function maybeSave() {
   saveDirty = true;
-  if (saving || Date.now() - savedAt < 5000) return;
+  if (saving) return;
+  if (Date.now() - savedAt < 5000) {
+    if (saveTimer === null) {
+      saveTimer = setTimeout(() => {
+        saveTimer = null;
+        if (!saving && saveDirty) maybeSave();
+      }, 5000);
+    }
+    return;
+  }
   saving = true;
   saveCache().finally(() => {
     saving = false;
@@ -315,7 +333,51 @@ function chip(t, label) {
 // 先在这个目录里按标题对；对不上（新会话还没起名）就取该目录里最新的那个——
 // 这不叫瞎猜，目录本身就是「这个项目」的范围。目录不存在时才退回全局按标题找，
 // 全局还找不到就返回 null（以前会退回「最近改过的文件」，等于把别的项目当成本会话）。
+// 非 Windows 的同一件事：项目目录名由 cwd 变换出来，OMP 在 POSIX 上是否剥掉前导
+// 斜杠不确定，两个候选都试一次，都不存在就退回全局按标题找（与 PowerShell 分支一致）。
+const SH_LIST = [
+  'root=$1; d1=$2; d2=$3; p="$root"; ',
+  'if [ -n "$d1" ] && [ -d "$d1" ]; then p="$d1"; echo "@@dir"; ',
+  'elif [ -n "$d2" ] && [ -d "$d2" ]; then p="$d2"; echo "@@dir"; else echo "@@all"; fi; ',
+  '[ -d "$p" ] || exit 0; ',
+  'ls -t1 "$p"/*.jsonl "$p"/*/*.jsonl 2>/dev/null | head -40 | ',
+  'while IFS= read -r f; do printf "%s|%s|" "$f" "$(wc -c < "$f")"; head -n 1 "$f"; done',
+].join('');
+
+async function findSessionSh(title, cwd) {
+  const root = `${home()}/.omp/agent/sessions`;
+  const want = bare(title);
+  const clean = String(cwd ?? "").replace(/[\\/]+$/, "");
+  const d1 = clean ? `${root}/--${clean.replace(/[:\\/]/g, "-")}--` : "";
+  const d2 = clean ? `${root}/--${clean.replace(/^[\\/]+/, "").replace(/[:\\/]/g, "-")}--` : "";
+  const r = await exec("sh", ["-c", SH_LIST, "sh", root, d1, d2], { timeout: 30000 }).catch(() => null);
+  if (!r || r.code !== 0) return null;
+  let mode = "all";
+  let newest = null;
+  for (const line of String(r.stdout ?? "").split("\n")) {
+    if (!line) continue;
+    if (line === "@@dir" || line === "@@all") {
+      mode = line.slice(2);
+      continue;
+    }
+    const a = line.indexOf("|");
+    if (a < 0) continue;
+    const b = line.indexOf("|", a + 1);
+    if (b < 0) continue;
+    const file = line.slice(0, a);
+    const size = Number(line.slice(a + 1, b)) || 0;
+    let head = "";
+    try { head = bare(JSON.parse(line.slice(b + 1)).title ?? ""); } catch { continue; }
+    const rec = { file, size, title: head };
+    if (!newest) newest = rec;
+    if (want && head && (want.endsWith(head) || head.endsWith(want))) return rec;
+  }
+  if (mode === "dir" && newest) return newest;
+  return null;
+}
+
 async function findSession(title, cwd) {
+  if (!isWin()) return findSessionSh(title, cwd);
   const root = `${home()}\\.omp\\agent\\sessions`;
   const want = bare(title);
   // 末尾多一个分隔符就会多拼出一个 '-'（E:\DSH\ → --E--DSH---），Test-Path 直接失败。
@@ -399,6 +461,74 @@ function normItem(o) {
   };
 }
 
+// 非 Windows 没有 PowerShell（有 node 的机器上面已经返回了），用 sh 把行捞出来、
+// 规整交给 JS，取舍与 PowerShell 分支一致：压缩点只留四要素，工具调用留 path /
+// 命令首行 / 查询，过长的截断。每行前面是文件总长，见 jsonl 只追加，下次照它续读。
+const SH_READ = [
+  'f=$1; s=$2; z=$(wc -c < "$f") || exit 1; echo "@@$z"; ',
+  'n=$((z-s)); if [ "$n" -gt 7000000 ]; then n=7000000; echo "@T"; fi; ',
+  'tail -c "$n" "$f" | grep -E "\\"type\\": ?\\"(message|compaction)\\"" || true',
+].join('');
+
+// jsonl 原始记录 → normItem 的输入。字段取舍来自 PowerShell 分支：消息只留文本与
+// 工具调用摘要；压缩点留时间、摘要、前后 token 数与 firstKeptEntryId。
+function normRaw(o) {
+  if (!o) return null;
+  if (o.type === "compaction") {
+    return normItem({
+      k: "c",
+      ts: o.timestamp,
+      text: String(o.shortSummary || o.summary || "").slice(0, 300),
+      before: o.tokensBefore,
+      after: o.tokensAfter,
+      first: o.firstKeptEntryId,
+    });
+  }
+  if (o.type !== "message") return null;
+  const m = o.message;
+  if (!m || (m.role !== "user" && m.role !== "assistant")) return null;
+  let s = "";
+  const tl = [];
+  for (const c of Array.isArray(m.content) ? m.content : []) {
+    if (c.type === "text" && c.text) {
+      s += (s ? " " : "") + c.text;
+    } else if (c.type === "toolCall") {
+      let ag = c.arguments;
+      if (typeof ag === "string") { try { ag = JSON.parse(ag); } catch { ag = null; } }
+      let h = "";
+      if (ag && typeof ag === "object") {
+        if (ag.path) h = String(ag.path);
+        else if (ag.command) h = String(ag.command).split("\n")[0];
+        else if (ag.query) h = String(ag.query);
+      }
+      let t = String(c.intent || c.name || "");
+      if (h) t = `${t} ${h}`;
+      tl.push(t.slice(0, 120));
+    } else if (c.type === "image") {
+      s += (s ? " " : "") + pick("[图片]", "[image]");
+    }
+  }
+  if (!s && !tl.length) return null;
+  return normItem({ k: "m", id: o.id, ts: o.timestamp, role: m.role, text: s.slice(0, 4000), tools: tl });
+}
+
+async function readMessagesSh(file, fromByte = 0) {
+  const r = await exec("sh", ["-c", SH_READ, "sh", file, String(fromByte)], { timeout: 30000 }).catch(() => null);
+  if (!r || r.code !== 0) return null;
+  let seen = 0;
+  const items = [];
+  for (const line of String(r.stdout ?? "").split("\n")) {
+    if (!line) continue;
+    if (line.startsWith("@@")) { seen = Number(line.slice(2)) || 0; continue; }
+    if (line === "@T") continue;                  // 文件超过 7 MB：从尾部截断，首行可能不完整
+    let o = null;
+    try { o = JSON.parse(line); } catch { continue; }
+    const it = normRaw(o);
+    if (it) items.push(it);
+  }
+  return { items, seen, from: fromByte };
+}
+
 // 读会话文件，返回 { items, seen, from }：items 按文件顺序混放 {k:"m"} 与 {k:"c"}，
 // from 是这次实际开始解析的字节偏移（0 = 全量），seen 是「已完整解析到哪」——
 // 下次从 seen 续读就不会把正写到一半的那一行吃掉。
@@ -422,6 +552,8 @@ async function readMessages(file, fromByte = 0) {
     // 输出都解析不了说明这台机器上的 node 不对劲，别每 2 秒再试一次。
     NODE.ok = false;
   }
+  // 非 Windows 没有 PowerShell（有 node 的机器上面已经返回了）：没有 node 时靠 sh 读。
+  if (!isWin()) return readMessagesSh(file, fromByte);
   const cmd =
     PS +
     `$p='${sq(file)}'; $fs=[System.IO.File]::Open($p,'Open','Read','ReadWrite'); ` +
@@ -606,8 +738,8 @@ function align(messages, lines) {
 function historyStatus(can, lines, pending = pick("对齐中…", "Aligning…")) {
   if (can) return pick("这一轮还在终端里", "This turn is still in the terminal");
   if (lines === null) return pending;
-  if (lines < 0) return pick("读不到终端历史", "Can't read the terminal history");
-  return `已滚出终端（仅留 ${lines} 行）`;
+  if (lines < 0) return pick("读不到终端历史（远程终端的会话记录存在对方机器上；会话面板可看各程序本机记录）", "Can't read the terminal history (remote session files live on that machine; the sessions panel shows local records)"); 
+  return pick(`已滚出终端（仅留 ${lines} 行）`, `scrolled out of the terminal (${lines} lines kept)`);
 }
 
 export default class History extends View {
@@ -687,6 +819,7 @@ export default class History extends View {
     this.stopFollowing();
     this.release();
     // 关窗时把还没落盘的解析结果写掉，下次冷开就能直接出列表。
+    if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null; }
     if (saveDirty) saveCache();
     closeOverlay(this.oid);
   }
@@ -697,6 +830,7 @@ export default class History extends View {
     this.closed = true;
     this.stopFollowing();
     this.release();
+    if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null; }
     if (saveDirty) saveCache();
   }
 
@@ -741,6 +875,18 @@ export default class History extends View {
       cx.notify();
     }
     try {
+      // 远程终端：不找会话、不起子进程，直接给原因和替代入口。
+      if (isRemoteTerm(this.term)) {
+        this.messages = [];
+        this.marks = [];
+        this.raw = [];
+        this.align = [];
+        this.histLines = null;
+        this.loading = false;
+        this.note = remoteNote();
+        cx.notify();
+        return;
+      }
       const p = this.pane();
       // 已经认得文件就别再列目录：findSession 是 1.1–1.9s 的进程，而活跃会话每 2 秒刷新一次。
       // 换会话由 checkTitle 把 this.file 清空来触发。
@@ -793,7 +939,7 @@ export default class History extends View {
       if (!current()) return;
       // 读文件/读终端任何一步失手都要把 loading 收掉，否则面板会一直停在「读取会话…」。
       // 顺手把文件句柄和缓存都丢掉：下次重新按标题找，别对着一个坏路径重试。
-      this.note = `读取失败：${e?.message ?? e}`;
+      this.note = pick(`读取失败：${e?.message ?? e}`, `Could not read: ${e?.message ?? e}`);
       this.file = "";
       this.stopFollowing();
       if (file) PARSED.delete(file);
@@ -914,7 +1060,7 @@ export default class History extends View {
     }
     const idx = al[i] ?? -1;
     if (idx < 0) {
-      this.note = `终端只留了最近 ${h.lines.length} 行，这条已经滚出去了`;
+      this.note = pick(`终端只留了最近 ${h.lines.length} 行，这条已经滚出去了`, `The terminal kept only its last ${h.lines.length} lines; this turn has scrolled out`);
       cx.notify();
       return;
     }
@@ -1057,7 +1203,7 @@ export default class History extends View {
             .bg(tint(t.working, "26"))
             .text_size(FS.badge)
             .text_color(t.working)
-            .child(`${n} 步`),
+            .child(pick(`${n} 步`, `${n} steps`)),
         ),
       )
       // 「这轮 agent 回话了」本身就是最常筛的条件，给它一个绿徽标。
@@ -1106,12 +1252,12 @@ export default class History extends View {
 
   // 上下文压缩点：不占轮次，只在列表里插一条分隔，说明「前面那些轮次已被压进摘要」。
   markRow(t, mk) {
-    const wan = (n) => (n > 0 ? `${(n / 10000).toFixed(1)}万` : "");
+    const wan = (n) => (n > 0 ? pick(`${(n / 10000).toFixed(1)}万`, `${(n / 1000).toFixed(1)}k`) : "");
     const bits = [];
     const b = wan(mk.before);
     const a = wan(mk.after);
     if (b || a) bits.push(`${b || "?"} → ${a || "?"} tokens`);
-    if (mk.archived > 0) bits.push(`前 ${mk.archived} 轮已归档`);
+    if (mk.archived > 0) bits.push(pick(`前 ${mk.archived} 轮已归档`, `${mk.archived} earlier turns archived`));
     return h_flex()
       .h(24)
       .flex_none()
@@ -1143,9 +1289,9 @@ export default class History extends View {
     if (!body) return;
     try {
       cx.write_to_clipboard(body);
-      this.note = `已复制 ${body.length} 字`;
+      this.note = pick(`已复制 ${body.length} 字`, `Copied ${body.length} characters`);
     } catch (e) {
-      this.note = `复制失败：${e?.message ?? e}`;
+      this.note = pick(`复制失败：${e?.message ?? e}`, `Copy failed: ${e?.message ?? e}`);
     }
     cx.notify();
   }
@@ -1259,7 +1405,7 @@ export default class History extends View {
                     .w_full()
                     .gap(6)
                     .items_center()
-                    .child(sectionLabel(t, `工具 ${tools.length} 步`, t.working))
+                    .child(sectionLabel(t, pick(`工具 ${tools.length} 步`, `Tools · ${tools.length} steps`), t.working))
                     .child(
                       div()
                         .flex_1()
@@ -1389,7 +1535,7 @@ export default class History extends View {
           .text_size(FS.readTitle)
           .font_weight(700)
           .text_color(ink(t, "ink", "foreground"))
-          .child(`${hhmm(r.ts)} 这一轮`),
+          .child(pick(`${hhmm(r.ts)} 这一轮`, `Turn at ${hhmm(r.ts)}`)),
       )
       .child(div().flex_1().min_w(0).truncate().text_size(FS.sub).text_color(t.muted).child(flat(String(text)).slice(0, 120)))
       .child(this.iconButton(t, "hx-r-close", "mods/inkstone-pane/close.svg", () => this.shut()));
@@ -1451,7 +1597,7 @@ export default class History extends View {
           .when(tools.length > 0, (el) =>
             el.child(
               h_flex().flex_none().w_full().items_center().gap(8)
-                .child(sectionLabel(t, `工具 ${tools.length} 步`, t.working, 11))
+                .child(sectionLabel(t, pick(`工具 ${tools.length} 步`, `Tools · ${tools.length} steps`), t.working, 11))
                 .child(div().flex_1().h(1).bg(tint(paper ? t.rule : t.border, "b8")))
                 .child(
                   this.textButton(t, "hx-r-tools", this.toolsOpen ? pick("收起", "Collapse") : pick("展开", "Expand"), (c) => {
@@ -1536,7 +1682,7 @@ export default class History extends View {
           .child(this.title || (p?.title ?? "")),
       )
       // 轮数常驻在头部；搜索时的命中数放在搜索框右侧，避免同一行里写两遍。
-      .when(this.messages.length > 0, (el) => el.child(chip(t, `${this.messages.length} 轮`)))
+      .when(this.messages.length > 0, (el) => el.child(chip(t, pick(`${this.messages.length} 轮`, `${this.messages.length} turns`))))
       .child(this.iconButton(t, "hx-close", "mods/inkstone-pane/close.svg", () => this.shut()));
 
     // 搜索条只在有轮次时出现：会话还没解析完时点它也没东西可筛。
@@ -1594,8 +1740,8 @@ export default class History extends View {
           (this.loading
             ? pick("读取…", "Reading…")
             : this.query.trim()
-              ? `命中 ${vis.length} / ${this.messages.length} 条发言`
-              : `${this.messages.length} 条发言`),
+              ? pick(`命中 ${vis.length} / ${this.messages.length} 条发言`, `${vis.length} of ${this.messages.length} messages`)
+              : pick(`${this.messages.length} 条发言`, `${this.messages.length} messages`)),
       ))
       .child(
         div()
@@ -1614,8 +1760,16 @@ export default class History extends View {
       );
 
     const hint = (s) => div().px(12).py(12).text_size(FS.body).text_color(t.dim).child(s);
+    const remoteEntry = () => div().id("hx-remote-sessions").mx(12).mb(10).self_start().h(26).px(12).flex().items_center().rounded(6).cursor_pointer()
+      .bg(t.selected ?? t.raised).text_size(FS.body).text_color(t.foreground)
+      .hover((h) => h.bg(t.hover))
+      .tooltip(pick("会话面板列出各程序在本机的会话记录", "The sessions panel lists per-program session records on this machine"))
+      .on_click(() => run("mod.open", { name: "inkstone-sessions" }))
+      .child(pick("打开会话面板", "Open the sessions panel"));
     const body = this.loading && !this.messages.length
       ? [hint(pick("读取会话…", "Reading the session…"))]
+      : !this.messages.length && isRemoteTerm(this.term)
+        ? [hint(remoteNote()), remoteEntry()]
       : !this.messages.length
         ? [hint(this.note || pick("这个会话还没有发言", "This session has no turns yet"))]
         : this.query.trim() && !vis.length
