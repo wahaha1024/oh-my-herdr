@@ -32,6 +32,29 @@ function bellGlyph(color, px = 2) {
   );
 }
 
+// 标签的状态点：与侧栏、智能体面板同一套形状与颜色——
+// 待处理 = 方块（红），运行中 = 圆环（黄），已完成 = 实心圆（绿）。空闲不画，免得每个标签都挂一个灰圈。
+const RANK = { blocked: 3, working: 2, done: 1, idle: 0 };
+
+// 一个标签可能开着多个窗格，取最需要关注的那个状态。
+function statusOf(list, fallback) {
+  let best = fallback ?? "idle";
+  for (const a of list) if ((RANK[a.status] ?? 0) > (RANK[best] ?? 0)) best = a.status;
+  return best;
+}
+
+// 与智能体面板同一套配色：待处理红、运行中琥珀黄、已完成绿——三处对得上，不用再猜颜色。
+const FLOW_RED = (t) => t.blocked ?? "#c23142";
+const FLOW_YELLOW = (t) => (PAPER(t) ? t.working : luminance(t.background ?? "#ffffff") < 0.5 ? (t.working ?? "#e2c027") : "#b78b26");
+const FLOW_GREEN = (t) => (PAPER(t) ? (t.up ?? t.done) : (t.done ?? "#1a6840"));
+
+function dot(t, status, size = 7) {
+  if (status === "blocked") return div().size(size).flex_none().rounded(1).bg(FLOW_RED(t));
+  if (status === "done") return div().size(size).flex_none().rounded_full().bg(FLOW_GREEN(t));
+  if (status === "working") return div().size(size).flex_none().rounded_full().border(2).border_color(FLOW_YELLOW(t));
+  return div().size(size).flex_none().rounded_full().border(1.5).border_color(t.dim);
+}
+
 function find(node, id) {
   if (node?.id === id) return node;
   for (const child of node?.children ?? []) {
@@ -65,6 +88,12 @@ const PALETTE_DARK = ["#f08a8a", "#f2a46a", "#e8c76a", "#7ecf86", "#6fb3ea", "#9
 // 纸感只在定义了 paper 槽的主题下开启（见 themes/zhi.json）；其余主题原样走 GPUI 几何。
 const PAPER = (t) => Boolean(t.paper);
 const MARK = "#f8dc4c";
+
+// 状态色加水：把 #rrggbb 变成带透明度的底色，纸底与纯色底都能透出一点。
+function tint(hex, alpha) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? ""));
+  return m ? `#${m[1]}${alpha}` : String(hex ?? "transparent");
+}
 
 function luminance(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? ""));
@@ -351,15 +380,26 @@ export default class Tabs extends View {
       const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id);
       const program = lead?.program;
       const name = label(c, lead);
+      // 状态取自这个标签里的智能体：c.status 只反映窗格自身，常常停在空闲。
+      const st = statusOf(agents().filter(a => a.tab === c.id), c.status);
+      // 底色也跟状态走：琥珀黄在跑、绿已完成、红待处理，与智能体面板同一套色；
+      // 活动标签浓一档，其余淡一档，扫一眼就知道哪个标签在忙。
+      const tone = st === "blocked" ? FLOW_RED(t) : st === "working" ? FLOW_YELLOW(t) : st === "done" ? FLOW_GREEN(t) : null;
+      const wash = tone ? tint(tone, c.active ? "2e" : "18") : null;
       return h_flex().id(`tab-${c.id}`).h(30).px(11).gap(7).rounded(6).items_center().flex_none().text_size(14)
         // 改名或状态点会改宽度、把活动标签挤出可见区：跟过去，但别再 notify 自己——
         // 每个标签尺寸一变就排一轮渲染，切换/重命名时会连环触发。
         .when(i <= active, el => el.on_size_change(() => this.scroll.scroll_to_item(active)))
-        .text_color(c.active ? t.foreground : t.muted)
-        .when(!PAPER(t), el => el.border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).hover(s => s.bg(t.hover)))
-        // 纸感：选中是一道荧光笔，边缘不是四次圆角而是四个不同的角，像手划出来的。
-        .when(PAPER(t), el => (c.active ? el.bg(`${MARK}9e`) : el).rounded_tl(3).rounded_tr(8).rounded_br(4).rounded_bl(9)
-          .hover(s => s.bg(c.active ? `${MARK}9e` : `${MARK}4d`)))
+        .text_color(c.active ? t.foreground : (tone ?? t.muted))
+        .when(!PAPER(t), el => el.border(1)
+          .border_color(tone ? tint(tone, c.active ? "aa" : "5c") : (c.active ? t.border : t.chrome))
+          .bg(wash ?? (c.active ? t.raised : t.chrome))
+          .hover(s => s.bg(tone ? tint(tone, "38") : t.hover)))
+        // 纸感：没有状态时选中是一道荧光笔，边缘不是四次圆角而是四个不同的角，像手划出来的。
+        .when(PAPER(t), el => el.rounded_tl(3).rounded_tr(8).rounded_br(4).rounded_bl(9)
+          .when(Boolean(wash), (x) => x.bg(wash))
+          .when(!wash && c.active, (x) => x.bg(`${MARK}9e`))
+          .hover(s => s.bg(wash ? tint(tone, "3d") : (c.active ? `${MARK}9e` : `${MARK}4d`))))
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
         .on_mouse_up("left", () => {
           const from = this.pressed; this.pressed = null;
@@ -367,10 +407,9 @@ export default class Tabs extends View {
           else run("tab.select", { id: c.id });
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
+        .when(st !== "idle", el => el.child(dot(t, st)))
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(16)))
         .child(div().max_w(200).truncate().child(c.zoomed ? `${name} Z` : name))
-        .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
-        .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
         .when(c.active, el => el.child(div().id(`close-${c.id}`).size(28).flex_none().flex().items_center().justify_center()
           .rounded(5).text_color(t.dim).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground))
           .tooltip("关闭标签").accessibility_label("关闭标签")
