@@ -6,11 +6,38 @@
 
 ![](preview.png)
 
+## 2026-11-23 拉取安装与三处加载错误
+
+另一台机器推到 `3e4e7c0`（21 个提交：`pick` 中英切换、项目归组与字母头像、标签状态色、安装器安全升级与 `-Source`、CodeBuddy 识别、抽屉线稿图标）。本机 `git fetch` 只跟踪 `main`（`remote.origin.fetch` 只有 `+refs/heads/main:...` 一行），所以 `origin/dev` 一直停在旧值 `3e50bb5`；拉 `dev` 要显式 `git fetch origin refs/heads/dev:refs/remotes/origin/dev`，或者先把 refspec 补成两条。
+
+装完（`install.ps1 -Force`，写入 1352 个文件）有两个 mod 起不来，`herdr-app status` 的 `errors` 直接报语法错误；另有几处显示不对。本机工作树已修好，尚未提交：
+
+- **`inkstone-chrome` 多一个括号**：`renderWelcome()` 结尾 `.child(div().flex_1()))));` 比需要多一层 `)`，qjs 报 `expecting ';'`，整个品牌条、底部按钮和引导卡都不渲染。删到 `...flex_1())));`。
+- **`inkstone-settings` 两处**：`left(t, cx) {` 连写两遍（qjs 报 `Unexpected token '{'`，位置在第二个方法签名上）；`right()` 里 `.child(v_flex().w_full().gap(5)` 少一个闭合 `)`，错误落到下一行的 `.when(...)`（`missing ) after argument list`）。偏好浮层因此完全不加载，改完两个方法都恢复正常。
+- **侧栏段标题写死英文**：`inkstone-agents` 的 `Needs you` / `In flight` / `Done` / `all clear` / `nothing running` / `nothing yet` 和标题 `Agents`，`inkstone-workbench` 的 `Spaces`，都绕过 `pick`，中文界面下混着英文。改成 `pick("待你处理", "Needs you")` 这一类，用词与 `STATUS()` 的 `待处理 / 运行中 / 已完成 / 空闲` 对齐。
+- **引导卡装不下**：`openOverlay` 的 `height: 300`（`inkstone-chrome` 两处、`inkstone-settings` 一处）放不下三条说明加按钮，底部「打开偏好」被裁；统一改成 `372`。
+
+验证：`node --check` 跑遍 40 个 `mods/*/main.js` 全部通过；`herdr-app status` 的 `errors` 为空；截图确认侧栏「空间 / 智能体」、三段「待你处理 / 进行中 / 已完成」与空态全中文。此前无法核实的引导卡也用 Cua Driver 实测：窗口为 480×372，三条说明与「打开偏好」按钮完整可见；操作后已关引导卡、恢复此前前台应用，并将 Herdr 恢复到原先最小化状态。
+
+Windows 的 `node` 不认 MSYS 路径，`node --check /e/...` 会被解释成 `C:\e\...`，把文件临时复制到 mod 目录再用相对名。`herdr-app shot` 只拍主窗口，不含 overlay；`status.overlays` 有条目也不等于截图能看到。Windows GUI 操作改用 Cua Driver（见下节），不再用 PowerShell `mouse_event` 模拟点击。
+### Cua Driver（Windows 操作默认走后台）
+
+已装 Cua Driver `0.59.4`，路径 `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin`，自动启动任务 `cua-driver-serve` 已注册并运行。下载必须走本机 `http://127.0.0.1:7890`：PowerShell 5.1 包装脚本要同时设置 `[System.Net.WebRequest]::DefaultWebProxy` 与 `HTTP_PROXY` / `HTTPS_PROXY`；可用 `CUA_DRIVER_RS_DOWNLOAD_BASE_URL` 指向本地镜像让官方安装器复用已下载资产。此次 zip 与官方 `SHA256SUMS` 一致，安装器也验证了 staged exe 的 Authenticode；当时没有 `cosign`，所以 Sigstore 只显示 warning，未做 bundle 验签。
+
+- 用户偏好：Windows 下所有电脑 / Herdr 操作默认用 CUA 后台模式，优先 UIA `element_token`，绘制画布才用 `click` 的 `delivery_mode: "background"`；尽量不抢焦点、不移动用户鼠标、不干扰其他应用。禁止把 PowerShell 鼠标事件当默认路径。操作前后读回状态；如果为恢复最小化窗口不得不 `bring_to_front`，先记住返回的 `previous_fg_hwnd`，完成后恢复原前台应用。
+- 基本路径：`cua-driver status` → `cua-driver call list_windows '{"app":"Herdr"}'` → `cua-driver call get_window_state '{"pid":PID,"window_id":HWND,"tree_format":"elements"}' --screenshot-out-file state.png` → 使用该快照的 `element_token`，或以同一截图坐标执行 `click`，再 `get_window_state` 回读。
+- 本机 Herdr 是 GPUI 自绘界面，UIA 树只暴露原生标题栏的 5 个元素；主界面文字与按钮不在 UIA 中，须按 `get_window_state` 的窗口截图使用窗口局部坐标。坐标不能来自 `herdr-app shot`（该截图路径与屏幕窗口坐标不同）。
+- 最小化窗口 `list_windows` 会报告 `minimized: true` 与离屏坐标（本机曾为 `-31993,-32000`）；`set_window_frame` 会明确拒绝最小化目标，要求先恢复窗口。像素后台点击只能在目标可截图时使用。验证欢迎卡时先恢复、移到 `(180,80,1300,900)`，背景点击「引导」`(78,874)`，截图确认 372px 卡片按钮完整，再背景点击关闭 `(860,291)`；最后 CUA 恢复先前的 Chrome 前台进程并把 Herdr 最小化。
+- `cua-driver test` 在本机误报“can't use mouse and keyboard / can't see your screen”；以 `doctor`、`check_permissions` 和真实窗口动作判定：daemon 正常、UIA 与 `post_message` 可用，`get_window_state` 成功，后台像素点击确实打开 / 关闭引导卡。若重测仍失败，记录具体 Windows 构建与 daemon 日志，不要改用前台模拟输入绕过。
+
+
 ## 下一步（2026-11-20）
 
 给另一台电脑接手用，按优先级排；每条都写清要动的文件。
 
-### 1. 界面中英文切换
+### 1. 界面中英文切换（已完成：`7f56ff7`，2026-11-23 补侧栏残留标签）
+
+> 已落地为 `pick(zh, en)`；下面留原始方案，只为解释运行时约定，新的文字照此写即可。
 
 现在的文案是写死的中文，散在 18 个 mod 里：`cockpit`、`inkstone-agents`、`inkstone-chrome`、`inkstone-favorites`、`inkstone-files`、`inkstone-history`、`inkstone-inbox`、`inkstone-menu`、`inkstone-metrics`、`inkstone-pane`、`inkstone-ports`、`inkstone-review`、`inkstone-sessions`、`inkstone-settings`、`inkstone-tabs`、`inkstone-workbench`，外加各 `mod.json` 的 `title`。平台没有现成钩子：`settings()` 的类型是 `Record<string, unknown>`，gpui-kit 不暴露界面语言（`EditorState` 的 `language` 是语法高亮模式）。
 

@@ -277,14 +277,14 @@ export default class InkstoneSettings extends View {
         .child(div().size(12).mt(2).ml(on ? 16 : 2).rounded_full().bg(on ? t.accent_foreground : t.dim)));
   }
 
-  // 左栏：主题 + 终端右键。  // 能力边界说明行：名字 + 一句话。纯展示，无交互。
+  // 能力边界说明行：名字 + 一句话。纯展示，无交互。
   capRow(t, name, body) {
     return h_flex().w_full().gap(8).items_start()
       .child(div().w(64).flex_none().text_size(11.5).font_semibold().text_color(t.foreground).child(name))
       .child(div().flex_1().min_w(0).text_size(11).line_height("16px").text_color(t.dim).child(body));
   }
 
-  left(t, cx) {
+  // 左栏：主题 + 终端右键。
   left(t, cx) {
     const mode = this.rightClick();
     const current = this.currentTheme();
@@ -368,14 +368,14 @@ export default class InkstoneSettings extends View {
             .bg(t.raised).text_size(12).text_color(t.foreground)
             .hover((s) => s.bg(t.hover))
             .tooltip(pick("再看一遍上手说明", "Show the getting-started card again"))
-            .on_click(() => openOverlay({ mod: "inkstone-chrome", kind: "dialog", frame: "none", width: 480, height: 300, key: "omh-welcome", props: { welcome: true } }))
+            .on_click(() => openOverlay({ mod: "inkstone-chrome", kind: "dialog", frame: "none", width: 480, height: 372, key: "omh-welcome", props: { welcome: true } }))
             .child(pick("再看引导", "Show guide")))
           .child(div().id("prefs-reset").h(26).px(12).flex().items_center().rounded(6).cursor_pointer()
             .bg(t.raised).text_size(12).text_color(t.foreground)
             .hover((s) => s.bg(t.hover))
             .tooltip(pick("恢复默认布局（面板与状态栏复原，不关终端）", "Restore the default layout (panels and status bar; terminals stay open)"))
             .on_click((_e, cx) => { run("layout.switch", { name: "main" }); cx.notify(); })
-            .child(pick("恢复默认布局", "Reset layout"))))
+            .child(pick("恢复默认布局", "Reset layout")))))
       .child(v_flex().w_full().gap(2)
         .child(div().text_size(11).text_color(t.dim).child(pick(`主题与右键写入 layouts/${LAYOUT}.json`, `Theme and right-click writes go to layouts/${LAYOUT}.json`)))
         .child(div().text_size(11).text_color(t.dim).child(pick("界面项写入 settings.json，Herdr 会热载", "UI settings are written to settings.json and hot-reloaded by Herdr")))
