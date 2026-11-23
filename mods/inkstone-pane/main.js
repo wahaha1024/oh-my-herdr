@@ -7,6 +7,10 @@ import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { panes, props, run, theme, home, layout, openOverlay, closeOverlay, shared, setShared } from "herdr";
 
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
+
 // 找第一个可见的 tab 帧（含 stack 里当前可见的那个），用来判断头在上还是在下。
 function paneFrame(node) {
   if (!node || node.hidden) return null;
@@ -70,8 +74,10 @@ export default class Pane extends View {
   }
 
   // 只给 OMP 终端加历史按钮：它的会话记录存在 ~/.omp 下，别的程序没有。
+  // 远端机器上的终端地址带机器前缀（`server|t1`），会话在本机读不到，不显示按下没反应的按钮。
   isOmp(p) {
-    return Boolean(p?.terminal) && (p.app === "omp" || p.program?.key === "omp");
+    if (!(Boolean(p?.terminal) && (p.app === "omp" || p.program?.key === "omp"))) return false;
+    return !String(p.terminal).includes("|");
   }
 
   // 常驻的历史发言按钮：开过就高亮，再点一次收起。
@@ -134,7 +140,7 @@ export default class Pane extends View {
       .relative().h(20).w(76).flex_none().flex().items_center().justify_center()
       .text_size(12).text_color(PAPER(t) ? t.seal : t.accent_foreground)
       .child(image("mods/inkstone-chrome/ink/badge-d-76.svg").absolute().left(-12).top(-12).w(100).h(44))
-      .child(div().relative().pb(1).child("待你处理"));
+      .child(div().relative().pb(1).child(pick("待你处理", "needs you")));
     return h_flex()
       .id(`pane-head-${pane}`)
       .size_full()

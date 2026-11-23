@@ -6,6 +6,10 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { spaces, agents, run, hc, checking, theme, shared, setShared, layout } from "herdr";
 
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
+
 // 侧栏缩到 44px（图标轨）时只画计数与展开按钮：文字放不下，硬画会溢出到终端区。
 function findNode(node, id) {
   if (node?.id === id) return node;
@@ -17,8 +21,13 @@ function findNode(node, id) {
 }
 const rail = () => (findNode(layout(), "sidebar")?.size?.px ?? 999) < 160;
 
-const STATUS = { blocked: "待处理", working: "运行中", done: "已完成", idle: "空闲" };
-const statusLabel = (s) => STATUS[s] ?? "无状态";
+const STATUS = () => ({
+  blocked: pick("待处理", "Waiting"),
+  working: pick("运行中", "Running"),
+  done: pick("已完成", "Done"),
+  idle: pick("空闲", "Idle"),
+});
+const statusLabel = (s) => STATUS()[s] ?? pick("无状态", "No status");
 
 const PALETTE_LIGHT = ["#a84a50", "#8a5619", "#7d640c", "#357041", "#34618f", "#5f5399", "#805083"];
 const PALETTE_DARK = ["#f08a8a", "#f2a46a", "#e8c76a", "#7ecf86", "#6fb3ea", "#9a8ce6", "#c98ae6"];
@@ -45,7 +54,9 @@ const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FO
 const EDGE_PRESETS = [
   { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
   { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#e9e2d4", muted: "#665f53", dir: "ink-xuanzhi" }, // xuanzhi-dimmed
   { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+  { bg: "#19181e", muted: "#8f8996", dir: "ink-xuanmo" }, // xuanmo-dimmed
 ];
 let edgeCacheKey = "";
 let edgeCacheDir = null;
@@ -55,7 +66,8 @@ function artEdgeDir(t) {
   const key = `${bg}|${muted}`;
   if (key !== edgeCacheKey) {
     edgeCacheKey = key;
-    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted)
+      ?? EDGE_PRESETS.find((x) => x.bg === bg);
     edgeCacheDir = p ? p.dir : null;
   }
   return edgeCacheDir;
@@ -121,7 +133,7 @@ const FLOW_GREEN = (t) => (PAPER(t) ? (t.up ?? t.done) : (t.done ?? "#1a6840"));
 function ago(ms, now) {
   if (!ms) return "";
   const d = Math.max(0, now - ms);
-  if (d < 60000) return "刚刚";
+  if (d < 60000) return pick("刚刚", "just now");
   if (d < 3600000) return `${Math.floor(d / 60000)}m`;
   if (d < 86400000) return `${Math.floor(d / 3600000)}h`;
   return `${Math.floor(d / 86400000)}d`;
@@ -243,7 +255,7 @@ export default class AgentsPanel extends View {
       .rounded(6)
       .cursor_pointer()
       .hover((s) => s.bg(PAPER(t) ? "#f8dc4c26" : t.hover))
-      .tooltip(open ? `收起 ${label}` : `展开 ${label}`)
+      .tooltip(open ? pick(`收起 ${label}`, `Collapse ${label}`) : pick(`展开 ${label}`, `Expand ${label}`))
       .accessibility_label(`${label} ${n}`)
       .on_click(() => this.toggleFlow(key, cx))
       .child(svg(open ? "mods/inkstone-chrome/chevron-down.svg" : "mods/inkstone-chrome/chevron-right.svg").size(10).flex_none().text_color(t.dim))
@@ -291,7 +303,7 @@ export default class AgentsPanel extends View {
       .cursor_pointer()
       .hover((s) => s.bg(bgHover).border_color(tint(accent, "88")))
       .tooltip(q ? `${name}\n${q}` : name)
-      .accessibility_label(`${name} 待处理`)
+      .accessibility_label(`${name} ${pick("待处理", "waiting")}`)
       .on_click(() => this.openAgent(a))
       .child(h_flex()
         .gap(6)
@@ -404,8 +416,8 @@ export default class AgentsPanel extends View {
         .rounded(6)
         .cursor_pointer()
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
-        .tooltip("展开侧栏")
-        .accessibility_label("展开侧栏")
+        .tooltip(pick("展开侧栏", "Expand sidebar"))
+        .accessibility_label(pick("展开侧栏", "Expand sidebar"))
         .on_click(() => {
           setShared("sidebar.collapsed", false);
           run("layout.resize", { id: "sidebar", px: shared("sidebar.width") ?? 284 });

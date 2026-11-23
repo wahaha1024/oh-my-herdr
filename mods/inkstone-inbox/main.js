@@ -5,14 +5,20 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { agents, run, theme, props, closeOverlay, openOverlay } from "herdr";
+import { agents, run, theme, props, closeOverlay, openOverlay, shared } from "herdr";
+
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
 
 const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
 const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FOOT = 40;
 const EDGE_PRESETS = [
   { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
   { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#e9e2d4", muted: "#665f53", dir: "ink-xuanzhi" }, // xuanzhi-dimmed
   { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+  { bg: "#19181e", muted: "#8f8996", dir: "ink-xuanmo" }, // xuanmo-dimmed
 ];
 let edgeCacheKey = "";
 let edgeCacheDir = null;
@@ -22,7 +28,8 @@ function artEdgeDir(t) {
   const key = `${bg}|${muted}`;
   if (key !== edgeCacheKey) {
     edgeCacheKey = key;
-    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted)
+      ?? EDGE_PRESETS.find((x) => x.bg === bg);
     edgeCacheDir = p ? p.dir : null;
   }
   return edgeCacheDir;
@@ -57,7 +64,7 @@ function paperCard(view, t, content) {
     .child(hEdge("bottom"));
 }
 const RANK = { blocked: 2, done: 1 };
-const LABEL = { blocked: "等你决定", done: "已完成", working: "运行中", idle: "空闲" };
+const LABEL = () => ({ blocked: pick("等你决定", "Needs you"), done: pick("已完成", "Done"), working: pick("运行中", "Running"), idle: pick("空闲", "Idle") });
 
 const waiting = () => agents()
   .filter((a) => RANK[a.status])
@@ -95,15 +102,15 @@ export default class Inbox extends View {
       .items_center()
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
-      .tooltip(list.length ? `${list.length} 个智能体在等你 · 点开看是哪些` : "没有智能体在等你")
-      .accessibility_label("待处理列表")
+      .tooltip(list.length ? pick(`${list.length} 个智能体在等你 · 点开看是哪些`, `${list.length} agents are waiting · click to see them`) : pick("没有智能体在等你", "No agent is waiting"))
+      .accessibility_label(pick("待处理列表", "Waiting list"))
       .on_click(() => openOverlay({ mod: "inkstone-inbox", kind: "dialog", frame: "none", width: 424, height: 344, props: { framed: true } }))
       .child(dot(t, urgent ? "blocked" : list.length ? "done" : "idle"))
       .child(div()
         .text_size(11)
         .whitespace_nowrap()
         .text_color(!list.length ? t.dim : urgent ? t.blocked : t.done)
-        .child(list.length ? `待 ${list.length}` : "无待办"));
+        .child(list.length ? pick(`待 ${list.length}`, `${list.length} waiting`) : pick("无待办", "Nothing waiting")));
   }
 
   row(a, i, t) {
@@ -126,7 +133,7 @@ export default class Inbox extends View {
         .gap(0)
         .child(div().w_full().truncate().text_size(12).child(nameOf(a)))
         .child(div().w_full().truncate().text_size(11).text_color(t.dim)
-          .child(`${LABEL[a.status] ?? a.status} · ${a.space_name} / ${a.tab_name}`)))
+          .child(`${LABEL()[a.status] ?? a.status} · ${a.space_name} / ${a.tab_name}`)))
       .child(svg("mods/inkstone-chrome/chevron-right.svg").size(12).flex_none().text_color(t.dim));
   }
 
@@ -145,8 +152,8 @@ export default class Inbox extends View {
         .border_b(1)
         .border_color(t.border)
         .child(dot(t, list.some((a) => a.status === "blocked") ? "blocked" : "done"))
-        .child(div().flex_1().text_size(13).font_semibold().child("待处理"))
-        .child(div().text_size(11).text_color(t.dim).child(list.length ? `${list.length} 个` : "全部处理完了"))
+        .child(div().flex_1().text_size(13).font_semibold().child(pick("待处理", "Waiting")))
+        .child(div().text_size(11).text_color(t.dim).child(list.length ? pick(`${list.length} 个`, `${list.length}`) : pick("全部处理完了", "All handled")))
         .child(div()
           .id("inbox-close")
           .px(6)
@@ -167,7 +174,7 @@ export default class Inbox extends View {
         .overflow_y_scrollbar()
         .children(list.length
           ? list.map((a, i) => this.row(a, i, t))
-          : [div().p(10).text_size(12).text_color(t.dim).child("没有智能体在等你。")]));
+          : [div().p(10).text_size(12).text_color(t.dim).child(pick("没有智能体在等你。", "No agent is waiting for you."))]));
     return props()?.framed ? paperCard(this, t, inner) : inner;
   }
 

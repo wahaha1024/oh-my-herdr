@@ -3,5 +3,13 @@ desktop.ini
 .DS_Store
 layouts/.state/
 
-# 中文维护笔记：只留在 dev，不进公开仓库
-RECIPE.zh.md
+# 开发记录 dev.md 在 dev 上正常追踪；合并到 main 时用 git rm -f dev.md 移除
+
+# 编辑器语言服务在 mods/ 下自动生成的类型垫片，不属于 mod 内容
+mods/*/gpui-kit.d.ts
+mods/*/jsconfig.json
+
+# 本地发行包与 Python 缓存由 CI 重建
+dist/
+__pycache__/
+*.pyc

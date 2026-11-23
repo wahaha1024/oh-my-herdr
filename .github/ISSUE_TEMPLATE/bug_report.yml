@@ -1,0 +1,60 @@
+name: Bug report
+description: 反馈 Oh My Herdr 的问题 / Report a problem with Oh My Herdr
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先运行诊断脚本并**预览脱敏输出**（不加 `--output`，直接看 stdout）：
+
+        ```
+        python scripts/diagnose.py
+        ```
+
+        输出已自动去掉绝对路径、时间戳与长 id。确认没有残留隐私后再粘贴。
+        Before submitting, run `python scripts/diagnose.py` and **review the
+        redacted preview** on stdout first. Only paste it once you are sure no
+        private paths remain.
+  - type: input
+    id: version
+    attributes:
+      label: oh-my-herdr 版本 / Version
+      description: VERSION 文件内容或 `python scripts/diagnose.py` 第一行
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统 / OS
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: 诊断输出（已脱敏）/ Diagnostic output (redacted)
+      description: `python scripts/diagnose.py` 的 stdout；确认无私人路径后粘贴
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么 / What happened
+      description: 预期行为 vs 实际行为；截图可附，但请先截掉文件树里的私人目录名
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true

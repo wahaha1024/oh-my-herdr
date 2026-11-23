@@ -1,0 +1,63 @@
+name: quality
+
+on:
+  push:
+    branches: [main, dev]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # Python 环境就绪后先跑发行静态检查；不装任何依赖（纯标准库）。
+      - name: release check
+        run: python scripts/check.py
+      - name: installer tests
+        run: python tests/test_install.py
+      - name: diagnose privacy tests
+        run: python tests/test_diagnose.py
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # tag 版本必须与 VERSION 一致（v0.2.0 ↔ VERSION=0.2.0），不一致直接失败。
+      - name: verify tag matches VERSION
+        shell: python
+        run: |
+          import os, sys, pathlib
+          version = pathlib.Path("VERSION").read_text(encoding="utf-8").strip()
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          if tag != version:
+              sys.exit(f"tag {os.environ['GITHUB_REF_NAME']} != VERSION {version}")
+      - name: build zip + SHA256SUMS
+        run: python scripts/release.py --out dist
+      # 发布前再核一遍包内容与校验和。
+      - name: verify built package
+        run: python scripts/release.py --check --out dist
+      - name: upload release artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/oh-my-herdr-*.zip
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true

@@ -39,10 +39,53 @@ Copy-Item (Join-Path $From "layouts\oh-my-herdr.png") (Join-Path $dst "preview.p
 # 主题
 Sync-Tree (Join-Path $From "themes") (Join-Path $dst "themes") { param($f) $f.Name -in @("qingci.json", "xuanmo.json", "zhi.json") }
 
-# 像素图标与程序表（OMP 显示 Codex 像素图标）
+# 像素图标与程序表；不把实机的个人程序或顶层配置带入发行包。
 Sync-Tree (Join-Path $From "pixel-icons") (Join-Path $dst "pixel-icons")
-if (Test-Path (Join-Path $From "programs.json")) {
-  Copy-Item (Join-Path $From "programs.json") (Join-Path $dst "programs.json") -Force
+function Read-ProgramConfig($path) {
+  $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+  $doc = $raw | ConvertFrom-Json
+  if (-not $raw.TrimStart().StartsWith('{') -or $doc -isnot [pscustomobject]) {
+    throw "programs.json 的根必须是对象：$path"
+  }
+  if ($null -ne $doc.PSObject.Properties['programs'] -and $doc.programs -isnot [pscustomobject]) {
+    throw "programs.json 的 programs 必须是对象：$path"
+  }
+  $doc
+}
+
+$progSrc = Join-Path $From 'programs.json'
+$progDst = Join-Path $dst 'programs.json'
+if (Test-Path -LiteralPath $progSrc) {
+  $live = Read-ProgramConfig $progSrc
+  $entries = foreach ($key in 'omp', 'codebuddy') {
+    if ($null -ne $live.programs) {
+      $entry = $live.programs.PSObject.Properties[$key]
+      if ($null -ne $entry -and $entry.Name -ceq $key) { $entry }
+    }
+  }
+  if ($entries) {
+    $package = if (Test-Path -LiteralPath $progDst) { Read-ProgramConfig $progDst } else { [pscustomobject]@{} }
+    if ($null -eq $package.PSObject.Properties['programs']) {
+      $package | Add-Member -NotePropertyName programs -NotePropertyValue ([pscustomobject]@{})
+    }
+    $changed = $false
+    foreach ($entry in $entries) {
+      $key = $entry.Name
+      $old = $package.programs.PSObject.Properties[$key]
+      if ($null -eq $old) {
+        $package.programs | Add-Member -NotePropertyName $key -NotePropertyValue $entry.Value
+        $changed = $true
+      } elseif ($old.Name -ceq $key -and (ConvertTo-Json -InputObject $old.Value -Depth 100 -Compress) -cne (ConvertTo-Json -InputObject $entry.Value -Depth 100 -Compress)) {
+        $old.Value = $entry.Value
+        $changed = $true
+      }
+    }
+    if ($changed) {
+      $json = $package | ConvertTo-Json -Depth 100
+      [System.IO.File]::WriteAllText($progDst, $json, (New-Object System.Text.UTF8Encoding($false)))
+      $n++
+    }
+  }
 }
 
 # mods：所有 inkstone-* 加上 cockpit

@@ -1,135 +1,167 @@
 #!/bin/sh
-# 把 Oh My Herdr 装进 Herdr 的配置目录（macOS / Linux / WSL）。
-# 用法： ./install.sh                    # 不覆盖已有文件
-#        ./install.sh --force            # 覆盖同名文件
-#        ./install.sh --target DIR       # 装到别处
-set -e
+# Oh My Herdr 安装器：POSIX sh 外壳，JSON 与清单操作使用 Python 标准库。
+set -eu
 
-TARGET="${HERDR_CONFIG:-$HOME/.config/herdr-app}"
-FORCE=0
-
-while [ $# -gt 0 ]; do
+FORCE=0; DRY=0; UNINSTALL=0; RESTORE=""; TARGET=""; SOURCE=""
+while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=1 ;;
     --dry-run) DRY=1 ;;
-    --target=*) TARGET="${1#--target=}" ;;
-    --target) shift; TARGET="$1" ;;
-    -h|--help) sed -n '2,5p' "$0"; exit 0 ;;
+    --uninstall) UNINSTALL=1 ;;
+    --restore) shift; [ "$#" -gt 0 ] || { echo "--restore 需要 backup-id" >&2; exit 2; }; RESTORE=$1 ;;
+    --restore=*) RESTORE=${1#--restore=} ;;
+    --target) shift; [ "$#" -gt 0 ] || { echo "--target 需要目录" >&2; exit 2; }; TARGET=$1 ;;
+    --target=*) TARGET=${1#--target=} ;;
+    --source) shift; [ "$#" -gt 0 ] || { echo "--source 需要目录" >&2; exit 2; }; SOURCE=$1 ;;
+    --source=*) SOURCE=${1#--source=} ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
+[ "$UNINSTALL" = 0 ] || [ -z "$RESTORE" ] || { echo "--uninstall 与 --restore 不能同时使用" >&2; exit 2; }
 
-SRC=$(cd "$(dirname "$0")" && pwd)
-
-if [ ! -f "$TARGET/settings.json" ]; then
-  echo "not a Herdr config directory: $TARGET" >&2
-  echo "start herdr-app once, or pass --target=DIR" >&2
-  exit 1
+if [ -n "$SOURCE" ]; then
+  SRC=$(CDPATH= cd -- "$SOURCE" 2>/dev/null && pwd) || { echo "安装包目录不存在：$SOURCE" >&2; exit 2; }
+else
+  SRC=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 fi
-
-# 一个文件都没有时才复制；--force 时覆盖。
-# 跳过的会记到临时文件里，末尾整体提示一次——升级时最容易被这一点坑到。
-SKIPS="${TMPDIR:-/tmp}/oh-my-herdr-skip.$$"
-: > "$SKIPS"
-put() {
-  from=$1; to=$2
-  if [ -e "$to" ] && [ "$FORCE" = 0 ]; then
-    echo "  skip $to"
-    echo x >> "$SKIPS"
-    return 0
+if [ -z "$TARGET" ]; then
+  if [ -n "${HERDR_APP_HOME:-}" ]; then TARGET=$HERDR_APP_HOME
+  elif [ -n "${XDG_CONFIG_HOME:-}" ]; then TARGET=$XDG_CONFIG_HOME/herdr-app
+  elif [ -n "${HERDR_CONFIG:-}" ]; then TARGET=$HERDR_CONFIG
+  else TARGET=${HOME:?}/.config/herdr-app
   fi
-  mkdir -p "$(dirname "$to")"
-  if [ -n "$DRY" ]; then
-    echo "  write $to"
-  else
-    cp "$from" "$to"
-    echo "  write $to"
-  fi
-}
-
-echo "layouts/"
-put "$SRC/layouts/oh-my-herdr.json" "$TARGET/layouts/oh-my-herdr.json"
-put "$SRC/layouts/oh-my-herdr.png"  "$TARGET/layouts/oh-my-herdr.png"
-
-echo "themes/"
-put "$SRC/themes/qingci.json" "$TARGET/themes/qingci.json"
-put "$SRC/themes/xuanmo.json" "$TARGET/themes/xuanmo.json"
-put "$SRC/themes/zhi.json" "$TARGET/themes/zhi.json"
-
-echo "mods/"
-for d in "$SRC"/mods/*/; do
-  name=$(basename "$d")
-  [ -d "$d" ] || continue
-  echo " $name"
-  (cd "$d" && find . -type f | sed 's|^\./||') | while read -r f; do
-    put "$d$f" "$TARGET/mods/$name/$f"
-  done
-done
-
-echo "pixel-icons/"
-if [ -d "$SRC/pixel-icons" ]; then
-  (cd "$SRC/pixel-icons" && find . -type f | sed 's|^\./||') | while read -r f; do
-    put "$SRC/pixel-icons/$f" "$TARGET/pixel-icons/$f"
-  done
 fi
+case "$TARGET" in /*) ;; *) TARGET=$(CDPATH= cd -- "$TARGET" 2>/dev/null && pwd || printf '%s/%s' "$PWD" "$TARGET") ;; esac
 
 PY=""
 for cand in python3 python; do
-  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import json' >/dev/null 2>&1; then
-    PY="$cand"
-    break
-  fi
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import json,hashlib' >/dev/null 2>&1; then PY=$cand; break; fi
 done
+[ -n "$PY" ] || { echo "需要 Python 3（python3 或 python）来合并 JSON、维护清单和备份；未写入任何文件。" >&2; exit 1; }
 
-echo "programs.json"
-if [ -z "$PY" ]; then
-  echo "  no python found — copy pixel-icons/ beside herdr-app, then add this under \"programs\" by hand:"
-  echo '  "omp": { "icon": "pixel-icons/codex.svg", "tint": false }'
-else
-  PROG_SRC="$SRC/programs.json" PROG_DST="$TARGET/programs.json" DRY="$DRY" "$PY" - <<'PY'
-import json, os, shutil, sys
+SRC="$SRC" TARGET="$TARGET" FORCE="$FORCE" DRY="$DRY" UNINSTALL="$UNINSTALL" RESTORE="$RESTORE" "$PY" - <<'PY'
+import hashlib, json, os, shutil, sys, tempfile
+from pathlib import Path
 
-src, dst = os.environ["PROG_SRC"], os.environ["PROG_DST"]
-dry = os.environ.get("DRY")
+src = Path(os.environ["SRC"]); target = Path(os.environ["TARGET"])
+force = os.environ["FORCE"] == "1"; dry = os.environ["DRY"] == "1"
+uninstall = os.environ["UNINSTALL"] == "1"; restore_id = os.environ["RESTORE"]
+version = (src / "VERSION").read_text(encoding="utf-8").strip()
+if not (target / "settings.json").is_file():
+    raise SystemExit(f"不是 Herdr 配置目录（缺 settings.json）：{target}")
 
-ours = json.load(open(src, encoding="utf-8"))["programs"]["omp"]
-cur = {}
-if os.path.exists(dst):
-    try:
-        cur = json.load(open(dst, encoding="utf-8"))
-    except Exception as e:
-        sys.exit(f"  {dst} is not valid JSON ({e}) — left alone")
-    if not isinstance(cur, dict):
-        sys.exit(f"  {dst} is not an object — left alone")
+def digest(p):
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for b in iter(lambda: f.read(1024 * 1024), b""): h.update(b)
+    return h.hexdigest()
 
-progs = cur.setdefault("programs", {})
-if "omp" in progs:
-    print(f"  skip omp (already {json.dumps(progs['omp'], ensure_ascii=False)})")
-else:
-    progs["omp"] = ours
-    if dry:
-        print(f"  would write {dst}")
-    else:
-        if os.path.exists(dst):
-            shutil.copyfile(dst, dst + ".bak")
-        with open(dst, "w", encoding="utf-8") as f:
-            json.dump(cur, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        print(f"  wrote {dst}" + (" (backup: programs.json.bak)" if os.path.exists(dst + ".bak") else ""))
+def rel_files():
+    out=[]
+    for top in ("layouts", "themes", "mods", "pixel-icons"):
+        base=src/top
+        if not base.is_dir(): raise SystemExit(f"安装包缺少 {top}/：{base}")
+        for p in sorted(base.rglob("*")):
+            if p.is_file() and p.name not in ("gpui-kit.d.ts", "jsconfig.json"):
+                out.append((p, Path(top)/p.relative_to(base)))
+    return out
+
+omh=target/".omh"; manifest_path=omh/"install.json"
+try:
+    manifest=json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {"version":version,"files":{}}
+except Exception as e: raise SystemExit(f"安装清单无法解析，未写入任何文件：{e}")
+if not isinstance(manifest,dict) or not isinstance(manifest.get("files",{}),dict): raise SystemExit("安装清单格式无效，未写入任何文件")
+
+def check_programs():
+    try: source=json.loads((src/"programs.json").read_text(encoding="utf-8-sig"))
+    except Exception as e: raise SystemExit(f"源 programs.json 无法解析，未写入任何文件：{e}")
+    if not isinstance(source,dict) or not isinstance(source.get("programs"),dict): raise SystemExit("源 programs.json 的 programs 必须是对象，未写入任何文件")
+    dst=target/"programs.json"
+    if not dst.exists(): return source, {"programs":{}}, False
+    try: current=json.loads(dst.read_text(encoding="utf-8-sig"))
+    except Exception as e: raise SystemExit(f"目标 programs.json 无法解析，未写入任何文件：{e}")
+    if not isinstance(current,dict): raise SystemExit("目标 programs.json 根必须是对象，未写入任何文件")
+    if "programs" in current and not isinstance(current["programs"],dict): raise SystemExit("目标 programs.json 的 programs 必须是对象，未写入任何文件")
+    current.setdefault("programs",{}); return source,current,True
+
+def preflight_install():
+    source,current,had=check_programs(); files=rel_files()
+    # Validate every source file and destination parent before the first write.
+    for p,_ in files:
+        if not p.is_file(): raise SystemExit(f"安装包文件不存在：{p}")
+    add=[k for k in ("omp","codebuddy") if k not in current["programs"]]
+    if add: files.append((None,Path("programs.json")))
+    return source,current,had,files,add
+
+def backup_id(): return __import__("datetime").datetime.utcnow().strftime("%Y%m%d-%H%M%S-%f")
+
+def preview_entries(entries, action):
+    print(f"{action}：{len(entries)} 个登记文件，目标 {target}")
+    for e in entries: print(f"  {action}: {e}")
+
+if uninstall or restore_id:
+    if not manifest_path.is_file(): raise SystemExit("找不到 .omh/install.json，未写入任何文件")
+    entries=manifest["files"] if not restore_id else None
+    if restore_id:
+        b=omh/"backups"/restore_id/"manifest.json"
+        if not b.is_file(): raise SystemExit(f"找不到备份：{restore_id}")
+        meta=json.loads(b.read_text(encoding="utf-8")); entries=meta.get("files",{})
+    if not isinstance(entries,dict): raise SystemExit("清单 files 格式无效")
+    if dry: preview_entries(entries.keys(), "预览"); raise SystemExit(0)
+    changed=[]
+    for rel,info in entries.items():
+        dst=target/rel
+        expected=info.get("installed_sha256") if not restore_id else info.get("after_sha256")
+        if not dst.is_file() or (expected and digest(dst)!=expected):
+            print(f"  保留（已被用户修改）：{rel}"); continue
+        prev=info.get("previous",{})
+        if prev.get("exists"):
+            bp=omh/"backups"/prev.get("backup_id","")/"files"/rel
+            if not bp.is_file(): print(f"  保留（缺少备份）：{rel}"); continue
+            dst.parent.mkdir(parents=True,exist_ok=True); shutil.copyfile(bp,dst)
+        else: dst.unlink()
+        changed.append(rel)
+    if uninstall: manifest_path.unlink(missing_ok=True)
+    print(f"完成：处理 {len(changed)} 个文件，修改过的文件已保留")
+    raise SystemExit(0)
+
+source,current,had,files,add=preflight_install()
+if dry:
+    preview_entries([str(rel) for _,rel in files], "预览"); raise SystemExit(0)
+
+run_id=backup_id(); backup=omh/"backups"/run_id; written=[]; records={}
+try:
+    for p,rel in files:
+        dst=target/rel
+        if rel==Path("programs.json") and p is None:
+            value=current; value["programs"].update({k:source["programs"][k] for k in add})
+            data=json.dumps(value,ensure_ascii=False,indent=2)+"\n"; src_hash=None
+        else:
+            if dst.exists() and not force: print(f"  跳过：{rel}"); continue
+            data=p.read_bytes(); src_hash=hashlib.sha256(data).hexdigest()
+        prev={"exists":dst.is_file()}
+        if dst.is_file():
+            prev["sha256"]=digest(dst); prev["backup_id"]=run_id
+            (backup/"files"/rel).parent.mkdir(parents=True,exist_ok=True); shutil.copyfile(dst,backup/"files"/rel)
+        dst.parent.mkdir(parents=True,exist_ok=True)
+        fd,tmp=tempfile.mkstemp(dir=str(dst.parent),prefix=".omh-")
+        with os.fdopen(fd,"wb") as f: f.write(data if isinstance(data,bytes) else data.encode())
+        os.replace(tmp,dst); written.append(dst)
+        records[str(rel).replace("\\","/")]={"installed_sha256":digest(dst),"previous":prev,"backup_id":run_id}
+        print(f"  写入：{rel}")
+    if records:
+        backup.mkdir(parents=True,exist_ok=True)
+        (backup/"manifest.json").write_text(json.dumps({"version":version,"files":{k:{**v,"after_sha256":v["installed_sha256"]} for k,v in records.items()}},ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        manifest.setdefault("files",{}).update(records); manifest["version"]=version
+        omh.mkdir(parents=True,exist_ok=True); manifest_path.write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+except Exception:
+    for p in reversed(written):
+        info=records.get(str(p.relative_to(target)).replace("\\","/"),{}).get("previous",{})
+        if info.get("exists"):
+            bp=backup/"files"/p.relative_to(target); p.parent.mkdir(parents=True,exist_ok=True); shutil.copyfile(bp,p)
+        elif p.exists(): p.unlink()
+    shutil.rmtree(backup,ignore_errors=True); raise
+print(f"完成：写入 {len(records)} 个文件，配置目录：{target}")
 PY
-fi
-
-SKIPPED=$(wc -l < "$SKIPS" | tr -d ' ')
-rm -f "$SKIPS"
-
-echo
-if [ "$SKIPPED" -gt 0 ] && [ "$FORCE" = 0 ] && [ -z "$DRY" ]; then
-  echo "note: $SKIPPED files were left as they were (old versions)."
-  echo "      if this machine already had Oh My Herdr, update it with --force:"
-  echo "        ./install.sh --force"
-  echo
-fi
-echo "done. switch to it:"
-echo "  herdr-app do layout.switch '{\"name\":\"oh-my-herdr\"}'"
-echo "back is ctrl-shift-l."

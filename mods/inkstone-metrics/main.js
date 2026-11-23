@@ -6,7 +6,11 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { exec, props, closeOverlay, theme, run, window } from "herdr";
+import { exec, props, closeOverlay, theme, run, window, shared } from "herdr";
+
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
 
 const SAMPLE = [
   "-NoProfile",
@@ -72,6 +76,7 @@ export default class Metrics extends View {
     this.used = null;
     this.total = null;
     this.procs = [];
+    this.stopVersion = 0;
     this.loadTotal(cx);
     this.sample(cx);
     cx.timer.every(20000, (cx) => this.sample(cx));
@@ -121,8 +126,10 @@ export default class Metrics extends View {
   loadProcs(cx) {
     const p = plat();
     const cmd = p === "windows" ? ["powershell", PROCS] : ["sh", ["-c", UNIX_PROCS]];
+    const version = this.stopVersion;
     cx.spawn(async (cx) => {
       const r = await exec(cmd[0], cmd[1], { timeout: 15000 }).catch(() => null);
+      if (version !== this.stopVersion) return;
       this.procs = (r?.stdout ?? "")
         .split(/\r?\n/)
         .map((line) => line.trim())
@@ -136,17 +143,46 @@ export default class Metrics extends View {
     });
   }
 
-  stop(pid, cx) {
-    const p = plat();
-    const job = p === "windows"
-      ? exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`])
-      : exec("kill", ["-9", String(pid)]);
-    job
-      .catch(() => {})
-      .then(() => {
-        this.procs = this.procs.filter((x) => x.pid !== pid);
-        cx.notify();
-      });
+  async stop(cx) {
+    const target = this.stopTarget;
+    if (!target || this.stopping) return;
+    this.stopTarget = null;
+    this.stopError = "";
+    if (!this.procs.some((p) => p.pid === target.pid && p.name === target.name)) {
+      this.stopError = pick("进程列表已变化，请重新选择。", "The process list changed, pick again.");
+      cx.notify();
+      return;
+    }
+    const { pid, name } = target;
+    this.stopping = true;
+    cx.notify();
+    try {
+      const opts = { timeout: 5000 };
+      const r = plat() === "windows"
+        ? await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction Stop`], opts)
+        : await exec("kill", ["-9", String(pid)], opts);
+      if (r.code !== 0) throw new Error(r.stderr.trim() || pick(`退出码 ${r.code}`, `exit ${r.code}`));
+      this.stopVersion++;
+      this.procs = this.procs.filter((p) => p.pid !== pid);
+    } catch (e) {
+      this.stopError = pick(`结束 ${name}（PID ${pid}）失败：${e?.message ?? e}`, `Could not stop ${name} (PID ${pid}): ${e?.message ?? e}`);
+    } finally {
+      this.stopping = false;
+      cx.notify();
+    }
+  }
+
+  stopPrompt(t) {
+    const target = this.stopTarget;
+    if (!target && !this.stopError && !this.stopping) return div();
+    return v_flex().flex_none().px(12).py(6).gap(4).bg(t.raised)
+      .child(div().text_size(12).text_color(t.blocked)
+        .child(target ? pick(`强制结束 ${target.name}（PID ${target.pid}）？`, `Force quit ${target.name} (PID ${target.pid})?`) : this.stopError || pick("正在结束进程…", "Ending the process…")))
+      .when(Boolean(target), (el) => el.child(h_flex().gap(8)
+        .child(div().id("metrics-stop-cancel").h(28).px(8).flex().items_center().rounded(5).bg(t.hover).cursor_pointer()
+          .on_click((_e, c) => { this.stopTarget = null; c.notify(); }).child(pick("取消", "Cancel")))
+        .child(div().id("metrics-stop-confirm").h(28).px(8).flex().items_center().rounded(5).bg(t.blocked).text_color(t.solid_foreground).cursor_pointer()
+          .on_click((_e, c) => this.stop(c)).child(pick("确认结束", "End it")))));
   }
 
   tone(t) {
@@ -180,11 +216,11 @@ export default class Metrics extends View {
       .border_l(1)
       .border_color(t.border)
       .cursor_pointer()
-      .tooltip(this.total ? `内存 ${ff(this.used ?? 0)} / ${ff(this.total)} GB\n${cpu} · 点开看进程` : "读取系统资源…")
-      .accessibility_label(`系统资源 CPU ${cpu} 内存 ${mem}`)
+      .tooltip(this.total ? pick(`内存 ${ff(this.used ?? 0)} / ${ff(this.total)} GB\n${cpu} · 点开看进程`, `Memory ${ff(this.used ?? 0)} / ${ff(this.total)} GB\n${cpu} · click to see processes`) : pick("读取系统资源…", "Reading system resources…"))
+      .accessibility_label(pick(`系统资源 CPU ${cpu} 内存 ${mem}`, `System resources, CPU ${cpu}, memory ${mem}`))
       .hover((s) => s.bg(t.hover))
       .on_click(() => run("mod.open", { name: "inkstone-metrics" }))
-      .child(svg("mods/workspace-chrome/monitor.svg").size(12).flex_none().text_color(this.tone(t)))
+      .child(svg("mods/inkstone-chrome/monitor.svg").size(12).flex_none().text_color(this.tone(t)))
       .child(div().w(44).flex_none().whitespace_nowrap().text_size(11).text_color(this.tone(t)).child(`CPU ${cpu}`))
       .child(div().text_size(11).text_color(t.dim).child("·"))
       .child(div().w(56).flex_none().whitespace_nowrap().text_size(11).text_color(t.muted).child(mem));
@@ -206,8 +242,8 @@ export default class Metrics extends View {
         .items_center()
         .border_b(1)
         .border_color(t.border)
-        .child(svg("mods/workspace-chrome/monitor.svg").size(14).flex_none().text_color(t.accent))
-        .child(div().flex_1().text_size(13).font_semibold().child("系统资源"))
+        .child(svg("mods/inkstone-chrome/monitor.svg").size(14).flex_none().text_color(t.accent))
+        .child(div().flex_1().text_size(13).font_semibold().child(pick("系统资源", "System resources")))
         .child(div()
           .id("metrics-close")
           .px(6)
@@ -219,6 +255,7 @@ export default class Metrics extends View {
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => closeOverlay(props()?.overlay))
           .child("Esc")))
+      .child(this.stopPrompt(t))
       .child(v_flex()
         .flex_1()
         .min_h(0)
@@ -230,17 +267,17 @@ export default class Metrics extends View {
         .child(v_flex()
           .gap(5)
           .child(h_flex().items_center().justify_between()
-            .child(div().text_size(12).text_color(t.muted).child("CPU 占用"))
+            .child(div().text_size(12).text_color(t.muted).child(pick("CPU 占用", "CPU usage")))
             .child(div().text_size(12).text_color(this.tone(t)).child(this.cpu === null ? "—" : `${cpu}%`)))
           .child(this.bar(cpu, 100, this.tone(t), t, 6)))
         .child(v_flex()
           .gap(5)
           .child(h_flex().items_center().justify_between()
-            .child(div().text_size(12).text_color(t.muted).child("物理内存"))
+            .child(div().text_size(12).text_color(t.muted).child(pick("物理内存", "Memory")))
             .child(div().text_size(12).text_color(t.foreground).child(total ? `${ff(used)} / ${ff(total)} GB` : "—")))
           .child(this.bar(used, total || 1, used / (total || 1) >= 0.9 ? t.blocked : t.accent, t, 6)))
         .child(h_flex().items_center().justify_between()
-          .child(div().text_size(11).text_color(t.dim).child("占用最高的进程"))
+          .child(div().text_size(11).text_color(t.dim).child(pick("占用最高的进程", "Top processes")))
           .child(div()
             .id("metrics-refresh")
             .px(7)
@@ -251,7 +288,7 @@ export default class Metrics extends View {
             .cursor_pointer()
             .hover((s) => s.bg(t.hover).text_color(t.foreground))
             .on_click(() => this.loadProcs(cx))
-            .child("刷新")))
+            .child(pick("刷新", "Refresh"))))
         .child(v_flex()
           .gap(1)
           .children(this.procs.length
@@ -269,16 +306,21 @@ export default class Metrics extends View {
               .child(div()
                 .id(`proc-stop-${p.pid}`)
                 .px(7)
-                .py(2)
+                .h(28).flex_none().flex().items_center()
                 .rounded(5)
                 .text_size(11)
                 .text_color(t.dim)
                 .cursor_pointer()
                 .hover((s) => s.bg(t.blocked).text_color(t.solid_foreground))
-                .tooltip("结束该进程")
-                .on_click(() => this.stop(p.pid, cx))
-                .child("结束")))
-            : [div().px(8).py(8).text_size(12).text_color(t.dim).child("读取中…")])));
+                .tooltip(pick("结束该进程", "End this process"))
+                .on_click((_e, c) => {
+                  if (this.stopping) return;
+                  this.stopTarget = p;
+                  this.stopError = "";
+                  c.notify();
+                })
+                .child(pick("结束", "End"))))
+            : [div().px(8).py(8).text_size(12).text_color(t.dim).child(pick("读取中…", "Reading…"))])));
   }
 
   render(cx) {

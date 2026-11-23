@@ -12,15 +12,21 @@
 
 import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input } from "gpui-base";
-import { exec, run, theme, spaces, panes, notify, terminals, window, checking, appHome, readTextFile, writeTextFile } from "herdr";
+import { exec, run, theme, spaces, panes, notify, terminals, window, checking, appHome, readTextFile, writeTextFile, shared } from "herdr";
+
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
 
 const MAX_PER = 100;
 const MAX_CODEX = 120;
 const CACHE_TTL_MS = 45000;
+const BIN_RETRY_MS = 60000;
 const CACHE_FILE = () => `${appHome()}/data/inkstone-sessions-cache.json`;
 const MEM_CACHE = new Map();
 let DISK_LOADED = false;
 let DISK_RAW = null;
+let DISK_WRITE = Promise.resolve();
 const SEP = "\u001f";
 const plat = () => window()?.platform ?? "windows";
 
@@ -67,8 +73,11 @@ const SOURCES = {
   codebuddy: { label: "CodeBuddy", dir: ".codebuddy/projects", bin: "codebuddy", argv: (id) => ["--resume", id] },
   pi: { label: "Pi", dir: ".pi/agent/sessions", bin: "pi", argv: (id) => ["--session", id] },
   opencode: { label: "OpenCode", bin: "opencode", argv: (id) => ["--session", id] },
-  local: { label: "本地", bin: null, argv: null },
+  local: { label: "Local", bin: null, argv: null },
 };
+// 只有「本地」这一项随语言变；其余是产品名，不翻译。
+const srcLabel = (k) => (k === "local" ? pick("本地", "Local") : SOURCES[k]?.label ?? k);
+
 
 const SOURCE_ORDER = ["omp", "codex", "claude", "codebuddy", "pi", "opencode", "local"];
 
@@ -234,6 +243,7 @@ const AWK = [
 ].join("\n");
 
 const SH_SCAN = [
+  'command -v awk >/dev/null 2>&1 || { printf "%s\\n" "awk not found" >&2; exit 127; }',
   "TARGET=$1",
   "SEP=$(printf '\\037')",
   "LEAF=''",
@@ -280,10 +290,10 @@ const SH_SCAN = [
 
 const ago = (sec) => {
   const d = Math.max(0, Math.floor(Date.now() / 1000) - sec);
-  if (d < 60) return "刚刚";
-  if (d < 3600) return `${Math.floor(d / 60)} 分钟前`;
-  if (d < 86400) return `${Math.floor(d / 3600)} 小时前`;
-  if (d < 86400 * 30) return `${Math.floor(d / 86400)} 天前`;
+  if (d < 60) return pick("刚刚", "just now");
+  if (d < 3600) return pick(`${Math.floor(d / 60)} 分钟前`, `${Math.floor(d / 60)}m ago`);
+  if (d < 86400) return pick(`${Math.floor(d / 3600)} 小时前`, `${Math.floor(d / 3600)}h ago`);
+  if (d < 86400 * 30) return pick(`${Math.floor(d / 86400)} 天前`, `${Math.floor(d / 86400)}d ago`);
   return new Date(sec * 1000).toLocaleDateString("zh-CN");
 };
 const base = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
@@ -304,7 +314,7 @@ export default class Sessions extends View {
     this.timeRange = "all";
     this.query = "";
     this.copied = null;
-    this.bins = {};
+    this.bins = new Map();
     this.resumed = new Set();
     this.scannedKey = null;
     this.manage = false;
@@ -313,7 +323,7 @@ export default class Sessions extends View {
     this.confirmBatch = false;
     this.deleting = false;
     this.handle = cx.focus_handle();
-    this.input = InputState.new({ placeholder: "搜索标题、目录或 ID…" });
+    this.input = InputState.new({ placeholder: pick("搜索标题、目录或 ID…", "Search titles, folders or IDs…") });
     this.input.on("change", (_e, cx) => {
       this.query = this.input.value();
       cx.notify();
@@ -325,7 +335,6 @@ export default class Sessions extends View {
       const on = this.activeMachine(sp);
       const target = this.activeFolder(sp);
       const key = `${on ?? ""}|${target}`;
-      this.detect(on);
       this.activateKey(key, cx, false);
     } else {
       this.loading = false;
@@ -354,35 +363,41 @@ export default class Sessions extends View {
 
   async loadDiskCache() {
     if (DISK_LOADED) return;
-    try {
-      const raw = await readTextFile(CACHE_FILE());
-      DISK_RAW = raw;
-      if (raw) {
-        const obj = JSON.parse(raw);
-        if (obj && typeof obj === "object") {
-          for (const [k, v] of Object.entries(obj)) {
-            if (!v || !Array.isArray(v.items)) continue;
-            if (!MEM_CACHE.has(k)) {
-              MEM_CACHE.set(k, { ts: Number(v.ts) || 0, items: this.normCacheItems(v.items) });
-            }
-          }
-        }
-      }
-    } catch {}
+    await this.readDiskCache().catch(() => {});
     DISK_LOADED = true;
   }
 
-  async flushDiskCache() {
+  async readDiskCache() {
+    const raw = await readTextFile(CACHE_FILE());
+    DISK_RAW = raw ?? null;
+    if (!raw) return;
+    let obj;
+    try { obj = JSON.parse(raw); } catch { return; }
+    for (const [k, v] of Object.entries(obj ?? {})) {
+      if (!v || !Array.isArray(v.items)) continue;
+      const ts = Number(v.ts) || 0;
+      if (!MEM_CACHE.has(k) || ts > MEM_CACHE.get(k).ts) {
+        MEM_CACHE.set(k, { ts, items: this.normCacheItems(v.items) });
+      }
+    }
+  }
+
+  flushDiskCache() {
     if (checking()) return;
-    try {
-      const entries = [...MEM_CACHE.entries()]
-        .sort((a, b) => (b[1]?.ts || 0) - (a[1]?.ts || 0))
-        .slice(0, 6);
-      const obj = {};
-      for (const [k, v] of entries) {
-        obj[k] = {
-          ts: v.ts || 0,
-          items: (v.items ?? []).slice(0, 180).map((s) => ({
+    DISK_WRITE = DISK_WRITE.then(() => this.persistDiskCache());
+    return DISK_WRITE;
+  }
+
+  async persistDiskCache() {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (attempt > 0 || DISK_RAW === null) await this.readDiskCache();
+        const entries = [...MEM_CACHE.entries()]
+          .sort((a, b) => b[1].ts - a[1].ts)
+          .slice(0, 6);
+        const json = JSON.stringify(Object.fromEntries(entries.map(([k, v]) => [k, {
+          ts: v.ts,
+          items: v.items.slice(0, 180).map((s) => ({
             src: s.src,
             m: s.m,
             id: s.id,
@@ -390,18 +405,14 @@ export default class Sessions extends View {
             cwd: s.cwd,
             files: (s.files ?? (s.file ? [s.file] : [])).slice(0, 2),
           })),
-        };
-      }
-      const json = JSON.stringify(obj);
-      try {
+        }])));
         await writeTextFile(CACHE_FILE(), json, DISK_RAW);
         DISK_RAW = json;
+        return;
       } catch {
-        const latest = await readTextFile(CACHE_FILE()).catch(() => null);
-        await writeTextFile(CACHE_FILE(), json, latest).catch(() => {});
-        DISK_RAW = json;
+        DISK_RAW = null;
       }
-    } catch {}
+    }
   }
 
   writeCache(key, list) {
@@ -412,6 +423,16 @@ export default class Sessions extends View {
 
   activateKey(key, cx, inRender = false) {
     this.scannedKey = key;
+    const context = this.scanContext = {};
+    this.reloading = null;
+    this.detect();
+    this.list = [];
+    this.loading = true;
+    this.failed = false;
+    this.failReason = "";
+    this.selected.clear();
+    this.confirmOne = null;
+    this.confirmBatch = false;
     const hit = MEM_CACHE.get(key);
     if (hit && hit.items.length) {
       this.list = hit.items;
@@ -424,7 +445,7 @@ export default class Sessions extends View {
     if (!DISK_LOADED) {
       this.loading = this.list.length === 0;
       this.loadDiskCache().then(() => {
-        if (this.scannedKey !== key) return;
+        if (this.scanContext !== context) return;
         const diskHit = MEM_CACHE.get(key);
         if (diskHit && diskHit.items.length) {
           this.list = diskHit.items;
@@ -458,47 +479,57 @@ export default class Sessions extends View {
 
   // 各家的可执行文件位置：按机器分别探测，点会话时用它开终端。
   detect(on = this.activeMachine()) {
-    const mkey = on || "local";
-    if (this.bins[mkey]) return;
-    this.bins[mkey] = {};
+    let entry = this.bins.get(on);
+    if (!entry) {
+      entry = { paths: {}, retryAt: 0 };
+      this.bins.set(on, entry);
+    }
+    const now = Date.now();
+    if (now < entry.retryAt) return;
+    entry.retryAt = now + BIN_RETRY_MS;
     const useWin = !on && plat() === "windows";
     for (const [key, src] of Object.entries(SOURCES)) {
-      if (!src.bin) continue;
+      if (!src.bin || entry.paths[key]) continue;
       const job = useWin
         ? exec("where", [src.bin], { timeout: 5000 })
         : exec("sh", ["-c", `command -v ${src.bin}`], { on, timeout: 5000 });
       job
         .then((r) => {
-          const line = String(r?.stdout ?? "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-          if (line) this.bins[mkey][key] = line;
+          const line = r.code === 0 ? r.stdout.trim().split(/\r?\n/, 1)[0].trim() : "";
+          if (line) entry.paths[key] = line;
         })
         .catch(() => {});
     }
   }
 
   reload(cx, opts = {}) {
-    if (this.reloading) return;
-    const silent = Boolean(opts?.silent) && this.list.length > 0;
-    this.reloading = true;
-    if (!silent) this.loading = this.list.length === 0;
     const sp = this.activeSpace();
     const on = this.activeMachine(sp);
     const target = this.activeFolder(sp);
     const scanKey = `${on ?? ""}|${target}`;
-    this.scannedKey = scanKey;
+    if (scanKey !== this.scannedKey) return this.activateKey(scanKey, cx);
+    if (this.reloading) return;
+    const context = this.scanContext;
+    const silent = Boolean(opts?.silent) && this.list.length > 0;
+    this.reloading = context;
+    if (!silent) this.loading = this.list.length === 0;
     this.detect(on);
     const useWin = !on && plat() === "windows";
+    const fail = (reason) => {
+      if (silent && !on) return;
+      this.failed = true;
+      this.failReason = on ? pick(`「${on}」上的会话扫描需要 sh 和 awk。${reason}`, `Scanning sessions on ${on} needs sh and awk. ${reason}`) : reason;
+    };
     const job = useWin
       ? exec("powershell", buildPsScan(target), { timeout: 25000 })
       : exec("sh", ["-c", SH_SCAN, "sh", target], { on, timeout: 25000 });
     job
       .then((r) => {
+        if (this.scanContext !== context) return;
         if (r?.code !== 0) {
-          if (!silent) {
-            this.failed = true;
-            const err = String(r?.stderr ?? "").trim().split(/\r?\n/).filter(Boolean).pop() ?? "";
-            this.failReason = err ? `退出码 ${r?.code ?? "?"}：${err}` : `退出码 ${r?.code ?? "未知"}`;
-          }
+          const err = String(r?.stderr ?? "").trim().split(/\r?\n/).filter(Boolean).pop();
+          const code = pick(`退出码 ${r?.code ?? pick("未知", "Unknown")}`, `exit ${r?.code ?? pick("未知", "Unknown")}`);
+          fail(err ? `${code}：${err}` : code);
           return;
         }
         const un = useWin ? (s) => s : (s) => String(s ?? "").replace(/\\(["\\])/g, "$1");
@@ -528,13 +559,12 @@ export default class Sessions extends View {
         this.failReason = "";
       })
       .catch((e) => {
-        if (!silent) {
-          this.failed = true;
-          this.failReason = String(e?.message || e || "执行异常");
-        }
+        if (this.scanContext !== context) return;
+        fail(String(e?.message || e || pick("执行异常", "Something went wrong")));
       })
       .finally(() => {
-        this.reloading = false;
+        if (this.scanContext !== context) return;
+        this.reloading = null;
         this.loading = false;
         cx.notify();
       });
@@ -583,22 +613,21 @@ export default class Sessions extends View {
       if (space && !spaces().find((z) => z.id === space)?.active) run("space.select", { id: space });
       if (tab) run("tab.select", { id: tab });
       if (up.address) run("pane.focus", { terminal: up.address });
-      notify({ title: "会话已经开着", body: "切过去，不重新加载历史", level: "info" });
+      notify({ title: pick("会话已经开着", "The session is already open"), body: pick("切过去，不重新加载历史", "Switch to it without reloading history"), level: "info" });
       return;
     }
     const src = SOURCES[s.src];
     if (!src.bin || !src.argv) {
       cx.write_to_clipboard(s.id);
-      notify({ title: "本地对话归档", body: `已复制记录 ID：${s.id}`, level: "info" });
+      notify({ title: pick("本地对话归档", "Local chat archive"), body: pick(`已复制记录 ID：${s.id}`, `Copied record id: ${s.id}`), level: "info" });
       return;
     }
-    const mkey = this.activeMachine() || "local";
-    const bin = this.bins[mkey]?.[s.src] ?? src.bin;
+    const bin = this.bins.get(this.activeMachine())?.paths[s.src] ?? src.bin;
     const args = { argv: [bin, ...src.argv(s.id)], place: "tab" };
     if (s.cwd) args.folder = s.cwd;
     this.resumed.add(s.id);
     run("terminal.open", args);
-    notify({ title: `正在恢复 ${src.label} 会话`, body: s.t || s.id, level: "info" });
+    notify({ title: `${pick("正在恢复", "Resuming")} ${srcLabel(s.src)} ${pick("会话", "session")}`, body: s.t || s.id, level: "info" });
   }
 
   copyCmd(s, cx) {
@@ -639,6 +668,7 @@ export default class Sessions extends View {
     this.deleting = true;
     cx.notify();
     const on = this.activeMachine();
+    const context = this.scanContext;
     const useWin = !on && plat() === "windows";
     const fileItems = items.filter((s) => s.src !== "opencode");
     const ocItems = items.filter((s) => s.src === "opencode" && s.file && s.id);
@@ -652,81 +682,108 @@ export default class Sessions extends View {
     const okFiles = new Set();
     const okOc = new Set();
     let errMsg = "";
+    const remoteHint = on ? pick(`无法在「${on}」完成删除，请确认远端在线且可运行 sh。`, `Could not delete on ${on}; check that the machine is online and can run sh.`) : "";
     try {
       if (useWin) {
-        const b64 = toB64(JSON.stringify({ files, oc }));
-        const ps = [
-          "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
-          `$req = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')) | ConvertFrom-Json`,
-          "foreach ($p in @($req.files)) {",
-          "  if (-not $p) { continue }",
-          "  try {",
-          "    if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction Stop }",
-          "    \"OK`t$p\"",
-          "  } catch { \"ERR`t$p`t$($_.Exception.Message)\" }",
-          "}",
-          "$sq = Get-Command sqlite3 -ErrorAction SilentlyContinue",
-          "foreach ($g in @($req.oc)) {",
-          "  if (-not $sq -or -not $g.db -or -not (Test-Path -LiteralPath $g.db)) { continue }",
-          "  $inList = (@($g.ids) | ForEach-Object { \"'\" + ([string]$_).Replace(\"'\", \"''\") + \"'\" }) -join ','",
-          "  if (-not $inList) { continue }",
-          "  try {",
-          "    & $sq.Source $g.db \"PRAGMA foreign_keys=ON; DELETE FROM session WHERE id IN ($inList);\" 2>$null",
-          "    if ($LASTEXITCODE -eq 0) { foreach ($id in @($g.ids)) { \"OC`t$id\" } }",
-          "    else { \"ERR`toc`texit $LASTEXITCODE\" }",
-          "  } catch { \"ERR`toc`t$($_.Exception.Message)\" }",
-          "}",
-        ].join("\n");
-        const r = await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { timeout: 20000 });
-        for (const ln of String(r?.stdout ?? "").split(/\r?\n/)) {
-          if (ln.startsWith("OK\t")) okFiles.add(ln.slice(3));
-          else if (ln.startsWith("OC\t")) okOc.add(ln.slice(3));
-          else if (ln.startsWith("ERR\t") && !errMsg) errMsg = ln.split("\t").slice(2).join(" ");
+        const removeBatch = async (batch, db) => {
+          const files = db ? [] : batch;
+          const oc = db ? [{ db, ids: batch }] : [];
+          const b64 = toB64(JSON.stringify({ files, oc }));
+          // 在 Windows 32767 字符限制内为脚本、引号和可执行文件路径留余量。
+          if (b64.length > 24000) {
+            if (batch.length === 1) {
+              errMsg ||= pick("会话路径或标识过长，无法删除", "The path or id is too long to delete");
+              return;
+            }
+            const mid = Math.floor(batch.length / 2);
+            await removeBatch(batch.slice(0, mid), db);
+            await removeBatch(batch.slice(mid), db);
+            return;
+          }
+          const ps = [
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+            `$req = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')) | ConvertFrom-Json -ErrorAction Stop`,
+            "foreach ($p in @($req.files)) {",
+            "  if (-not $p) { continue }",
+            "  try {",
+            "    if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction Stop }",
+            "    \"OK`t$p\"",
+            "  } catch { \"ERR`t$p`t$($_.Exception.Message)\" }",
+            "}",
+            "if (-not $req.oc) { exit 0 }",
+            "$sq = Get-Command sqlite3 -ErrorAction SilentlyContinue",
+            'if (-not $sq) { "ERR`toc`t找不到 sqlite3"; exit 0 }',
+            "foreach ($g in @($req.oc)) {",
+            '  if (-not (Test-Path -LiteralPath $g.db)) { "ERR`toc`t找不到数据库：$($g.db)"; continue }',
+            "  $inList = (@($g.ids) | ForEach-Object { \"'\" + ([string]$_).Replace(\"'\", \"''\") + \"'\" }) -join ','",
+            "  if (-not $inList) { continue }",
+            "  try {",
+            "    & $sq.Source $g.db \"PRAGMA foreign_keys=ON; DELETE FROM session WHERE id IN ($inList);\" 2>$null",
+            "    if ($LASTEXITCODE -eq 0) { foreach ($id in @($g.ids)) { \"OC`t$id\" } }",
+            "    else { \"ERR`toc`texit $LASTEXITCODE\" }",
+            "  } catch { \"ERR`toc`t$($_.Exception.Message)\" }",
+            "}",
+            "exit 0",
+          ].join("\n");
+          try {
+            const r = await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { timeout: 20000 });
+            for (const ln of r.stdout.split(/\r?\n/)) {
+              if (ln.startsWith("OK\t")) okFiles.add(ln.slice(3));
+              else if (db && ln.startsWith("OC\t")) okOc.add(`${db}\0${ln.slice(3)}`);
+              else if (ln.startsWith("ERR\t")) errMsg ||= ln.split("\t").slice(2).join(" ");
+            }
+            if (r.code !== 0) errMsg ||= r.stderr.trim() || pick(`PowerShell 退出码 ${r.code}`, `PowerShell exit ${r.code}`);
+          } catch (e) {
+            errMsg ||= String(e?.message ?? e);
+          }
+        };
+        for (let i = 0; i < files.length; i += 50) await removeBatch(files.slice(i, i + 50), null);
+        for (const { db, ids } of oc) {
+          for (let i = 0; i < ids.length; i += 50) await removeBatch(ids.slice(i, i + 50), db);
         }
-        if (r?.code !== 0 && !errMsg) errMsg = String(r?.stderr ?? "").trim();
       } else {
         if (files.length) {
           const shDel = 'for p in "$@"; do if [ -e "$p" ]; then rm -f -- "$p" && printf "OK\\t%s\\n" "$p" || printf "ERR\\t%s\\n" "$p"; else printf "OK\\t%s\\n" "$p"; fi; done';
           const r = await exec("sh", ["-c", shDel, "sh", ...files], { on, timeout: 20000 });
           for (const ln of String(r?.stdout ?? "").split(/\r?\n/)) {
             if (ln.startsWith("OK\t")) okFiles.add(ln.slice(3));
-            else if (ln.startsWith("ERR\t") && !errMsg) errMsg = `删除失败：${ln.slice(4)}`;
+            else if (ln.startsWith("ERR\t") && !errMsg) errMsg = pick(`删除失败：${ln.slice(4)}`, `Delete failed: ${ln.slice(4)}`);
           }
-          if (r?.code !== 0 && !errMsg) errMsg = String(r?.stderr ?? "").trim();
+          if (r?.code !== 0 && !errMsg) errMsg = String(r?.stderr ?? "").trim() || `sh 退出码 ${r?.code ?? pick("未知", "Unknown")}`;
         }
         for (const g of oc) {
           const inList = g.ids.map((id) => `'${String(id).replace(/'/g, "''")}'`).join(",");
           const sql = `PRAGMA foreign_keys=ON; DELETE FROM session WHERE id IN (${inList});`;
           const r = await exec("sqlite3", [g.db, sql], { on, timeout: 10000 });
-          if (r?.code === 0) for (const id of g.ids) okOc.add(id);
-          else if (!errMsg) errMsg = String(r?.stderr ?? "").trim() || "OpenCode 删除失败";
+          if (r?.code === 0) for (const id of g.ids) okOc.add(`${g.db}\0${id}`);
+          else if (!errMsg) errMsg = String(r?.stderr ?? "").trim() || pick("OpenCode 删除失败", "OpenCode delete failed");
         }
       }
       const deletedKeys = new Set();
       for (const s of items) {
         const k = `${s.src}:${s.id}`;
         if (s.src === "opencode") {
-          if (okOc.has(s.id)) deletedKeys.add(k);
+          if (okOc.has(`${s.file}\0${s.id}`)) deletedKeys.add(k);
         } else {
           const fs = (s.files ?? (s.file ? [s.file] : [])).filter(safeSessionFile);
           if (fs.length && fs.every((f) => okFiles.has(f))) deletedKeys.add(k);
         }
       }
-      if (deletedKeys.size) {
+      if (this.scanContext === context && deletedKeys.size) {
         this.list = this.list.filter((s) => !deletedKeys.has(`${s.src}:${s.id}`));
         for (const k of deletedKeys) this.selected.delete(k);
         this.writeCache(this.scannedKey, this.list);
       }
       this.confirmBatch = false;
       if (deletedKeys.size === items.length) {
-        notify({ title: "已删除会话", body: `共删除 ${deletedKeys.size} 条会话记录`, level: "info" });
+        notify({ title: pick("已删除会话", "Session deleted"), body: `共删除 ${deletedKeys.size} 条会话记录`, level: "info" });
       } else if (deletedKeys.size > 0) {
-        notify({ title: "部分会话已删除", body: `成功 ${deletedKeys.size} 条，失败 ${items.length - deletedKeys.size} 条${errMsg ? `：${errMsg}` : ""}`, level: "warn" });
+        notify({ title: pick("部分会话已删除", "Some sessions were deleted"), body: `成功 ${deletedKeys.size} 条，失败 ${items.length - deletedKeys.size} 条。${remoteHint}${errMsg}`, level: "warn" });
       } else {
-        notify({ title: "删除会话失败", body: errMsg || "未找到可删除的会话文件", level: "error" });
+        notify({ title: pick("删除会话失败", "Couldn't delete the session"), body: remoteHint + (errMsg || pick("未找到可删除的会话文件", "No session file to delete")), level: "error" });
       }
     } catch (e) {
-      notify({ title: "删除会话失败", body: String(e?.message ?? e), level: "error" });
+      notify({ title: pick("删除会话失败", "Couldn't delete the session"), body: remoteHint + String(e?.message ?? e), level: "error" });
     } finally {
       this.deleting = false;
       cx.notify();
@@ -761,7 +818,7 @@ export default class Sessions extends View {
         String(s.t ?? "").toLowerCase().includes(q)
         || String(s.cwd ?? "").toLowerCase().includes(q)
         || String(s.id ?? "").toLowerCase().includes(q)
-        || (SOURCES[s.src]?.label ?? "").toLowerCase().includes(q)
+        || srcLabel(s.src).toLowerCase().includes(q)
       ));
     }
     return items;
@@ -786,12 +843,12 @@ export default class Sessions extends View {
     const askingDel = !this.manage && this.confirmOne === key;
     const canDel = s.src === "opencode" ? Boolean(s.file && s.id) : (s.files ?? (s.file ? [s.file] : [])).some(safeSessionFile);
     const tip = this.manage
-      ? `${s.cwd || "?"}\n点击选中或取消选中`
+      ? `${s.cwd || "?"}\n${pick("点击选中或取消选中", "click to select or deselect")}`
       : up
-        ? `${s.cwd || "?"}\n这个会话正开着：点一下切过去，不重新加载`
+        ? `${s.cwd || "?"}\n${pick("这个会话正开着：点一下切过去，不重新加载", "this session is already open: click to switch to it without reloading")}`
         : src.bin
-          ? `${s.cwd || "?"}\n点一下：${this.cmdString(s)}`
-          : `${s.cwd || "?"}\n本地归档记录（点一下复制 ID）`;
+          ? `${s.cwd || "?"}\n${pick("点一下", "click to run")}: ${this.cmdString(s)}`
+          : `${s.cwd || "?"}\n${pick("本地归档记录（点一下复制 ID）", "local archive entry (click to copy its id)")}`;
     return h_flex()
       .id(`ses-${i}`)
       .h(46)
@@ -821,7 +878,7 @@ export default class Sessions extends View {
         .bg(checked ? t.accent : t.background)
         .when(checked, (b) => b.child(svg("mods/inkstone-chrome/check.svg").size(10).text_color(t.accent_foreground)))))
       .child(div().w(44).flex_none().flex().items_center().justify_center().rounded(5).h(18).bg(t.raised)
-        .child(div().text_size(9).text_color(this.badgeColor(s.src, t)).child(src.label)))
+        .child(div().text_size(9).text_color(this.badgeColor(s.src, t)).child(srcLabel(s.src))))
       .child(v_flex()
         .flex_1()
         .min_w(0)
@@ -837,7 +894,7 @@ export default class Sessions extends View {
         .bg(t.raised)
         .text_size(9)
         .text_color(t.done)
-        .child("已打开")))
+        .child(pick("已打开", "Open"))))
       .when(askingDel, (el) => el
         .child(div()
           .id(`ses-del-ok-${i}`)
@@ -853,12 +910,12 @@ export default class Sessions extends View {
           .font_semibold()
           .text_color(t.accent_foreground ?? "#ffffff")
           .cursor_pointer()
-          .tooltip(up ? "该会话正运行中，确认仍删除本地记录？" : "确认永久删除该会话文件")
+          .tooltip(up ? pick("该会话正运行中，确认仍删除本地记录？", "This session is running; delete its local record anyway?") : pick("确认永久删除该会话文件", "Permanently delete this session file"))
           .on_click((_e, cx) => {
             cx.stop_propagation();
             this.deleteItems([s], cx);
           })
-          .child(this.deleting ? "删除中" : "确认删"))
+          .child(this.deleting ? pick("删除中", "Deleting") : pick("确认删", "Delete it")))
         .child(div()
           .id(`ses-del-no-${i}`)
           .h(20)
@@ -878,7 +935,7 @@ export default class Sessions extends View {
             this.confirmOne = null;
             cx.notify();
           })
-          .child("取消")))
+          .child(pick("取消", "Cancel"))))
       .when(!this.manage && !askingDel, (el) => el
         .child(div()
           .id(`ses-cp-${i}`)
@@ -892,14 +949,14 @@ export default class Sessions extends View {
           .text_size(10)
           .text_color(copied ? t.done : t.dim)
           .cursor_pointer()
-          .tooltip(copied ? "已复制" : src.bin ? `复制恢复命令：${this.cmdString(s)}` : "复制 ID")
-          .accessibility_label("复制恢复命令")
+          .tooltip(copied ? pick("已复制", "Copied") : src.bin ? `复制恢复命令：${this.cmdString(s)}` : pick("复制 ID", "Copy the ID"))
+          .accessibility_label(pick("复制恢复命令", "Copy the resume command"))
           .hover((h) => h.bg(t.raised).text_color(t.foreground))
           .on_click((_e, cx) => {
             cx.stop_propagation();
             this.copyCmd(s, cx);
           })
-          .child(copied ? "已复制" : "命令"))
+          .child(copied ? pick("已复制", "Copied") : pick("命令", "Command")))
         .when(canDel, (b) => b.child(div()
           .id(`ses-del-${i}`)
           .size(20)
@@ -909,8 +966,8 @@ export default class Sessions extends View {
           .justify_center()
           .rounded(4)
           .cursor_pointer()
-          .tooltip(up ? "删除会话记录（运行中）" : "删除会话")
-          .accessibility_label("删除会话")
+          .tooltip(up ? pick("删除会话记录（运行中）", "Delete the session record (running)") : pick("删除会话", "Delete the session"))
+          .accessibility_label(pick("删除会话", "Delete the session"))
           .hover((h) => h.bg(t.raised))
           .on_click((_e, cx) => {
             cx.stop_propagation();
@@ -925,7 +982,7 @@ export default class Sessions extends View {
     const on = this.activeMachine(sp);
     const here = this.activeFolder(sp);
     const key = `${on ?? ""}|${here}`;
-    if (!checking() && key !== this.scannedKey && !this.reloading) {
+    if (!checking() && key !== this.scannedKey) {
       this.activateKey(key, cx, true);
     }
     const scoped = this.scoped();
@@ -979,7 +1036,7 @@ export default class Sessions extends View {
         .border_b(1)
         .border_color(t.border)
         .child(svg("mods/inkstone-chrome/terminal.svg").size(13).flex_none().text_color(t.accent))
-        .child(div().text_size(12).font_semibold().child("会话"))
+        .child(div().text_size(12).font_semibold().child(pick("会话", "Sessions")))
         .child(div().text_size(11).text_color(t.dim).child(String(list.length)))
         .child(div().flex_1())
         .child(h_flex()
@@ -990,14 +1047,14 @@ export default class Sessions extends View {
           .text_size(11)
           .text_color(this.all ? t.muted : t.accent)
           .cursor_pointer()
-          .tooltip(this.all ? "现在显示全部会话，点一下只看当前目录" : "只看当前空间的目录，点一下显示全部")
-          .accessibility_label("切换会话范围")
+          .tooltip(this.all ? pick("现在显示全部会话，点一下只看当前目录", "Showing every session — click to narrow to this folder") : pick("只看当前空间的目录，点一下显示全部", "Only this space's folder — click to show everything"))
+          .accessibility_label(pick("切换会话范围", "Switch the session scope"))
           .hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => {
             this.all = !this.all;
             cx.notify();
           })
-          .child(this.all ? "全部" : "当前目录"))
+          .child(this.all ? pick("全部", "All") : pick("当前目录", "This folder")))
         .child(div()
           .id("ses-manage")
           .px(6)
@@ -1007,8 +1064,8 @@ export default class Sessions extends View {
           .when(this.manage, (el) => el.bg(t.selected))
           .text_color(this.manage ? t.foreground : t.dim)
           .cursor_pointer()
-          .tooltip(this.manage ? "退出批量删除模式" : "批量选择并删除会话")
-          .accessibility_label("批量管理会话")
+          .tooltip(this.manage ? pick("退出批量删除模式", "Leave batch delete") : pick("批量选择并删除会话", "Select and delete sessions in bulk"))
+          .accessibility_label(pick("批量管理会话", "Manage sessions in bulk"))
           .hover((s) => s.bg(this.manage ? t.selected : t.hover).text_color(t.foreground))
           .on_click((_e, cx) => {
             this.manage = !this.manage;
@@ -1017,7 +1074,7 @@ export default class Sessions extends View {
             if (!this.manage) this.selected.clear();
             cx.notify();
           })
-          .child(this.manage ? "完成" : "批量"))
+          .child(this.manage ? pick("完成", "Done") : pick("批量", "Batch")))
         .child(div()
           .id("ses-reload")
           .px(6)
@@ -1026,11 +1083,11 @@ export default class Sessions extends View {
           .text_size(11)
           .text_color(t.dim)
           .cursor_pointer()
-          .tooltip("重新扫描")
-          .accessibility_label("重新扫描会话")
+          .tooltip(pick("重新扫描", "Rescan"))
+          .accessibility_label(pick("重新扫描会话", "Rescan sessions"))
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click((_e, cx) => this.reload(cx, { force: true }))
-          .child(this.reloading ? "更新中" : "刷新")))
+          .child(this.reloading ? pick("更新中", "Updating") : pick("刷新", "Refresh"))))
       .child(h_flex()
         .h(32)
         .flex_none()
@@ -1058,7 +1115,7 @@ export default class Sessions extends View {
           .text_size(11)
           .text_color(t.dim)
           .cursor_pointer()
-          .tooltip("清空搜索")
+          .tooltip(pick("清空搜索", "Clear the search"))
           .hover((h) => h.bg(t.hover).text_color(t.foreground))
           .on_click((_e, cx) => {
             this.query = "";
@@ -1072,18 +1129,18 @@ export default class Sessions extends View {
         .pt(6)
         .gap(4)
         .flex_wrap()
-        .child(this.pill(t, "all", `全部 ${scoped.length}`, cx))
-        .children(activeSources.map((k) => this.pill(t, k, `${SOURCES[k].label} ${counts[k]}`, cx)))))
+        .child(this.pill(t, "all", pick(`全部 ${scoped.length}`, `All ${scoped.length}`), cx))
+        .children(activeSources.map((k) => this.pill(t, k, `${srcLabel(k)} ${counts[k]}`, cx)))))
       .when(scoped.length > 0 || this.timeRange !== "all", (el) => el.child(h_flex()
         .flex_none()
         .px(8)
         .pt(5)
         .gap(4)
         .flex_wrap()
-        .child(this.timePill(t, "all", "不限时间", cx))
-        .child(this.timePill(t, "7d", `7天内 ${tCounts["7d"]}`, cx))
-        .child(this.timePill(t, "30d", `30天内 ${tCounts["30d"]}`, cx))
-        .child(this.timePill(t, "gt30d", `30天外 ${tCounts["gt30d"]}`, cx))))
+        .child(this.timePill(t, "all", pick("不限时间", "Any time"), cx))
+        .child(this.timePill(t, "7d", pick(`7天内 ${tCounts["7d"]}`, `7 days ${tCounts["7d"]}`), cx))
+        .child(this.timePill(t, "30d", pick(`30天内 ${tCounts["30d"]}`, `30 days ${tCounts["30d"]}`), cx))
+        .child(this.timePill(t, "gt30d", pick(`30天外 ${tCounts["gt30d"]}`, `Older ${tCounts["gt30d"]}`), cx))))
       .when(this.manage, (el) => {
         const allSelected = list.length > 0 && list.every((s) => this.selected.has(`${s.src}:${s.id}`));
         const selItems = this.list.filter((s) => this.selected.has(`${s.src}:${s.id}`));
@@ -1118,8 +1175,8 @@ export default class Sessions extends View {
               this.confirmBatch = false;
               cx.notify();
             })
-            .child(allSelected ? "取消全选" : "全选"))
-          .child(div().text_size(11).text_color(t.dim).child(`已选 ${nSel}`))
+            .child(allSelected ? pick("取消全选", "Deselect all") : pick("全选", "Select all")))
+          .child(div().text_size(11).text_color(t.dim).child(pick(`已选 ${nSel}`, `${nSel} selected`)))
           .child(div().flex_1())
           .when(this.confirmBatch && nSel > 0, (b) => b
             .child(div()
@@ -1135,7 +1192,7 @@ export default class Sessions extends View {
               .text_color(t.accent_foreground ?? "#ffffff")
               .cursor_pointer()
               .on_click((_e, cx) => this.deleteItems(selItems, cx))
-              .child(this.deleting ? "删除中…" : `确认删除 ${nSel} 条`))
+              .child(this.deleting ? pick("删除中…", "Deleting…") : `确认删除 ${nSel} 条`))
             .child(div()
               .id("ses-batch-no")
               .h(20)
@@ -1151,7 +1208,7 @@ export default class Sessions extends View {
                 this.confirmBatch = false;
                 cx.notify();
               })
-              .child("取消")))
+              .child(pick("取消", "Cancel"))))
           .when(!this.confirmBatch, (b) => b.child(div()
             .id("ses-batch-del")
             .h(20)
@@ -1167,8 +1224,13 @@ export default class Sessions extends View {
               this.confirmBatch = true;
               cx.notify();
             }))
-            .child(nSel > 0 ? `删除 (${nSel})` : "删除"))));
+            .child(nSel > 0 ? `删除 (${nSel})` : pick("删除", "Delete")))));
       })
+      .when(this.failed, (el) => el.child(v_flex().px(10).py(6).gap(4).flex_none()
+        .child(div().text_size(12).text_color(t.blocked).child(this.list.length
+          ? pick("刷新会话失败，仍显示上次结果。", "Couldn't refresh sessions; still showing the last result.")
+          : pick("扫描会话失败，点右上角「刷新」重试。", "Couldn't scan sessions; use “Refresh” at the top right to retry.")))
+        .when(Boolean(this.failReason), (box) => box.child(div().text_size(11).text_color(t.dim).child(this.failReason)))))
       .child(v_flex()
         .flex_1()
         .min_h(0)
@@ -1178,7 +1240,7 @@ export default class Sessions extends View {
         .overflow_y_scrollbar()
         .children(list.length
           ? list.map((s, i) => this.row(s, i, t, cx))
-          : [this.emptyState(t, hasFilter, scoped.length, cx)]))
+          : this.failed ? [] : [this.emptyState(t, hasFilter, scoped.length, cx)]))
       .child(h_flex()
         .h(24)
         .flex_none()
@@ -1190,9 +1252,9 @@ export default class Sessions extends View {
         .text_size(10)
         .text_color(t.dim)
         .child(div().truncate().child(activeSources.length
-          ? `来源：${activeSources.map((k) => SOURCES[k].label).join(" · ")}`
-          : "OMP / Codex / Claude / Pi / 本地"))
-        .child(div().flex_none().child(this.manage ? "点行勾选 · Esc 退出" : "点行恢复 · Esc 清空搜索")));
+          ? `${pick("来源", "Sources")}: ${activeSources.map(srcLabel).join(" · ")}`
+          : pick("OMP / Codex / Claude / Pi / 本地", "OMP / Codex / Claude / Pi / Local")))
+        .child(div().flex_none().child(this.manage ? pick("点行勾选 · Esc 退出", "Click a row to tick it · Esc leaves") : pick("点行恢复 · Esc 清空搜索", "Click a row to resume · Esc clears the search"))));
   }
 
   pill(t, id, label, cx) {
@@ -1241,17 +1303,12 @@ export default class Sessions extends View {
   }
 
   emptyState(t, hasFilter, scopedCount, cx) {
-    if (this.failed) {
-      return v_flex().p(10).gap(4)
-        .child(div().text_size(12).text_color(t.blocked).child("扫描会话失败，点右上角「刷新」重试。"))
-        .when(Boolean(this.failReason), (el) => el.child(div().text_size(11).text_color(t.dim).child(this.failReason)));
-    }
     if (this.loading) {
-      return div().p(10).text_size(12).text_color(t.dim).child("正在扫描会话…");
+      return div().p(10).text_size(12).text_color(t.dim).child(pick("正在扫描会话…", "Scanning sessions…"));
     }
     if (hasFilter) {
       return v_flex().p(10).gap(8).items_start()
-        .child(div().text_size(12).text_color(t.dim).child("没有符合条件的会话。"))
+        .child(div().text_size(12).text_color(t.dim).child(pick("没有符合条件的会话。", "No sessions match.")))
         .child(div()
           .id("ses-reset-filter")
           .px(8)
@@ -1269,11 +1326,11 @@ export default class Sessions extends View {
             this.input.set_value("");
             cx.notify();
           })
-          .child("清除筛选"));
+          .child(pick("清除筛选", "Clear the filters")));
     }
     if (!this.all && scopedCount === 0 && this.list.length > 0) {
       return v_flex().p(10).gap(8).items_start()
-        .child(div().text_size(12).text_color(t.dim).child("当前空间目录还没有会话记录。"))
+        .child(div().text_size(12).text_color(t.dim).child(pick("当前空间目录还没有会话记录。", "This space's folder has no sessions yet.")))
         .child(div()
           .id("ses-show-all")
           .px(8)
@@ -1288,8 +1345,8 @@ export default class Sessions extends View {
             this.all = true;
             cx.notify();
           })
-          .child(`查看全部目录 (${this.list.length})`));
+          .child(pick(`查看全部目录 (${this.list.length})`, `Show all folders (${this.list.length})`)));
     }
-    return div().p(10).text_size(12).text_color(t.dim).child("还没有找到会话记录。");
+    return div().p(10).text_size(12).text_color(t.dim).child(pick("还没有找到会话记录。", "No sessions found yet."));
   }
 }

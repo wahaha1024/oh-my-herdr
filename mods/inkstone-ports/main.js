@@ -7,7 +7,11 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { exec, run, props, closeOverlay, openOverlay, theme, window } from "herdr";
+import { exec, run, props, closeOverlay, openOverlay, theme, window, shared } from "herdr";
+
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
 
 const plat = () => window()?.platform ?? "windows";
 const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
@@ -15,7 +19,9 @@ const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FO
 const EDGE_PRESETS = [
   { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
   { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#e9e2d4", muted: "#665f53", dir: "ink-xuanzhi" }, // xuanzhi-dimmed
   { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+  { bg: "#19181e", muted: "#8f8996", dir: "ink-xuanmo" }, // xuanmo-dimmed
 ];
 let edgeCacheKey = "";
 let edgeCacheDir = null;
@@ -25,7 +31,8 @@ function artEdgeDir(t) {
   const key = `${bg}|${muted}`;
   if (key !== edgeCacheKey) {
     edgeCacheKey = key;
-    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    const p = EDGE_PRESETS.find((x) => x.bg === bg && x.muted === muted)
+      ?? EDGE_PRESETS.find((x) => x.bg === bg);
     edgeCacheDir = p ? p.dir : null;
   }
   return edgeCacheDir;
@@ -76,13 +83,13 @@ function parseLsof(text) {
   const seen = new Set();
   const out = [];
   let pid = 0;
-  let name = "系统";
+  let name = pick("系统", "System");
   for (const line of String(text ?? "").split(/\r?\n/)) {
     if (!line) continue;
     const tag = line[0];
     const val = line.slice(1);
-    if (tag === "p") { pid = Number(val) || 0; name = "系统"; }
-    else if (tag === "c") name = val || "系统";
+    if (tag === "p") { pid = Number(val) || 0; name = pick("系统", "System"); }
+    else if (tag === "c") name = val || pick("系统", "System");
     else if (tag === "n") {
       const idx = val.lastIndexOf(":");
       if (idx <= 0) continue;
@@ -111,7 +118,7 @@ function parseSs(text) {
     seen.add(port);
     const addr = local.slice(0, idx).replace(/^\[|\]$/g, "") || "*";
     const pm = /"([^"]+)",pid=(\d+)/.exec(line);
-    out.push({ port, pid: pm ? Number(pm[2]) : 0, name: pm ? pm[1] : "系统", addr });
+    out.push({ port, pid: pm ? Number(pm[2]) : 0, name: pm ? pm[1] : pick("系统", "System"), addr });
   }
   return out.sort((a, b) => a.port - b.port);
 }
@@ -122,6 +129,7 @@ export default class Ports extends View {
     this.list = [];
     this.failed = false;
     this.loaded = false;
+    this.stopVersion = 0;
     this.refresh(cx);
     cx.timer.every(15000, (cx) => this.refresh(cx));
   }
@@ -130,13 +138,24 @@ export default class Ports extends View {
     if (this.busy) return;
     this.busy = true;
     const p = plat();
-    const job = p === "windows"
-      ? exec("powershell", POWERSHELL, { timeout: 8000 })
-      : p === "macos"
-        ? exec("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"], { timeout: 8000 })
-        : exec("sh", ["-c", "if command -v lsof >/dev/null 2>&1; then lsof -nP -iTCP -sTCP:LISTEN -F pcn; else echo __SS__; ss -ltnp 2>/dev/null; fi"], { timeout: 8000 });
+    const version = this.stopVersion;
     cx.spawn(async (cx) => {
-      const r = await job.catch((e) => ({ code: -1, stdout: "", stderr: String(e) }));
+      const timeout = { timeout: 8000 };
+      let r = p === "windows"
+        ? await exec("powershell", POWERSHELL, timeout).catch(() => null)
+        : await exec("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"], timeout).catch(() => null);
+      const emptyLsof = p !== "windows" && r?.code === 1 && !r.stdout.trim() && !r.stderr.trim();
+      let fromSs = false;
+      // Linux 上 lsof 可能没有安装，或看不到其他用户的监听套接字。
+      if (p === "linux" && r?.code !== 0) {
+        const ss = await exec("ss", ["-ltnp"], timeout).catch(() => null);
+        if (ss?.code === 0) { r = ss; fromSs = true; }
+      }
+      if (version !== this.stopVersion) {
+        this.busy = false;
+        this.refresh(cx);
+        return;
+      }
       let next = [];
       const out = (r?.stdout ?? "").trim();
       if (r?.code === 0 && out) {
@@ -144,23 +163,21 @@ export default class Ports extends View {
           try {
             const parsed = JSON.parse(out);
             next = (Array.isArray(parsed) ? parsed : [parsed])
-              .map((x) => ({ port: Number(x.port), pid: Number(x.pid), name: x.name || "系统", addr: x.addr || "*" }))
+              .map((x) => ({ port: Number(x.port), pid: Number(x.pid), name: x.name || pick("系统", "System"), addr: x.addr || "*" }))
               .filter((x) => x.port > 0)
               .sort((a, b) => a.port - b.port);
           } catch (e) {
             console.warn(`inkstone-ports: JSON ${e}`);
           }
-        } else if (out.startsWith("__SS__")) {
-          next = parseSs(out.slice(6).trim());
+        } else if (fromSs) {
+          next = parseSs(out);
         } else {
           next = parseLsof(out);
         }
       }
       this.loaded = true;
-      // macOS 上没有任何进程监听时 lsof 返回退出码 1 且 stdout 为空，不算探测失败。
-      const emptyLsof = p === "macos" && r?.code === 1 && !out && !(r?.stderr ?? "").trim();
-      if (next.length || emptyLsof || r?.code === 0) this.failed = false;
-      else if (r?.code !== 0) this.failed = true;
+      // lsof 在没有监听项时返回 1 且无输出；ss 用 0 表示有效空列表。
+      this.failed = r?.code !== 0 && !emptyLsof;
       this.list = next;
       this.busy = false;
       cx.notify();
@@ -175,18 +192,46 @@ export default class Ports extends View {
     else exec("xdg-open", [url]).catch(() => {});
   }
 
-  stop(id, port, cx) {
-    if (!id) return;
-    const p = plat();
-    const job = p === "windows"
-      ? exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${id} -Force -ErrorAction SilentlyContinue`])
-      : exec("kill", ["-9", String(id)]);
-    job
-      .catch(() => {})
-      .then(() => {
-        this.list = this.list.filter((x) => !(x.pid === id && x.port === port));
-        cx.notify();
-      });
+  async stop(cx) {
+    const target = this.stopTarget;
+    if (!target || this.stopping) return;
+    this.stopTarget = null;
+    this.stopError = "";
+    const { pid, port, name } = target;
+    if (!this.list.some((x) => x.pid === pid && x.port === port && x.name === name)) {
+      this.stopError = pick("端口列表已变化，请重新选择。", "The port list changed, pick again.");
+      cx.notify();
+      return;
+    }
+    this.stopping = true;
+    cx.notify();
+    try {
+      const opts = { timeout: 5000 };
+      const r = plat() === "windows"
+        ? await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction Stop`], opts)
+        : await exec("kill", ["-9", String(pid)], opts);
+      if (r.code !== 0) throw new Error(r.stderr.trim() || pick(`退出码 ${r.code}`, `exit ${r.code}`));
+      this.stopVersion++;
+      this.list = this.list.filter((x) => x.pid !== pid);
+    } catch (e) {
+      this.stopError = pick(`结束 ${name}（PID ${pid}，端口 ${port}）失败：${e?.message ?? e}`, `Could not stop ${name} (PID ${pid}, port ${port}): ${e?.message ?? e}`);
+    } finally {
+      this.stopping = false;
+      cx.notify();
+    }
+  }
+
+  stopPrompt(t) {
+    const target = this.stopTarget;
+    if (!target && !this.stopError && !this.stopping) return div();
+    return v_flex().flex_none().px(12).py(6).gap(4).bg(t.raised)
+      .child(div().text_size(12).text_color(t.blocked)
+        .child(target ? pick(`强制结束 ${target.name}（PID ${target.pid}，端口 ${target.port}）？`, `Force quit ${target.name} (PID ${target.pid}, port ${target.port})?`) : this.stopError || pick("正在结束进程…", "Ending the process…")))
+      .when(Boolean(target), (el) => el.child(h_flex().gap(8)
+        .child(div().id("ports-stop-cancel").h(28).px(8).flex().items_center().rounded(5).bg(t.hover).cursor_pointer()
+          .on_click((_e, c) => { this.stopTarget = null; c.notify(); }).child(pick("取消", "Cancel")))
+        .child(div().id("ports-stop-confirm").h(28).px(8).flex().items_center().rounded(5).bg(t.blocked).text_color(t.solid_foreground).cursor_pointer()
+          .on_click((_e, c) => this.stop(c)).child(pick("确认结束", "End it")))));
   }
 
   // 状态栏形态：一个图标 + 端口数，点开清单。读不到时显示「!」而不是 0，
@@ -194,7 +239,7 @@ export default class Ports extends View {
   compact(t) {
     const n = this.list.length;
     const text = n ? String(n) : this.failed ? "!" : "—";
-    const tip = n ? `${n} 个端口在监听` : this.failed ? "读取端口失败 · 点开查看" : "没有端口在监听";
+    const tip = n ? pick(`${n} 个端口在监听`, `${n} ports listening`) : this.failed ? pick("读取端口失败 · 点开查看", "Couldn't read ports · click to see") : pick("没有端口在监听", "No ports are listening");
     return h_flex()
       .id("ports-compact")
       .size_full()
@@ -209,7 +254,7 @@ export default class Ports extends View {
       .accessibility_label(tip)
       .hover((s) => s.bg(t.hover))
       .on_click(() => openOverlay({ mod: "inkstone-ports", kind: "dialog", frame: "none", width: 404, height: 484, props: { framed: true } }))
-      .child(svg("mods/workspace-chrome/server.svg").size(12).flex_none().text_color(n ? t.accent : this.failed ? t.blocked : t.dim))
+      .child(svg("mods/inkstone-chrome/server.svg").size(12).flex_none().text_color(n ? t.accent : this.failed ? t.blocked : t.dim))
       .child(div().w(20).flex_none().text_size(11).text_color(n ? t.muted : this.failed ? t.blocked : t.dim).child(text));
   }
 
@@ -229,28 +274,33 @@ export default class Ports extends View {
       .when(web, (el) => el.child(div()
         .id(`port-open-${x.port}`)
         .px(8)
-        .py(3)
+        .h(28).flex_none().flex().items_center()
         .rounded(6)
         .bg(t.raised)
         .text_size(11)
         .text_color(t.muted)
         .cursor_pointer()
         .hover((s) => s.text_color(t.foreground))
-        .tooltip("在浏览器中打开")
+        .tooltip(pick("在浏览器中打开", "Open in the browser"))
         .on_click(() => this.open(x.port))
-        .child("打开")))
-      .child(div()
-        .id(`port-stop-${x.port}`)
+        .child(pick("打开", "Open"))))
+      .when(Number.isSafeInteger(x.pid) && x.pid > 0, (el) => el.child(div()
+        .id(`port-stop-${x.port}-${x.pid}`)
         .px(8)
-        .py(3)
+        .h(28).flex_none().flex().items_center()
         .rounded(6)
         .text_size(11)
         .text_color(t.dim)
         .cursor_pointer()
         .hover((s) => s.bg(t.blocked).text_color(t.solid_foreground))
-        .tooltip("停止服务：结束该进程")
-        .on_click(() => this.stop(x.pid, x.port, cx))
-        .child("停止"));
+        .tooltip(pick("结束监听进程", "End the listening process"))
+        .on_click((_e, c) => {
+          if (this.stopping) return;
+          this.stopTarget = x;
+          this.stopError = "";
+          c.notify();
+        })
+        .child(pick("结束", "End"))));
   }
 
   popup(t, cx) {
@@ -266,9 +316,9 @@ export default class Ports extends View {
         .items_center()
         .border_b(1)
         .border_color(t.border)
-        .child(svg("mods/workspace-chrome/server.svg").size(14).flex_none().text_color(t.accent))
-        .child(div().flex_1().text_size(13).font_semibold().child("活跃端口"))
-        .child(div().text_size(11).text_color(t.dim).child(this.list.length ? `${this.list.length} 个在监听` : "无"))
+        .child(svg("mods/inkstone-chrome/server.svg").size(14).flex_none().text_color(t.accent))
+        .child(div().flex_1().text_size(13).font_semibold().child(pick("活跃端口", "Open ports")))
+        .child(div().text_size(11).text_color(t.dim).child(this.list.length ? pick(`${this.list.length} 个在监听`, `${this.list.length} listening`) : pick("无", "None")))
         .child(div()
           .id("ports-close")
           .px(6)
@@ -280,6 +330,7 @@ export default class Ports extends View {
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => closeOverlay(props()?.overlay))
           .child("Esc")))
+      .child(this.stopPrompt(t))
       .child(v_flex()
         .flex_1()
         .min_h(0)
@@ -291,7 +342,7 @@ export default class Ports extends View {
         .track_scroll(this.scroll)
         .children(this.list.length
           ? this.list.map((x) => this.row(x, t, cx))
-          : [div().px(10).py(10).text_size(12).text_color(t.dim).child(this.failed ? (plat() === "windows" ? "读取端口失败：需要 PowerShell 的 Get-NetTCPConnection。" : "读取端口失败：需要 lsof 或 ss 可用。") : this.loaded ? "没有端口在监听。" : "正在扫描端口…")]));
+          : [div().px(10).py(10).text_size(12).text_color(t.dim).child(this.failed ? (plat() === "windows" ? pick("读取端口失败：需要 PowerShell 的 Get-NetTCPConnection。", "Couldn't read ports: needs PowerShell's Get-NetTCPConnection.") : pick("读取端口失败：需要 lsof 或 ss 可用。", "Couldn't read ports: needs lsof or ss.")) : this.loaded ? pick("没有端口在监听。", "No ports are listening.") : pick("正在扫描端口…", "Scanning ports…"))]));
     return props()?.framed ? paperCard(this, t, inner) : inner;
   }
 

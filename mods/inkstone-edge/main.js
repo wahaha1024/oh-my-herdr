@@ -10,13 +10,16 @@ import { props, theme } from "herdr";
 const T = 12, LONG = 3206, TALL = 1794, CORNER = 46, FOOT = 40;
 
 // 对应内置亮/暗主题画边线：ink-qingci / ink-xuanzhi / ink-xuanmo 由同一套切片替换色值，
-// 不引入任何新颜色；仅当当前主题的背景与次要色同时匹配时启用，其余主题保持留空。
-// 必须比对当前主题自身（theme()）而不是按 background 去 themes() 里找同名项：
+// 不引入任何新颜色。背景命中即启用：次要色只用于同背景多档时精确优先，主题作者微调 muted
+// 不再让整条边消失；已安装的 *-dimmed 变体各自登记一行，复用同一档切片。
+// 其余主题保持留空。必须比对当前主题自身（theme()）而不是按 background 去 themes() 里找同名项：
 // 机器上若残留旧主题（如 inkstone-qingci 与 qingci 背景相同），find 会取到错误的 muted。
 const PRESETS = [
   { bg: "#e8f0ec", muted: "#5f6b67", dir: "ink-qingci" },
   { bg: "#f7f4ed", muted: "#746b5e", dir: "ink-xuanzhi" },
+  { bg: "#e9e2d4", muted: "#665f53", dir: "ink-xuanzhi" }, // xuanzhi-dimmed
   { bg: "#14131a", muted: "#8b8597", dir: "ink-xuanmo" },
+  { bg: "#19181e", muted: "#8f8996", dir: "ink-xuanmo" }, // xuanmo-dimmed
 ];
 let cacheKey = "";
 let cacheDir = null;
@@ -26,7 +29,8 @@ function artDir(t) {
   const key = `${bg}|${muted}`;
   if (key !== cacheKey) {
     cacheKey = key;
-    const p = PRESETS.find((x) => x.bg === bg && x.muted === muted);
+    const p = PRESETS.find((x) => x.bg === bg && x.muted === muted)
+      ?? PRESETS.find((x) => x.bg === bg);
     cacheDir = p ? p.dir : null;
   }
   return cacheDir;
