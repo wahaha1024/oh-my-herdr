@@ -23,7 +23,7 @@ async function checkout(folder, on) {
   return c === `${t}/.git` ? "main" : "linked";
 }
 
-function items(p, git) {
+function items(p, git, more) {
   p = p ?? {};
   const tg = p.target ?? {};
   switch (p.tab) {
@@ -53,6 +53,48 @@ function items(p, git) {
           : []),
         ...(parent ? [[`交回 ${parent.name || parent.address}`, "terminal.park", { terminal: term.address }, true]] : []),
         ...(inTab ? [["关闭窗格", "pane.close", { pane: tg.pane }, true]] : []),
+      ];
+    }
+    case "agent": {
+      // 会话行右键：目标是这个智能体所在的标签；开关类都走宿主命令，不碰 agent 的输入。
+      // 二级视图：斜杠命令会原样打进会话并回车，所以收在这一层里，多点一次才执行。
+      if (more) {
+        return [
+          ["← 返回", "inkstone.back", {}, false],
+          ["/fork 分叉会话", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/fork" }, true],
+          ["/compact 压缩上下文", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/compact" }, false],
+          ["/context 上下文占用", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/context" }, false],
+          ["/cost 花费", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/cost" }, false],
+          ["/status 状态", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/status" }, false],
+          ["/tree 查看会话树", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/tree" }, false],
+          ["/export 导出会话", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/export" }, false],
+          ["/rewind 回退", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/rewind" }, true],
+          ["/clear 清空会话", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/clear" }, false],
+        ];
+      }
+      const working = tg.status === "working";
+      const folder = panes().find((p) => p.pane === tg.pane)?.cwd
+        ?? spaces().find((s) => s.id === tg.space)?.folder
+        ?? null;
+      return [
+        ["重命名会话", "tab.rename", { id: tg.tab }, false],
+        [tg.pinned ? "取消置顶" : "置顶会话", "terminal.pin", { terminal: tg.terminal, pinned: !tg.pinned }, false],
+        ["暂存会话", "tab.settle", { id: tg.tab }, true],
+        ["前移", "tab.move", { id: tg.tab, by: "-" }, false],
+        ["后移", "tab.move", { id: tg.tab, by: "+" }, false],
+        ["同空间新标签", "tab.new", { space: tg.space }, false],
+        ["左右分屏", "pane.split", { pane: tg.pane, direction: "right" }, false],
+        ["向下分屏", "pane.split", { pane: tg.pane, direction: "down" }, false],
+        ["最大化 / 还原", "pane.zoom", { pane: tg.pane }, false],
+        ["快速窥视", "terminal.peek", { terminal: tg.terminal }, false],
+        ...(folder ? [["打开所在目录", "inkstone.open", { folder }, false]] : []),
+        // 会改变 agent 行为的两条单独放：跑着时只给「中断」，停下了才给「压缩」。
+        working
+          ? ["中断当前回合", "inkstone.hc", { hc: "interrupt", terminal: tg.terminal }, true]
+          : ["压缩上下文（/compact）", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/compact" }, true],
+        ["更多命令…", "inkstone.more", {}, false],
+        ["复制终端地址", "inkstone.copy", { text: tg.terminal ?? "" }, true],
+        ["关闭会话", "tab.close", { id: tg.tab }, false],
       ];
     }
     case "tab":
@@ -120,6 +162,12 @@ function menuIcon(command) {
     : command === "pane.split" ? "panel-right"
     : command === "pane.zoom" ? "square"
     : command === "terminal.right_click" ? "square-pen"
+    : command === "terminal.pin" ? "pin"
+    : command === "terminal.peek" ? "sidebar"
+    : command === "inkstone.hc" ? "square"
+    : command === "inkstone.more" ? "chevron-right"
+    : command === "inkstone.back" ? "chevron-left"
+    : command === "tab.move" ? "chevron-right"
     : command === "terminal.park" ? "chevron-left"
     : command === "tab.settle" || command === "worktree" ? "archive"
     : command === "inkstone.space" ? "folder-plus"
@@ -145,6 +193,7 @@ function shortcut(name, args) {
 export default class Menu extends View {
   init(_props, cx) {
     this.at = 0;
+    this.more = false; // 会话菜单的二级视图（斜杠命令）
     this.git = null;
     this.handle = cx.focus_handle();
     this.handle.focus();
@@ -159,8 +208,11 @@ export default class Menu extends View {
   }
 
   choose(i, cx) {
-    const it = items(props(), this.git)[i];
+    const it = items(props(), this.git, this.more)[i];
     if (!it) return;
+    // 二级视图只是换一份列表，不关菜单。
+    if (it[1] === "inkstone.more") { this.more = true; cx.notify(); return; }
+    if (it[1] === "inkstone.back") { this.more = false; cx.notify(); return; }
     // 复制 / 粘贴跟随「焦点终端」，而菜单自己握着焦点：先把焦点交回终端并执行，
     // 再关菜单。顺序反过来时菜单一关焦点就落到别处，粘贴会打空。
     // 取不到右键目标时不猜焦点：宁可什么都不做，也别把剪贴板打进别的窗格。
@@ -176,6 +228,12 @@ export default class Menu extends View {
     closeOverlay(props()?.overlay);
     if (it[1] === "inkstone.space") {
       openOverlay({ mod: "inkstone-space", kind: "dialog", props: it[2] });
+      return;
+    }
+    // 走 hc 子进程：interrupt 按停止键，send 把斜杠命令打进会话再回车。
+    if (it[1] === "inkstone.hc") {
+      const { hc, terminal, text } = it[2];
+      if (terminal) exec("hc", [hc, terminal, ...(text ? [text] : [])], { timeout: 20000 }).catch(() => null);
       return;
     }
     if (it[1] === "inkstone.open") {
@@ -195,7 +253,7 @@ export default class Menu extends View {
 
   render(_cx) {
     const t = theme();
-    const list = items(props(), this.git);
+    const list = items(props(), this.git, this.more);
     return v_flex()
       .id("inkstone-menu")
       .track_focus(this.handle)

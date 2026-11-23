@@ -343,7 +343,9 @@ export default class Workbench extends View {
   }
 
   menu(target, tab = "space") {
-    openOverlay({ mod: "inkstone-menu", kind: "popup", width: 220, height: 300, props: { tab, target } });
+    // 高度按分支估：会话菜单项最多，给足避免被裁。
+    const height = tab === "agent" ? 480 : tab === "tab" ? 260 : 300;
+    openOverlay({ mod: "inkstone-menu", kind: "popup", width: 236, height, props: { tab, target } });
   }
 
   toggleFold(id, cx) {
@@ -531,6 +533,10 @@ export default class Workbench extends View {
       .tooltip(`${name}\n${detail}`)
       .accessibility_label(`${name} ${detail}`)
       .on_click(() => this.openAgent(a))
+      .when(Boolean(a.tab), (el) => el.on_mouse_down("right", () => this.menu({
+        tab: a.tab, space: a.space, terminal: a.address, name,
+        pane: a.pane, status: a.status, pinned: Boolean(a.pinned),
+      }, "agent")))
       .child(dot(t, a.status, 7))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(a.status === "blocked" ? t.blocked : t.foreground).child(name))
       .child(div().flex_none().text_size(10.5).text_color(t.dim).child(a.status === "blocked" ? "待处理" : a.status === "done" ? "已完成" : ""));
@@ -570,6 +576,7 @@ export default class Workbench extends View {
         if (!s.active) run("space.select", { id: s.id });
         if (!c.active) run("tab.select", { id: c.id });
       })
+      .on_mouse_down("right", () => this.menu({ id: c.id, space: s.id, name }, "tab"))
       .child(prog?.icon
         ? (prog.tint ? svg(prog.icon).size(13).flex_none().text_color(t.muted) : image(prog.icon).size(16).flex_none())
         : svg("mods/inkstone-chrome/terminal.svg").size(13).flex_none().text_color(t.muted))
