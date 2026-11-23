@@ -492,21 +492,23 @@ export default class InkstoneFiles extends View {
     if (this.above !== null) this.goTo(null, cx);
   }
 
-  navButton(id, label, tip, on, t, fn) {
+  // 导航按钮：与文件图标同宽高的方形点击区，图标沿用 lucide 线稿，着色跟着主题走。
+  navButton(id, file, tip, on, t, fn) {
     return div()
       .id(id)
-      .px(5)
-      .py(2)
-      .rounded(4)
+      .w(22)
+      .h(22)
+      .rounded(5)
+      .flex()
       .flex_none()
-      .text_size(12)
-      .text_color(on ? t.muted : t.dim)
+      .items_center()
+      .justify_center()
       .when(on, (el) => el
         .cursor_pointer()
         .tooltip(tip)
-        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => fn(cx)))
-      .child(label);
+      .child(svg(`mods/inkstone-files/${file}.svg`).size(13).text_color(on ? t.muted : t.dim).opacity(on ? 1 : 0.5));
   }
 
   mentionButton(path, idKey, t, cx) {
@@ -672,8 +674,8 @@ export default class InkstoneFiles extends View {
           .child("←")))
         .when(!this.file, (el) => el.child(image(fileIcon("file.txt", false, false, Boolean(settings().dark))).size(13).flex_none()))
         .when(!this.file, (el) => el
-          .child(this.navButton("files-up", "↑", "上级目录", Boolean(parentOf(this.root)), t, (cx) => this.up(cx)))
-          .child(this.navButton("files-home", "⌂", "回到项目目录", this.above !== null, t, (cx) => this.home(cx))))
+          .child(this.navButton("files-up", "nav-up", "上级目录", Boolean(parentOf(this.root)), t, (cx) => this.up(cx)))
+          .child(this.navButton("files-home", "nav-home", "回到项目目录", this.above !== null, t, (cx) => this.home(cx))))
         .when(Boolean(this.file), (el) => el.child(image(fileIcon(this.file, false, false, Boolean(settings().dark))).size(13).flex_none()))
         .child(div().text_size(12).font_semibold().child(this.file ? "预览" : "文件"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(11).text_color(t.dim)
