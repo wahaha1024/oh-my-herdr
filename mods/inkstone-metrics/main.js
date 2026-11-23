@@ -6,7 +6,11 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { exec, props, closeOverlay, theme, run, window } from "herdr";
+import { exec, props, closeOverlay, theme, run, window, shared } from "herdr";
+
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
 
 const SAMPLE = [
   "-NoProfile",
@@ -145,7 +149,7 @@ export default class Metrics extends View {
     this.stopTarget = null;
     this.stopError = "";
     if (!this.procs.some((p) => p.pid === target.pid && p.name === target.name)) {
-      this.stopError = "进程列表已变化，请重新选择。";
+      this.stopError = pick("进程列表已变化，请重新选择。", "The process list changed, pick again.");
       cx.notify();
       return;
     }
@@ -173,12 +177,12 @@ export default class Metrics extends View {
     if (!target && !this.stopError && !this.stopping) return div();
     return v_flex().flex_none().px(12).py(6).gap(4).bg(t.raised)
       .child(div().text_size(12).text_color(t.blocked)
-        .child(target ? `强制结束 ${target.name}（PID ${target.pid}）？` : this.stopError || "正在结束进程…"))
+        .child(target ? `强制结束 ${target.name}（PID ${target.pid}）？` : this.stopError || pick("正在结束进程…", "Ending the process…")))
       .when(Boolean(target), (el) => el.child(h_flex().gap(8)
         .child(div().id("metrics-stop-cancel").h(28).px(8).flex().items_center().rounded(5).bg(t.hover).cursor_pointer()
-          .on_click((_e, c) => { this.stopTarget = null; c.notify(); }).child("取消"))
+          .on_click((_e, c) => { this.stopTarget = null; c.notify(); }).child(pick("取消", "Cancel")))
         .child(div().id("metrics-stop-confirm").h(28).px(8).flex().items_center().rounded(5).bg(t.blocked).text_color(t.solid_foreground).cursor_pointer()
-          .on_click((_e, c) => this.stop(c)).child("确认结束"))));
+          .on_click((_e, c) => this.stop(c)).child(pick("确认结束", "End it")))));
   }
 
   tone(t) {
@@ -212,7 +216,7 @@ export default class Metrics extends View {
       .border_l(1)
       .border_color(t.border)
       .cursor_pointer()
-      .tooltip(this.total ? `内存 ${ff(this.used ?? 0)} / ${ff(this.total)} GB\n${cpu} · 点开看进程` : "读取系统资源…")
+      .tooltip(this.total ? `内存 ${ff(this.used ?? 0)} / ${ff(this.total)} GB\n${cpu} · 点开看进程` : pick("读取系统资源…", "Reading system resources…"))
       .accessibility_label(`系统资源 CPU ${cpu} 内存 ${mem}`)
       .hover((s) => s.bg(t.hover))
       .on_click(() => run("mod.open", { name: "inkstone-metrics" }))
@@ -239,7 +243,7 @@ export default class Metrics extends View {
         .border_b(1)
         .border_color(t.border)
         .child(svg("mods/workspace-chrome/monitor.svg").size(14).flex_none().text_color(t.accent))
-        .child(div().flex_1().text_size(13).font_semibold().child("系统资源"))
+        .child(div().flex_1().text_size(13).font_semibold().child(pick("系统资源", "System resources")))
         .child(div()
           .id("metrics-close")
           .px(6)
@@ -263,17 +267,17 @@ export default class Metrics extends View {
         .child(v_flex()
           .gap(5)
           .child(h_flex().items_center().justify_between()
-            .child(div().text_size(12).text_color(t.muted).child("CPU 占用"))
+            .child(div().text_size(12).text_color(t.muted).child(pick("CPU 占用", "CPU usage")))
             .child(div().text_size(12).text_color(this.tone(t)).child(this.cpu === null ? "—" : `${cpu}%`)))
           .child(this.bar(cpu, 100, this.tone(t), t, 6)))
         .child(v_flex()
           .gap(5)
           .child(h_flex().items_center().justify_between()
-            .child(div().text_size(12).text_color(t.muted).child("物理内存"))
+            .child(div().text_size(12).text_color(t.muted).child(pick("物理内存", "Memory")))
             .child(div().text_size(12).text_color(t.foreground).child(total ? `${ff(used)} / ${ff(total)} GB` : "—")))
           .child(this.bar(used, total || 1, used / (total || 1) >= 0.9 ? t.blocked : t.accent, t, 6)))
         .child(h_flex().items_center().justify_between()
-          .child(div().text_size(11).text_color(t.dim).child("占用最高的进程"))
+          .child(div().text_size(11).text_color(t.dim).child(pick("占用最高的进程", "Top processes")))
           .child(div()
             .id("metrics-refresh")
             .px(7)
@@ -284,7 +288,7 @@ export default class Metrics extends View {
             .cursor_pointer()
             .hover((s) => s.bg(t.hover).text_color(t.foreground))
             .on_click(() => this.loadProcs(cx))
-            .child("刷新")))
+            .child(pick("刷新", "Refresh"))))
         .child(v_flex()
           .gap(1)
           .children(this.procs.length
@@ -308,15 +312,15 @@ export default class Metrics extends View {
                 .text_color(t.dim)
                 .cursor_pointer()
                 .hover((s) => s.bg(t.blocked).text_color(t.solid_foreground))
-                .tooltip("结束该进程")
+                .tooltip(pick("结束该进程", "End this process"))
                 .on_click((_e, c) => {
                   if (this.stopping) return;
                   this.stopTarget = p;
                   this.stopError = "";
                   c.notify();
                 })
-                .child("结束")))
-            : [div().px(8).py(8).text_size(12).text_color(t.dim).child("读取中…")])));
+                .child(pick("结束", "End"))))
+            : [div().px(8).py(8).text_size(12).text_color(t.dim).child(pick("读取中…", "Reading…"))])));
   }
 
   render(cx) {

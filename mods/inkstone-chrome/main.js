@@ -4,6 +4,10 @@ import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, run, props, window, shared, setShared, updates, layout, openOverlay } from "herdr";
 
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
+
 function find(node, id) {
   if (node?.id === id) return node;
   for (const child of node?.children ?? []) {
@@ -84,14 +88,14 @@ export default class WorkspaceChrome extends View {
       const openPrefs = () => openOverlay({ mod: "inkstone-settings", kind: "dialog", frame: "none", width: 784, height: 544, props: { framed: true } });
       if (collapsed) {
         return v_flex().size_full().bg(t.chrome).border_t(1).border_color(t.border).py(1).gap(1).items_center().justify_center()
-          .child(item("prefs", "layers", "偏好", false, openPrefs, "OMH 布局偏好 · 主题 / 右键 / 状态栏 / 面板"))
-          .child(item("settings", "settings", "设置", false, () => run("app.settings"), "Herdr 全局设置 · 字体 / 缩放 / 快捷键", true))
-          .child(item("machine", "plus", "机器", true, () => run("mod.open", { name: "machine-add" }), "添加远程机器"));
+          .child(item("prefs", "layers", pick("偏好", "Preferences"), false, openPrefs, pick("OMH 布局偏好 · 主题 / 右键 / 状态栏 / 面板", "Layout preferences · themes, right-click, status bar, panels")))
+          .child(item("settings", "settings", pick("设置", "Settings"), false, () => run("app.settings"), pick("Herdr 全局设置 · 字体 / 缩放 / 快捷键", "Global settings · font, zoom, shortcuts"), true))
+          .child(item("machine", "plus", pick("机器", "Machines"), true, () => run("mod.open", { name: "machine-add" }), pick("添加远程机器", "Add a remote machine")));
       }
       return h_flex().size_full().pl(6).pr(4).pb(4).pt(2).gap(4).items_center()
-        .child(item("prefs", "layers", "偏好", false, openPrefs, "OMH 布局偏好 · 主题 / 右键 / 状态栏 / 面板"))
-        .child(item("settings", "settings", "设置", false, () => run("app.settings"), "Herdr 全局设置 · 字体 / 缩放 / 快捷键", true))
-        .child(item("machine", "plus", "机器", true, () => run("mod.open", { name: "machine-add" }), "添加远程机器"));
+        .child(item("prefs", "layers", pick("偏好", "Preferences"), false, openPrefs, pick("OMH 布局偏好 · 主题 / 右键 / 状态栏 / 面板", "Layout preferences · themes, right-click, status bar, panels")))
+        .child(item("settings", "settings", pick("设置", "Settings"), false, () => run("app.settings"), pick("Herdr 全局设置 · 字体 / 缩放 / 快捷键", "Global settings · font, zoom, shortcuts"), true))
+        .child(item("machine", "plus", pick("机器", "Machines"), true, () => run("mod.open", { name: "machine-add" }), pick("添加远程机器", "Add a remote machine")));
     }
     // 标题行：纸感下是整页的上边缘，rail / 其他主题下是纯色条。
     const head = h_flex().size_full().pl(paper ? 4 : collapsed ? 6 : 14).pr(10).gap(4).items_center().text_size(13)
@@ -107,10 +111,10 @@ export default class WorkspaceChrome extends View {
         .child(this.slip("search", svg("mods/inkstone-chrome/search.svg").size(15), () => run("mod.open", { name: "picker" }), "a"))
         .child(this.slip("sidebar-toggle", svg("mods/inkstone-chrome/sidebar.svg").size(15), toggleSidebar, "b")))
       .when(!collapsed && !paper, el => el
-        .child(this.button("search", svg("mods/inkstone-chrome/search.svg").size(15), () => run("mod.open", { name: "picker" }), "搜索")))
+        .child(this.button("search", svg("mods/inkstone-chrome/search.svg").size(15), () => run("mod.open", { name: "picker" }), pick("搜索", "Search"))))
       // On the macOS rail the traffic lights fill the row; the agents list's » unfolds it.
       .when(!collapsed && !paper && !(window()?.platform === "macos"), el => el
-        .child(this.button("sidebar-toggle", svg("mods/inkstone-chrome/sidebar.svg").size(15), toggleSidebar, "折叠侧栏")));
+        .child(this.button("sidebar-toggle", svg("mods/inkstone-chrome/sidebar.svg").size(15), toggleSidebar, pick("折叠侧栏", "Collapse sidebar"))));
     return collapsed ? head.bg(t.chrome) : head;
   }
 }

@@ -7,7 +7,11 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { panes, spaces, focused, exec, readTextFile, home, props, closeOverlay, openOverlay, theme, settings, window, checking } from "herdr";
+import { panes, spaces, focused, exec, readTextFile, home, props, closeOverlay, openOverlay, theme, settings, window, checking, shared } from "herdr";
+
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
 
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false", "-c", "core.quotePath=false"];
 const MAX_ROWS = 800;
@@ -285,13 +289,13 @@ async function liveDiff(repo, on, args, timeout) {
   if (head.code === 1) {
     // 无 HEAD 时以空树为基准，一次得到暂存区与工作区的净差异，不写 Git 对象。
     const format = await exec("git", [...READ, "rev-parse", "--show-object-format"], options);
-    if (format.code !== 0) throw new Error(format.stderr.trim() || "无法读取 Git 对象格式");
+    if (format.code !== 0) throw new Error(format.stderr.trim() || pick("无法读取 Git 对象格式", "Couldn't read the Git object format"));
     const name = format.stdout.trim();
     if (name === "sha1") base = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
     else if (name === "sha256") base = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321";
     else throw new Error(`不支持的 Git 对象格式：${name}`);
   } else if (head.code !== 0) {
-    throw new Error(head.stderr.trim() || "无法读取 Git HEAD");
+    throw new Error(head.stderr.trim() || pick("无法读取 Git HEAD", "Couldn't read Git HEAD"));
   }
   return exec("git", [...READ, "diff", ...args, base, "--"], options);
 }
@@ -367,8 +371,8 @@ export default class Review extends View {
       this.error = "";
     }
     if (!cwd) {
-      if (this.error !== "当前没有目录") {
-        this.error = "当前没有目录";
+      if (this.error !== pick("当前没有目录", "No folder here")) {
+        this.error = pick("当前没有目录", "No folder here");
         cx.notify();
       }
       return;
@@ -378,7 +382,7 @@ export default class Review extends View {
       this.reposCache.clear();
     }
     this.loading = true;
-    this.stage = quiet ? "" : "扫描仓库";
+    this.stage = quiet ? "" : pick("扫描仓库", "Scan the repository");
     cx.spawn(async (cx) => {
       const current = () => {
         const active = location();
@@ -393,7 +397,7 @@ export default class Review extends View {
         this.turnCount = turn.paths.length;
         if (!files.some((f) => f.key === this.open)) this.open = files[0]?.key ?? null;
         this.cwd = repos[0] ?? cwd;
-        this.error = files.length ? "" : (repos.length ? "没有未提交的改动" : "当前目录不在 Git 仓库中");
+        this.error = files.length ? "" : (repos.length ? pick("没有未提交的改动", "Nothing uncommitted") : pick("当前目录不在 Git 仓库中", "This folder is not in a Git repository"));
         const cur = this.current();
         if (cur?.unloaded) {
           if (quiet && previous?.key === cur.key && previous.status === "U") {
@@ -570,7 +574,7 @@ export default class Review extends View {
       this.stage = s;
       cx?.notify();
     };
-    setStage("扫描仓库");
+    setStage(pick("扫描仓库", "Scan the repository"));
     const turnPromise = new Promise((resolve) => {
       let settled = false;
       if (cx?.timer?.after) {
@@ -651,7 +655,7 @@ export default class Review extends View {
       }));
       files.push(...items);
     }
-    setStage("整理差异行");
+    setStage(pick("整理差异行", "Laying out the diff"));
     files.sort((a, b) => (a.touched === b.touched ? (a.repo.localeCompare(b.repo) || a.path.localeCompare(b.path)) : a.touched ? -1 : 1));
     return { files, repos, turn };
   }
@@ -672,12 +676,12 @@ export default class Review extends View {
           settled = true;
           resolve({ text, error });
         };
-        cx.timer.after(1500, () => finish(null, "读取新文件超时"));
+        cx.timer.after(1500, () => finish(null, pick("读取新文件超时", "Timed out reading the new file")));
         readTextFile(`${f.repo}/${f.path}`, { on: f.on ?? null })
-          .then((text) => finish(text, text === null ? "找不到新文件" : ""))
+          .then((text) => finish(text, text === null ? pick("找不到新文件", "Couldn't find the new file") : ""))
           .catch((e) => {
             const reason = String(e?.message ?? e);
-            finish(null, reason.includes("1 MiB") ? "新文件超过 1 MiB，未显示内容" : `无法预览新文件：${reason}`);
+            finish(null, reason.includes("1 MiB") ? pick("新文件超过 1 MiB，未显示内容", "New file is over 1 MiB, contents not shown") : `无法预览新文件：${reason}`);
           });
       });
       f.loadingBody = false;
@@ -691,7 +695,7 @@ export default class Review extends View {
       } else if (text.includes("\0")) {
         f.add = 0;
         f.lines = [];
-        f.unified = [{ kind: "@", text: "二进制文件 · 无文本差异" }];
+        f.unified = [{ kind: "@", text: pick("二进制文件 · 无文本差异", "Binary file · no text diff") }];
       } else {
         const lines = text ? text.replace(/\r?\n$/, "").split(/\r?\n/).map((l) => `+${l}`) : [];
         f.lines = lines;
@@ -714,8 +718,8 @@ export default class Review extends View {
     const hasChange = s.mod + s.add + s.del > 0;
     const repoList = (s.repos ?? []).map(baseOf).join(" · ");
     const tip = hasChange
-      ? `未提交变更：${s.mod} 修改 · ${s.add} 新增 · ${s.del} 删除（+${s.plusLines} / −${s.minusLines} 行）\n仓库：${repoList || "当前目录"}\n点击打开审查`
-      : (s.repos?.length ? `工作区干净（${repoList}）\n点击打开审查` : "未检测到 Git 仓库\n点击打开审查");
+      ? `未提交变更：${s.mod} 修改 · ${s.add} 新增 · ${s.del} 删除（+${s.plusLines} / −${s.minusLines} 行）\n仓库：${repoList || pick("当前目录", "This folder")}\n点击打开审查`
+      : (s.repos?.length ? `工作区干净（${repoList}）\n点击打开审查` : pick("未检测到 Git 仓库\n点击打开审查", "No Git repository found\nClick to open review"));
     return h_flex()
       .id("review-compact")
       .size_full()
@@ -730,7 +734,7 @@ export default class Review extends View {
       .hover((h) => h.bg(t.hover))
       .on_click(() => openOverlay({ mod: "inkstone-review", kind: "dialog", frame: "none", width: 1264, height: 864, props: { review: true, framed: true } }))
       .child(svg("mods/workspace-chrome/git-compare.svg").size(12).flex_none().text_color(hasChange ? t.accent : t.muted))
-      .child(div().flex_none().text_size(11).text_color(hasChange ? t.foreground : t.muted).child("审查"))
+      .child(div().flex_none().text_size(11).text_color(hasChange ? t.foreground : t.muted).child(pick("审查", "Review")))
       .when(hasChange, (el) => el.child(h_flex()
         .flex_1()
         .min_w(0)
@@ -739,7 +743,7 @@ export default class Review extends View {
         .when(s.mod > 0, (x) => x.child(div().flex_none().text_size(10.5).font_semibold().text_color(t.working).child(`~${s.mod}`)))
         .when(s.add > 0, (x) => x.child(div().flex_none().text_size(10.5).font_semibold().text_color(t.done).child(`+${s.add}`)))
         .when(s.del > 0, (x) => x.child(div().flex_none().text_size(10.5).font_semibold().text_color(t.blocked).child(`−${s.del}`)))))
-      .when(!hasChange, (el) => el.child(div().flex_1().truncate().text_size(10).text_color(t.dim).child(s.repos?.length ? "无变更" : "")));
+      .when(!hasChange, (el) => el.child(div().flex_1().truncate().text_size(10).text_color(t.dim).child(s.repos?.length ? pick("无变更", "No changes") : "")));
   }
 
   fileRow(f, t, cx) {
@@ -756,7 +760,7 @@ export default class Review extends View {
       .cursor_pointer()
       .when(f.key === this.open, (el) => el.bg(t.selected))
       .hover((s) => s.bg(t.hover))
-      .tooltip(`${f.repoName}/${f.path}${f.touched ? "\n本轮修改过" : ""}`)
+      .tooltip(`${f.repoName}/${f.path}${f.touched ? pick("\n本轮修改过", "\nchanged in this turn") : ""}`)
       .on_click((_e, cx) => {
         this.open = f.key;
         if (f.unloaded) this.loadUntracked(f, cx);
@@ -815,12 +819,12 @@ export default class Review extends View {
     const f = this.current();
     if (!f) {
       return div().flex_1().min_h(0).p(16).text_size(12).text_color(t.dim)
-        .child(this.stage ? "读取差异…" : this.error || (this.cwd ? "工作区没有未提交的改动。" : ""));
+        .child(this.stage ? pick("读取差异…", "Reading the diff…") : this.error || (this.cwd ? pick("工作区没有未提交的改动。", "The working tree has nothing uncommitted.") : ""));
     }
     if (f.unloaded) {
       const body = v_flex().flex_1().min_h(0).p(16).gap(8).text_size(12).text_color(t.dim);
-      if (f.loadingBody || !f.loadError) return body.child("读取新文件内容…");
-      return body.child(f.loadError).child(h_flex().child(this.button("rv-retry-file", "重试", false,
+      if (f.loadingBody || !f.loadError) return body.child(pick("读取新文件内容…", "Reading the new file…"));
+      return body.child(f.loadError).child(h_flex().child(this.button("rv-retry-file", pick("重试", "Retry"), false,
         (_e, cx) => this.loadUntracked(f, cx), t)));
     }
     return v_flex()
@@ -877,7 +881,7 @@ export default class Review extends View {
         .border_b(1)
         .border_color(t.border)
         .child(svg("mods/workspace-chrome/git-compare.svg").size(15).flex_none().text_color(t.accent))
-        .child(div().text_size(13).font_semibold().child("审查"))
+        .child(div().text_size(13).font_semibold().child(pick("审查", "Review")))
         .when((this.turnCount ?? 0) > 0, (el) => el
           .child(div().h(18).px(5).flex().items_center().rounded(4).bg(t.accent + "22").text_size(11).text_color(t.accent).child(`本轮 ${this.turnCount}`)))
         .child(div().px(5).py(1).rounded(4).border(1).border_color(t.border).text_size(11).text_color(t.muted).child(`${files.length} 个文件`))
@@ -887,15 +891,15 @@ export default class Review extends View {
         .child(div().text_size(11).text_color(t.done).child(`+${add}`))
         .child(div().text_size(11).text_color(t.blocked).child(`−${del}`))
         .child(div().flex_1())
-        .child(this.button("rv-unified", "统一", !this.split, (_e, cx) => {
+        .child(this.button("rv-unified", pick("统一", "Unified"), !this.split, (_e, cx) => {
           this.split = false;
           cx.notify();
         }, t))
-        .child(this.button("rv-split", "分栏", this.split, (_e, cx) => {
+        .child(this.button("rv-split", pick("分栏", "Split"), this.split, (_e, cx) => {
           this.split = true;
           cx.notify();
         }, t))
-        .child(this.button("rv-refresh", "刷新", false, (_e, cx) => this.refresh(cx), t))
+        .child(this.button("rv-refresh", pick("刷新", "Refresh"), false, (_e, cx) => this.refresh(cx), t))
         .child(div()
           .id("rv-close")
           .size(24)
@@ -918,7 +922,7 @@ export default class Review extends View {
           .min_h(0)
           .border_r(1)
           .border_color(t.border)
-          .child(div().h(26).flex_none().px(10).flex().items_center().text_size(11).text_color(t.dim).child("改动文件"))
+          .child(div().h(26).flex_none().px(10).flex().items_center().text_size(11).text_color(t.dim).child(pick("改动文件", "Changed files")))
           .child(v_flex()
             .id("rv-files")
             .flex_1()
@@ -931,7 +935,7 @@ export default class Review extends View {
             .track_scroll(this.filesScroll)
             .children(files.length
               ? files.map((f) => this.fileRow(f, t, cx))
-              : [div().px(8).py(8).text_size(12).text_color(t.dim).child(this.stage ? `读取差异… ${this.stage}` : "没有改动")])))
+              : [div().px(8).py(8).text_size(12).text_color(t.dim).child(this.stage ? `读取差异… ${this.stage}` : pick("没有改动", "No changes"))])))
         .child(v_flex()
           .flex_1()
           .min_w(0)
@@ -948,7 +952,7 @@ export default class Review extends View {
             .border_color(t.border)
             .child(div().font_family(settings().font_family ?? "JetBrains Mono").text_size(11).text_color(t.muted).truncate().child((() => { const c = this.current(); return c ? `${c.repo}/${c.path}` : ""; })()))
             .child(div().flex_1())
-            .child(div().text_size(11).text_color(t.dim).child(this.split ? "分栏视图" : "统一视图"))))
+            .child(div().text_size(11).text_color(t.dim).child(this.split ? pick("分栏视图", "Split view") : pick("统一视图", "Unified view")))))
           .child(this.diffBody(t, cx))))
       .child(h_flex()
         .h(26)

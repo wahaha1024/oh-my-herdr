@@ -9,6 +9,10 @@ import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { spaces, agents, panes, machines, run, openOverlay, exec, theme, shared, setShared, layout } from "herdr";
 import { sprite, glyph, assign, NAMES, FOLDER } from "./sprites.js";
 
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
+
 const git = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
 // 机器层（This computer / myserver…）在最上面，目录层往下缩进一档；
 // 下面几处行内的左内边距都按 IND 加，层次一眼能数出来。
@@ -64,8 +68,13 @@ function place(s, ps, binds) {
 // 不扫工作树、不显示分支标签，侧栏只按目录归拢空间。
 const gitOn = () => shared("inkstone.git") === true;
 
-const STATUS = { blocked: "待处理", working: "运行中", done: "已完成", idle: "空闲" };
-const statusLabel = (s) => STATUS[s] ?? "无状态";
+const STATUS = {
+  blocked: pick("待处理", "Waiting"),
+  working: pick("运行中", "Running"),
+  done: pick("已完成", "Done"),
+  idle: pick("空闲", "Idle"),
+};
+const statusLabel = (s) => STATUS[s] ?? pick("无状态", "No status");
 
 // 智能体状态点：形状与颜色一起编码，色弱也能分辨——
 // 待处理 = 方块，已完成 = 实心圆，运行中 = 圆环，空闲 / 无状态 = 空心圆。
@@ -328,7 +337,7 @@ export default class Workbench extends View {
                 cur = { path: line.slice(9).trim(), branch: null, main: out.length === 0 };
               } else if (cur && line.startsWith("branch ")) {
                 cur.branch = line.slice(7).trim().replace(/^refs\/heads\//, "");
-              } else if (cur && line === "detached") cur.branch = "（游离）";
+              } else if (cur && line === "detached") cur.branch = pick("（游离）", "detached");
             }
             if (cur) out.push(cur);
           }
@@ -539,7 +548,7 @@ export default class Workbench extends View {
       }, "agent")))
       .child(dot(t, a.status, 7))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(a.status === "blocked" ? t.blocked : t.foreground).child(name))
-      .child(div().flex_none().text_size(10.5).text_color(t.dim).child(a.status === "blocked" ? "待处理" : a.status === "done" ? "已完成" : ""));
+      .child(div().flex_none().text_size(10.5).text_color(t.dim).child(a.status === "blocked" ? pick("待处理", "Waiting") : a.status === "done" ? pick("已完成", "Done") : ""));
   }
 
   // 点智能体行/卡片：切到它的空间与标签，再把焦点给那个终端。
@@ -557,7 +566,7 @@ export default class Workbench extends View {
     const ps = panes();
     const lead = ps.find((p) => p.tab === c.id);
     const prog = lead?.program;
-    const name = clean(c.name) || prog?.name || "终端";
+    const name = clean(c.name) || prog?.name || pick("终端", "Terminal");
     return h_flex()
       .id(`wb-tab-${c.id}`)
       .h(26)
@@ -602,7 +611,7 @@ export default class Workbench extends View {
         .absolute().left(0).top(-2).w(2).h(30).overflow_hidden()
         .child(image("mods/inkstone-chrome/ink/rule-v.svg").absolute().left(-12).top(-12 - n * 33).w(26).h(2424))))
       .cursor_pointer()
-      .tooltip(`${w.folder}\n未打开 · 点一下在此工作树中新建空间`)
+      .tooltip(`${w.folder}\n${pick("未打开 · 点一下在此工作树中新建空间", "not open · click to make a space here")}`)
       .on_click(() => run("space.new", { folder: w.folder, name: base(w.folder), machine: w.on ?? "" }))
       .child(svg("mods/workspace-chrome/git-branch.svg").size(11).flex_none().text_color(t.dim))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(base(w.folder)))
@@ -616,7 +625,7 @@ export default class Workbench extends View {
     const has = s.status === "blocked" || s.status === "done" || s.status === "working";
     const folded = this.fold.has(s.id);
     const count = (s.tabs ?? []).length;
-    const label = clean(s.name) || base(folder ?? s.folder) || "未命名空间";
+    const label = clean(s.name) || base(folder ?? s.folder) || pick("未命名空间", "Untitled");
     return h_flex()
       .id(`wb-s-${s.id}`)
       .h(30)
@@ -705,7 +714,8 @@ export default class Workbench extends View {
     const folded = this.foldM.has(m.key);
     const open = m.spaces.length;
     const tone = m.state === "unavailable" ? t.blocked : m.state === "ready" ? t.accent : t.dim;
-    const stateWord = m.state === "unavailable" ? "连不上" : m.state === "ready" ? "已连接" : "加载中";
+    const stateWord = m.state === "unavailable" ? pick("连不上", "offline")
+      : m.state === "ready" ? pick("已连接", "connected") : pick("加载中", "loading");
     return h_flex()
       .id(`wb-m-${m.key}`)
       .h(26)
@@ -717,7 +727,7 @@ export default class Workbench extends View {
       .rounded(6)
       .cursor_pointer()
       .hover((h) => h.bg(PAPER(t) ? "#f8dc4c4d" : t.hover))
-      .tooltip(`${m.name ?? "本机"} · ${stateWord}`)
+      .tooltip(`${m.name ?? pick("本机", "This computer")} · ${stateWord}`)
       .accessibility_label(`${m.key} ${open} 个空间`)
       .on_click((_e, c) => this.toggleMachine(m, c))
       .on_mouse_down("right", () => this.menu({ machine: m.name ?? null, root: m.root ?? null }, "machine"))
@@ -745,8 +755,8 @@ export default class Workbench extends View {
         .rounded(4)
         .cursor_pointer()
         .hover((h) => h.bg(PAPER(t) ? "#f8dc4c4d" : t.hover))
-        .tooltip(m.name ? `在 ${m.key} 上新建空间` : "在本机新建空间")
-        .accessibility_label(`在 ${m.key} 上新建空间`)
+        .tooltip(m.name ? pick(`在 ${m.key} 上新建空间`, `new space on ${m.key}`) : pick("在本机新建空间", "new space on this computer"))
+        .accessibility_label(pick(`在 ${m.key} 上新建空间`, `new space on ${m.key}`))
         .on_click((_e, c) => {
           c.stop_propagation();
           this.newSpace(m.name);
@@ -796,7 +806,7 @@ export default class Workbench extends View {
   railSpace(s, t, fill, art, colorIndex) {
     const on = Boolean(s.active);
     const count = (s.tabs ?? []).length;
-    const label = clean(s.name) || base(s.folder) || "未命名空间";
+    const label = clean(s.name) || base(s.folder) || pick("未命名空间", "Untitled");
     return h_flex()
       .id(`wb-rs-${s.id}`)
       .h(28)
@@ -825,7 +835,7 @@ export default class Workbench extends View {
       .rounded(6)
       .cursor_pointer()
       .hover((s) => s.bg(PAPER(t) ? "#f8dc4c4d" : t.hover))
-      .tooltip(`${base(g.root)}${folded ? " · 已折叠" : ""}`)
+      .tooltip(`${base(g.root)}${folded ? pick(" · 已折叠", " · collapsed") : ""}`)
       .accessibility_label(`目录 ${base(g.root)}`)
       .on_click((_e, cx) => this.toggleFold(g.root, cx))
       .on_mouse_down("right", () => this.menu({ folder: g.root, machine: g.on }, "dir"))
@@ -838,9 +848,9 @@ export default class Workbench extends View {
     if (!gitOn()) return null;
     let text = null;
     // 非 Git 目录永远扫不到工作树，先判 repo：否则会一直停在「正在扫描」。
-    if (!g.repo) text = "不在 Git 仓库中";
-    else if (!g.scanned) text = "正在扫描工作树…";
-    else if (g.trees.length <= 1) text = "没有其他工作树 · 右键项目新建";
+    if (!g.repo) text = pick("不在 Git 仓库中", "Not in a Git repository");
+    else if (!g.scanned) text = pick("正在扫描工作树…", "Scanning worktrees…");
+    else if (g.trees.length <= 1) text = pick("没有其他工作树 · 右键项目新建", "No other worktrees · right-click the project to add one");
     if (!text) return null;
     return div().pl(30 + IND + pad).pr(8).py(2).text_size(11).text_color(t.dim).child(text);
   }
@@ -859,8 +869,8 @@ export default class Workbench extends View {
         cx.notify();
       })
       .on_click(() => this.newSpace(null))
-      .tooltip("新建空间")
-      .accessibility_label("新建空间")
+      .tooltip(pick("新建空间", "New space"))
+      .accessibility_label(pick("新建空间", "New space"))
       .child(image(`mods/inkstone-chrome/ink/ib-c${lit ? "-on" : ""}.svg`).absolute().left(-12).top(-12).w(52).h(52))
       .child(svg("mods/inkstone-chrome/plus.svg").size(16).relative());
   }
@@ -894,7 +904,7 @@ export default class Workbench extends View {
         rows.push(this.machineRow(m, t));
         if (this.foldM.has(m.key)) continue;
         if (!m.groups.length) {
-          rows.push(div().pl(18 + IND).pr(8).py(2).text_size(11).text_color(t.dim).child(m.state === "unavailable" ? "连不上这台机器" : "这台机器上还没有空间"));
+          rows.push(div().pl(18 + IND).pr(8).py(2).text_size(11).text_color(t.dim).child(m.state === "unavailable" ? pick("连不上这台机器", "Can't reach this machine") : pick("这台机器上还没有空间", "No spaces on this machine yet")));
           continue;
         }
         let prev = null;
@@ -926,7 +936,7 @@ export default class Workbench extends View {
             // 普通终端显示程序名——这样徽章上的 tab 数在下面都数得出来。
             const tabs = s.tabs ?? [];
             if (!tabs.length) {
-              rows.push(div().pl(38 + IND + pad).pr(8).py(2).text_size(11).text_color(t.dim).child("还没有终端"));
+              rows.push(div().pl(38 + IND + pad).pr(8).py(2).text_size(11).text_color(t.dim).child(pick("还没有终端", "No terminals yet")));
               continue;
             }
             const list = agents();
@@ -962,8 +972,8 @@ export default class Workbench extends View {
             .rounded(6)
             .cursor_pointer()
             .hover((s) => s.bg(t.hover).text_color(t.foreground))
-            .tooltip("展开侧栏")
-            .accessibility_label("展开侧栏")
+            .tooltip(pick("展开侧栏", "Expand sidebar"))
+            .accessibility_label(pick("展开侧栏", "Expand sidebar"))
             .on_click(() => {
               setShared("sidebar.collapsed", false);
               run("layout.resize", { id: "sidebar", px: shared("sidebar.width") ?? 284 });
@@ -979,8 +989,8 @@ export default class Workbench extends View {
             .rounded(6)
             .cursor_pointer()
             .hover((s) => s.bg(t.hover).text_color(t.foreground))
-            .tooltip("新建空间")
-            .accessibility_label("新建空间")
+            .tooltip(pick("新建空间", "New space"))
+            .accessibility_label(pick("新建空间", "New space"))
             .on_click(() => this.newSpace(null))
             .child(svg("mods/workspace-chrome/plus.svg").size(14)))
         : h_flex()
@@ -1039,8 +1049,8 @@ export default class Workbench extends View {
                 .text_color(t.muted)
                 .cursor_pointer()
                 .hover((s) => s.bg(t.hover).text_color(t.foreground))
-                .tooltip("新建空间")
-                .accessibility_label("新建空间")
+                .tooltip(pick("新建空间", "New space"))
+                .accessibility_label(pick("新建空间", "New space"))
                 .on_click(() => this.newSpace(null))
                 .child(svg("mods/workspace-chrome/plus.svg").size(14)))))
       .child(v_flex()
@@ -1052,7 +1062,7 @@ export default class Workbench extends View {
         .overflow_y_scrollbar()
         .mode("always")
         .track_scroll(this.scroll)
-        .children(rows.length ? rows : [div().px(10).py(8).text_size(12).text_color(t.dim).child("还没有空间 · 点上面的 + 新建")]));
+        .children(rows.length ? rows : [div().px(10).py(8).text_size(12).text_color(t.dim).child(pick("还没有空间 · 点上面的 + 新建", "No spaces yet · use + above"))]));
     // 展开态下包成独立纸边卡片；rail 图标轨态保持紧贴窄条。
     return narrow ? inner : paperCard(this, t, inner);
   }

@@ -11,6 +11,10 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { run, props, closeOverlay, theme, machines, spaces, focused, knownAgents, pickFolder, exec, shared, setShared, window, home } from "herdr";
 
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
+
 const RECENT = "inkstone.recentFolders";
 const BINDINGS = "inkstone.bindings";
 const ROOTS = "inkstone.roots";
@@ -45,7 +49,7 @@ const join = (dir, name) => `${dir.replace(/[\\/]+$/, "")}${isWin() ? "\\" : "/"
 // 建目录只能在本机：远程机器用哪种 shell 不确定，猜错了会在错的地方建。
 // mkdir -p 幂等且与 shell 无关，Windows 上由 Git Bash 提供；没有再退回 cmd 的 mkdir。
 async function mkdir(path, on) {
-  if (on) throw new Error("远程机器暂不支持建目录，请到那台机器的终端里创建");
+  if (on) throw new Error(pick("远程机器暂不支持建目录，请到那台机器的终端里创建", "Remote machines can't create folders; make it in a terminal on that machine"));
   try {
     const r = await exec("mkdir", ["-p", path], { timeout: 15000 });
     if (r.code === 0) return r;
@@ -54,7 +58,7 @@ async function mkdir(path, on) {
   }
   const r = await exec("cmd", ["/c", "mkdir", path], { timeout: 15000 });
   // cmd 的 mkdir 遇到已存在的目录返回 1，那不是失败。
-  if (r.code !== 0 && r.code !== 1) throw new Error(r.stderr.trim() || `退出码 ${r.code}`);
+  if (r.code !== 0 && r.code !== 1) throw new Error(r.stderr.trim() || pick(`退出码 ${r.code}`, `exit ${r.code}`));
   return r;
 }
 
@@ -72,9 +76,9 @@ export default class NewSpace extends View {
     this.agents = [];
     this.agent = null;
     this.recent = recentFor(this.machine);
-    this.dir = InputState.new({ placeholder: this.machine ? "远端目录，例如 /home/me/project" : "目录，例如 E:\\项目" });
+    this.dir = InputState.new({ placeholder: this.machine ? pick("远端目录，例如 /home/me/project", "remote folder, e.g. /home/me/project") : pick("目录，例如 E:\\项目", "folder, e.g. E:\\projects") });
     this.dir.set_value(p.folder ?? (this.machine ? "" : (focused()?.cwd ?? home())));
-    this.name = InputState.new({ placeholder: "新文件夹名" });
+    this.name = InputState.new({ placeholder: pick("新文件夹名", "new folder name") });
     this.dir.on("submit", () => (this.mode === "bind" ? this.bind(cx) : this.mode === "root" ? this.setRoot(cx) : this.create(cx)));
     this.name.on("submit", () => this.create(cx));
     cx.timer.after(30, () => (this.mode === "folder" ? this.name : this.dir).focus());
@@ -109,12 +113,12 @@ export default class NewSpace extends View {
 
   browse(cx) {
     if (this.machine) {
-      this.err = "系统选择器只在本机可用，远端目录请手输";
+      this.err = pick("系统选择器只在本机可用，远端目录请手输", "The system picker only works locally; type the remote path");
       cx.notify();
       return;
     }
     // 与 create 同理：选择器要等用户操作，回调必须立刻返回。
-    pickFolder({ prompt: this.mode === "folder" ? "在这里建文件夹" : "在新目录开空间" })
+    pickFolder({ prompt: this.mode === "folder" ? pick("在这里建文件夹", "create a folder here") : pick("在新目录开空间", "open a space in the new folder") })
       .then((hit) => {
         if (!hit) return;
         this.dir.set_value(hit);
@@ -128,7 +132,7 @@ export default class NewSpace extends View {
   bind(cx) {
     const dir = expand(this.dir.value(), this.machine);
     if (!dir) {
-      this.err = "请填写目录";
+      this.err = pick("请填写目录", "Enter a folder");
       cx.notify();
       return;
     }
@@ -148,7 +152,7 @@ export default class NewSpace extends View {
   setRoot(cx) {
     const dir = expand(this.dir.value(), this.machine);
     if (!dir) {
-      this.err = "请填写目录";
+      this.err = pick("请填写目录", "Enter a folder");
       cx.notify();
       return;
     }
@@ -177,7 +181,7 @@ export default class NewSpace extends View {
     if (this.busy) return;
     const dir = expand(this.dir.value(), this.machine);
     if (!dir) {
-      this.err = "请填写目录";
+      this.err = pick("请填写目录", "Enter a folder");
       cx.notify();
       return;
     }
@@ -185,12 +189,12 @@ export default class NewSpace extends View {
     if (this.mode === "folder") {
       const name = String(this.name.value() ?? "").trim();
       if (!name) {
-        this.err = "请填写文件夹名";
+        this.err = pick("请填写文件夹名", "Enter a folder name");
         cx.notify();
         return;
       }
       if (/[\\/:*?"<>|]/.test(name)) {
-        this.err = '名称不能包含 \\ / : * ? " < > |';
+        this.err = pick("名称不能包含 \\\\ / : * ? \" < > |", "A name cannot contain \\\\ / : * ? \" < > |");
         cx.notify();
         return;
       }
@@ -203,7 +207,7 @@ export default class NewSpace extends View {
         if (r.code !== 0) throw new Error(r.stderr.trim() || `退出码 ${r.code}`);
       } catch (e) {
         this.busy = false;
-        this.err = `建目录失败：${String(e?.message ?? e)}`;
+        this.err = pick(`建目录失败：${String(e?.message ?? e)}`, `could not create the folder: ${String(e?.message ?? e)}`);
         cx.notify();
         return;
       }
@@ -293,47 +297,47 @@ export default class NewSpace extends View {
       .p(12)
       .gap(9)
       .text_size(12)
-      .child(div().text_size(13).font_semibold().text_color(t.foreground).child(root ? "设置机器根目录" : bind ? "设置归属目录" : folder ? "新建文件夹" : "新建空间"))
+      .child(div().text_size(13).font_semibold().text_color(t.foreground).child(root ? pick("设置机器根目录", "Set the machine's root folder") : bind ? pick("设置归属目录", "Set the project folder") : folder ? pick("新建文件夹", "New folder") : pick("新建空间", "New space")))
       .child(div().text_size(11).text_color(t.dim).child(root
-        ? "侧栏会在这台机器下面先留出这一行：右键它就能新建子文件夹或空间，不必先有项目。"
+        ? pick("侧栏会在这台机器下面先留出这一行：右键它就能新建子文件夹或空间，不必先有项目。", "The sidebar keeps a row under this machine: right-click it to create folders or spaces without a project first.")
         : bind
-          ? "侧栏按这个目录归组；终端 cd 到别处也还留在同一项目下。"
+          ? pick("侧栏按这个目录归组；终端 cd 到别处也还留在同一项目下。", "The sidebar groups the space by this folder; a cd elsewhere keeps it in the same project.")
           : folder
-            ? "在上面的目录里建一个子目录，建好后在其中开空间。"
-            : "空格子里的目录就是终端起步的地方；OMP 会话按它归档，选对项目目录能少走弯路。"))
+            ? pick("在上面的目录里建一个子目录，建好后在其中开空间。", "Creates a subfolder above, then opens a space in it.")
+            : pick("空格子里的目录就是终端起步的地方；OMP 会话按它归档，选对项目目录能少走弯路。", "The folder is where terminals start; OMP sessions are filed by it, so pick the project folder.")))
       .child(h_flex().gap(8).items_center()
-        .child(this.label(folder ? "位置" : "目录"))
+        .child(this.label(folder ? pick("位置", "Folder") : pick("目录", "Folder")))
         .child(this.field(this.dir))
-        .child(this.chip("sp-browse", "浏览…", false, (_e, c) => this.browse(c))))
+        .child(this.chip("sp-browse", pick("浏览…", "Browse…"), false, (_e, c) => this.browse(c))))
       .when(!folder && !bind, (el) => el
         .child(h_flex().gap(8).items_center()
-          .child(this.label("机器"))
+          .child(this.label(pick("机器", "Machine")))
           .child(div().flex_1().flex().flex_wrap().gap(6)
-            .child(this.chip("sp-m-local", "本机", local, () => this.pickMachine(null, cx)))
+            .child(this.chip("sp-m-local", pick("本机", "This computer"), local, () => this.pickMachine(null, cx)))
             .children(list.map((m, i) => this.chip(`sp-m-${i}`, m.name, this.machine === m.name, () => this.pickMachine(m.name, cx)))))))
       .when(!folder && !bind && !root, (el) => el
         .child(h_flex().gap(8).items_start()
-          .child(this.label("程序"))
+          .child(this.label(pick("程序", "Program")))
           .child(div().flex_1().flex().flex_wrap().gap(6)
-            .child(this.chip("sp-a-shell", "空终端", !this.agent, () => { this.agent = null; cx.notify(); }))
+            .child(this.chip("sp-a-shell", pick("空终端", "Empty terminal"), !this.agent, () => { this.agent = null; cx.notify(); }))
             .children(this.agents.map((a, i) => this.chip(`sp-a-${i}`, a.name ?? a.key, this.agent?.key === a.key, () => { this.agent = a; cx.notify(); }))))))
       .when(folder, (el) => el
         .child(h_flex().gap(8).items_center()
-          .child(this.label("名称"))
+          .child(this.label(pick("名称", "Name")))
           .child(this.field(this.name))))
       .when(Boolean(this.recent.length) && !folder && !root, (el) => el
         .child(h_flex().gap(8).items_center()
-          .child(this.label("最近"))
+          .child(this.label(pick("最近", "Recent")))
           .child(div().flex_1().flex().flex_wrap().gap(6)
             .children(this.recent.map((p, i) => this.chip(`sp-r-${i}`, p, false, () => { this.dir.set_value(p); this.err = ""; cx.notify(); }))))))
       .when(Boolean(this.err), (el) => el.child(div().text_size(11).text_color(t.blocked).child(this.err)))
       .child(h_flex().gap(8).justify_end()
-        .when(bind && bound, (el) => el.child(this.button("sp-unbind", "清除归属", false, (_e, c) => this.unbind(c))))
-        .when(root && hasRoot, (el) => el.child(this.button("sp-unroot", "清除根目录", false, (_e, c) => this.clearRoot(c))))
-        .child(this.button("sp-cancel", "取消", false, () => closeOverlay(props()?.overlay)))
+        .when(bind && bound, (el) => el.child(this.button("sp-unbind", pick("清除归属", "Clear project folder"), false, (_e, c) => this.unbind(c))))
+        .when(root && hasRoot, (el) => el.child(this.button("sp-unroot", pick("清除根目录", "Clear root folder"), false, (_e, c) => this.clearRoot(c))))
+        .child(this.button("sp-cancel", pick("取消", "Cancel"), false, () => closeOverlay(props()?.overlay)))
         .child(this.button(
           "sp-create",
-          bind ? "设定归属" : root ? "设定根目录" : (this.busy ? "创建中…" : (folder ? "创建并打开" : "创建")),
+          bind ? pick("设定归属", "Bind project folder") : root ? pick("设定根目录", "Set root folder") : (this.busy ? pick("创建中…", "Creating…") : (folder ? pick("创建并打开", "Create and open") : pick("创建", "Create"))),
           true,
           (_e, c) => (bind ? this.bind(c) : root ? this.setRoot(c) : this.create(c)),
         )));

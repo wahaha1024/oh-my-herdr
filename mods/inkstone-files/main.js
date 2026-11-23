@@ -7,8 +7,12 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, InputState, Input } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, checking } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, checking, shared } from "herdr";
 import ICONS from "./icons.js";
+
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG_KEY = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG_KEY) === "en" ? en : zh);
 
 const LANG = {
   ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js",
@@ -36,7 +40,7 @@ async function directory(path, on) {
       "-NoProfile", "-Command",
       "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & { param($p) @(Get-ChildItem -LiteralPath $p -Force -ErrorAction Stop | Where-Object Name -ne '.git' | Where-Object Name -ne '.jj' | Select-Object -First 501 | ForEach-Object { @{ name=$_.Name; dir=($_.PSIsContainer -and (-not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not $_.LinkType -or ($_.Target -and [IO.Directory]::Exists(([IO.Path]::Combine([IO.Path]::GetDirectoryName($_.FullName), $_.Target[0])))))) } }) | ConvertTo-Json -Compress } '" + esc + "'",
     ], { on });
-    if (r.code !== 0) throw new Error(r.stderr || "无法读取该目录");
+    if (r.code !== 0) throw new Error(r.stderr || pick("无法读取该目录", "Couldn't read this folder"));
     const result = JSON.parse(r.stdout || "[]");
     return Array.isArray(result) ? result : [result];
   };
@@ -48,7 +52,7 @@ async function directory(path, on) {
     if (on && String(e).includes("cannot start sh: program not found")) return windowsDirectory();
     throw e;
   }
-  if (r.code !== 0) throw new Error(r.stderr || "无法读取该目录");
+  if (r.code !== 0) throw new Error(r.stderr || pick("无法读取该目录", "Couldn't read this folder"));
   const fields = r.stdout.split("\0");
   const out = [];
   for (let i = 0; i + 1 < fields.length; i += 2) out.push({ name: fields[i + 1], dir: fields[i] === "d" });
@@ -152,7 +156,7 @@ export default class InkstoneFiles extends View {
     this.query = "";
     this.copied = null;
     this.handle = cx.focus_handle();
-    this.input = InputState.new({ placeholder: "搜索文件或路径…" });
+    this.input = InputState.new({ placeholder: pick("搜索文件或路径…", "Search files or paths…") });
     this.input.on("change", (_e, cx) => {
       this.query = this.input.value();
       if (this.query.trim() && !this.indexReady && !this.indexLoading) {
@@ -386,14 +390,14 @@ export default class InkstoneFiles extends View {
       try {
         const text = await readTextFile(target, { on });
         if (this.file !== path || !this.current(context)) return;
-        if (text === null) { this.fileError = "该文件已不存在"; return; }
-        if (text.includes("\0")) { this.fileError = "二进制文件 · 无法预览文本"; return; }
+        if (text === null) { this.fileError = pick("该文件已不存在", "This file no longer exists"); return; }
+        if (text.includes("\0")) { this.fileError = pick("二进制文件 · 无法预览文本", "Binary file · can't preview as text"); return; }
         const t = theme();
         const ext = path.includes(".") ? path.split(".").pop() : "txt";
         this.code = EditorState.new({
           language: LANG[ext] ?? ext,
           readonly: true,
-          value: text.length > 400000 ? text.slice(0, 400000) + "\n…（文件过大，已截断显示）" : text,
+          value: text.length > 400000 ? text.slice(0, 400000) + pick("\n…（文件过大，已截断显示）", "\n…(file too large, truncated)") : text,
           font_family: settings().font_family,
           font_size: 12,
           syntax: {
@@ -409,7 +413,7 @@ export default class InkstoneFiles extends View {
         if (line > 0) this.gotoLine(text, line);
       } catch {
         if (this.file === path && this.current(context)) {
-          this.fileError = "无法预览此文件（二进制、过大或无读取权限）";
+          this.fileError = pick("无法预览此文件（二进制、过大或无读取权限）", "Can't preview this file (binary, too large, or not readable)");
         }
       } finally {
         cx.notify();
@@ -525,7 +529,7 @@ export default class InkstoneFiles extends View {
       .text_size(10)
       .text_color(ok ? t.done : t.dim)
       .cursor_pointer()
-      .tooltip(ok ? "已复制" : `复制 @${path}（可粘贴到终端引用）`)
+      .tooltip(ok ? pick("已复制", "Copied") : `复制 @${path}（可粘贴到终端引用）`)
       .accessibility_label(`复制引用 @${path}`)
       .hover((s) => s.bg(t.raised).text_color(t.foreground))
       .on_click((_e, cx) => {
@@ -627,7 +631,7 @@ export default class InkstoneFiles extends View {
     const hits = q ? this.searchHits() : null;
     const footerLeft = this.vcs
       ? `${this.vcs.toUpperCase()} · ${markCount} 处改动`
-      : (this.indexReady ? `已索引 ${this.index.length} 个文件` : (this.root ? "普通目录" : "无目录"));
+      : (this.indexReady ? `已索引 ${this.index.length} 个文件` : (this.root ? pick("普通目录", "Folder") : pick("无目录", "No folder")));
 
     return v_flex()
       .id("inkstone-files")
@@ -668,16 +672,16 @@ export default class InkstoneFiles extends View {
           .cursor_pointer()
           .text_size(12)
           .text_color(t.muted)
-          .tooltip("返回文件列表")
+          .tooltip(pick("返回文件列表", "Back to the list"))
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click((_e, cx) => { this.show(null); cx.notify(); })
           .child("←")))
         .when(!this.file, (el) => el.child(image(fileIcon("file.txt", false, false, Boolean(settings().dark))).size(13).flex_none()))
         .when(!this.file, (el) => el
-          .child(this.navButton("files-up", "nav-up", "上级目录", Boolean(parentOf(this.root)), t, (cx) => this.up(cx)))
-          .child(this.navButton("files-home", "nav-home", "回到项目目录", this.above !== null, t, (cx) => this.home(cx))))
+          .child(this.navButton("files-up", "nav-up", pick("上级目录", "Parent folder"), Boolean(parentOf(this.root)), t, (cx) => this.up(cx)))
+          .child(this.navButton("files-home", "nav-home", pick("回到项目目录", "Back to the project folder"), this.above !== null, t, (cx) => this.home(cx))))
         .when(Boolean(this.file), (el) => el.child(image(fileIcon(this.file, false, false, Boolean(settings().dark))).size(13).flex_none()))
-        .child(div().text_size(12).font_semibold().child(this.file ? "预览" : "文件"))
+        .child(div().text_size(12).font_semibold().child(this.file ? pick("预览", "Preview") : pick("文件", "Files")))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(11).text_color(t.dim)
           .child(this.file ?? this.root?.split(/[\\/]/).filter(Boolean).pop() ?? ""))
         .when(Boolean(this.file), (el) => el.child(div()
@@ -691,7 +695,7 @@ export default class InkstoneFiles extends View {
           .tooltip(`复制 @${this.file}`)
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click((_e, cx) => this.copyMention(this.file, cx))
-          .child(this.copied === this.file ? "已复制" : "复制 @路径")))
+          .child(this.copied === this.file ? pick("已复制", "Copied") : pick("复制 @路径", "Copy @path"))))
         .when(!this.file, (el) => el.child(div()
           .id("files-reload")
           .px(6)
@@ -700,14 +704,14 @@ export default class InkstoneFiles extends View {
           .text_size(11)
           .text_color(t.dim)
           .cursor_pointer()
-          .tooltip("刷新文件树与变更状态")
-          .accessibility_label("刷新文件列表")
+          .tooltip(pick("刷新文件树与变更状态", "Refresh the tree and the change marks"))
+          .accessibility_label(pick("刷新文件列表", "Refresh the list"))
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click((_e, cx) => {
             this.indexReady = false;
             this.refresh(cx);
           })
-          .child("刷新"))))
+          .child(pick("刷新", "Refresh")))))
       .when(!this.file, (el) => el
         .child(h_flex()
           .h(32)
@@ -736,7 +740,7 @@ export default class InkstoneFiles extends View {
             .text_size(11)
             .text_color(t.dim)
             .cursor_pointer()
-            .tooltip("清空搜索")
+            .tooltip(pick("清空搜索", "Clear the search"))
             .hover((s) => s.bg(t.hover).text_color(t.foreground))
             .on_click((_e, cx) => {
               this.query = "";
@@ -754,12 +758,12 @@ export default class InkstoneFiles extends View {
           .children(q
             ? (hits.length
               ? this.searchRows(hits, t, cx)
-              : [div().p(10).text_size(12).text_color(t.dim).child(this.indexLoading ? "正在建立文件索引…" : "没有匹配的文件。")])
+              : [div().p(10).text_size(12).text_color(t.dim).child(this.indexLoading ? pick("正在建立文件索引…", "Building the file index…") : pick("没有匹配的文件。", "No matching files."))])
             : this.rows("", 0, [], t, cx))
           .when(!q && (Boolean(this.error) || !this.entries.get("")?.length), (el) => el
-            .child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "正在读取文件…" : this.root ? "空目录" : "当前空间没有工作目录"))))
+            .child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? pick("正在读取文件…", "Reading the file…") : this.root ? pick("空目录", "Empty folder") : pick("当前空间没有工作目录", "This space has no working folder")))))
           .when(!q && this.limited, (el) => el
-            .child(div().p(8).text_size(11).text_color(t.dim).child("单目录上限 500 项，总显示上限 5,000 项")))))
+            .child(div().p(8).text_size(11).text_color(t.dim).child(pick("单目录上限 500 项，总显示上限 5,000 项", "500 entries per folder, 5,000 shown overall"))))))
       .when(Boolean(this.file), (el) => el
         .child(v_flex()
           .flex_1()
@@ -767,7 +771,7 @@ export default class InkstoneFiles extends View {
           .bg(t.background)
           .child(this.code
             ? Editor.new(this.code).flex_1().min_h(0)
-            : div().p(12).text_size(12).text_color(t.dim).child(this.fileError || "正在打开文件…"))))
+            : div().p(12).text_size(12).text_color(t.dim).child(this.fileError || pick("正在打开文件…", "Opening the file…")))))
       .child(h_flex()
         .h(24)
         .flex_none()
@@ -779,6 +783,6 @@ export default class InkstoneFiles extends View {
         .text_size(10)
         .text_color(t.dim)
         .child(div().truncate().child(footerLeft))
-        .child(div().flex_none().child(this.file ? "只读预览 · Esc 返回" : "点击预览 · @ 复制路径")));
+        .child(div().flex_none().child(this.file ? pick("只读预览 · Esc 返回", "Read-only preview · Esc goes back") : pick("点击预览 · @ 复制路径", "Click to preview · @ copies the path"))));
   }
 }

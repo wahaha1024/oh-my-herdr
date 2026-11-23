@@ -2,6 +2,10 @@ import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, agents, run, openOverlay, exec, theme, window, shared, layout, settings, checking } from "herdr";
 
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
+
 // 8×8 像素铃铛，与侧栏空间图案同一套画法：GPUI 矩形逐格拼，边缘是硬的。
 // 不走 svg——矢量缩放会抗锯齿，8px 的铃铛会被糊成圆润的钟形。
 const BELL = [
@@ -298,7 +302,7 @@ export default class Tabs extends View {
 
   branchChip(t) {
     return h_flex().id("branch-chip").flex_none().h(26).px(7).gap(5).items_center().rounded(6)
-      .text_color(t.muted).tooltip(this.branch ?? "当前目录不在 Git 仓库中").accessibility_label(`分支 ${this.branch ?? "无"}`)
+      .text_color(t.muted).tooltip(this.branch ?? pick("当前目录不在 Git 仓库中", "This folder is not in a Git repository")).accessibility_label(pick(`分支 ${this.branch ?? "无"}`, `branch ${this.branch ?? "none"}`))
       .child(svg("mods/workspace-chrome/git-branch.svg").size(12).flex_none().text_color(t.dim))
       .child(div().max_w(150).truncate().text_size(12).child(this.branch ?? ""));
   }
@@ -306,12 +310,15 @@ export default class Tabs extends View {
   prChip(t) {
     const p = this.pr;
     if (!p) return div().flex_none();
-    const label = p.isDraft ? "草稿" : p.state === "MERGED" ? "已合并" : p.state === "OPEN" ? "开启" : p.state === "CLOSED" ? "已关闭" : p.state;
+    const label = p.isDraft ? pick("草稿", "draft")
+      : p.state === "MERGED" ? pick("已合并", "merged")
+      : p.state === "OPEN" ? pick("开启", "open")
+      : p.state === "CLOSED" ? pick("已关闭", "closed") : p.state;
     const color = p.isDraft ? t.muted : p.state === "MERGED" ? t.done : p.state === "OPEN" ? t.accent : t.dim;
-    const tip = [p.url, this.prStale ? "上次刷新失败 · 这是缓存结果" : null].filter(Boolean).join("\n");
+    const tip = [p.url, this.prStale ? pick("上次刷新失败 · 这是缓存结果", "Last refresh failed · showing cached result") : null].filter(Boolean).join("\n");
     return h_flex().id("pr-chip").flex_none().h(22).px(8).gap(5).items_center().rounded(5)
       .bg(t.raised).border(1).border_color(t.border).cursor_pointer()
-      .tooltip(tip).accessibility_label(`拉取请求 ${p.number} ${label}`).hover(s => s.bg(t.hover))
+      .tooltip(tip).accessibility_label(pick(`拉取请求 ${p.number} ${label}`, `pull request ${p.number} ${label}`)).hover(s => s.bg(t.hover))
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click(() => exec("gh", ["pr", "view", String(p.number), "--web"], { timeout: 0 }).catch(() => {}))
       .child(svg("mods/workspace-chrome/git-compare.svg").size(11).flex_none().text_color(color))
@@ -328,11 +335,11 @@ export default class Tabs extends View {
     const tone = blocked ? t.blocked : t.done;
     const tip = list.length
       ? [
-        blocked ? `${blocked} 个待你处理` : null,
-        list.length > blocked ? `${list.length - blocked} 个已完成待查看` : null,
-        "点开查看驾驶舱",
+        blocked ? pick(`${blocked} 个待你处理`, `${blocked} waiting for you`) : null,
+        list.length > blocked ? pick(`${list.length - blocked} 个已完成待查看`, `${list.length - blocked} finished to review`) : null,
+        pick("点开查看驾驶舱", "Click to open the cockpit"),
       ].filter(Boolean).join(" · ")
-      : "全部就绪 · 点开查看驾驶舱";
+      : pick("全部就绪 · 点开查看驾驶舱", "All clear · click to open the cockpit");
     return h_flex()
       .id("inkstone-waiting")
       .h(26)
@@ -412,7 +419,7 @@ export default class Tabs extends View {
         .child(div().max_w(200).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.active, el => el.child(div().id(`close-${c.id}`).size(28).flex_none().flex().items_center().justify_center()
           .rounded(5).text_color(t.dim).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground))
-          .tooltip("关闭标签").accessibility_label("关闭标签")
+          .tooltip(pick("关闭标签", "Close tab")).accessibility_label(pick("关闭标签", "Close tab"))
           .on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); })
           .child(svg("mods/pane/close.svg").size(12))));
     };
@@ -425,7 +432,7 @@ export default class Tabs extends View {
     const enabled = PANELS;
     const drawerFits = this.drawerFits(panel);
     const icons = { files: "mods/files/file.svg", sessions: "mods/inkstone-chrome/terminal.svg", favorites: "mods/inkstone-chrome/pin.svg" };
-    const names = { files: "文件", sessions: "会话", favorites: "收藏" };
+    const names = { files: pick("文件", "Files"), sessions: pick("会话", "Sessions"), favorites: pick("收藏", "Favourites") };
     const drawerPage = shownPanel(panel, enabled);
     const pending = this.pending;
     const waiting = pending && pending.want !== drawerPage && Date.now() < pending.until;
@@ -450,8 +457,9 @@ export default class Tabs extends View {
           this.pending = { want, until: Date.now() + 1000 };
           if (want) openPanel(want, current);
           else closePanel();
-        })).tooltip(drawerFits ? `${names[id]}面板` : `窗口过窄，拉宽后可打开${names[id]}面板`)
-        .accessibility_label(`${names[id]}面板`)
+        })).tooltip(drawerFits ? pick(`${names[id]}面板`, `${names[id]} panel`)
+          : pick(`窗口过窄，拉宽后可打开${names[id]}面板`, `Widen the window to open the ${names[id]} panel`))
+        .accessibility_label(pick(`${names[id]}面板`, `${names[id]} panel`))
         .child(svg(icons[id]).size(14).flex_none())
         .child(div().text_size(11).child(names[id]));
     };
@@ -473,20 +481,20 @@ export default class Tabs extends View {
         .flex_none()
         .rounded_full()
         .bg(fill ?? t.border)
-        .tooltip(clean(space.name) || "空间")
-        .accessibility_label(`当前空间 ${clean(space.name) || ""}`)))
+        .tooltip(clean(space.name) || pick("空间", "Space"))
+        .accessibility_label(pick(`当前空间 ${clean(space.name) || ""}`, `current space ${clean(space.name) || ""}`))))
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(shown.map(item)))
-      .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 }), "新建标签"))
+      .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 }), pick("新建标签", "New tab")))
       .when(Boolean(this.branch), el => el.child(this.branchChip(t)))
       .child(this.prChip(t))
       .child(this.waiting(t))
       .children(enabled.filter((id) => icons[id]).map((id) => panelButton(id)))
       .when(w?.buttons, el => el.child(h_flex().flex_none().gap(0)
-        .child(button("minimize", w.platform === "windows" ? svg("mods/inkstone-tabs/win-min.svg").size(16) : "−", () => run("window.minimize"), "最小化"))
-        .child(button("maximize", w.platform === "windows" ? svg(`mods/inkstone-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize"), w.maximized ? "还原窗口" : "最大化"))
-        .child(button("close-window", w.platform === "windows" ? svg("mods/inkstone-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"), "关闭窗口"))))
+        .child(button("minimize", w.platform === "windows" ? svg("mods/inkstone-tabs/win-min.svg").size(16) : "−", () => run("window.minimize"), pick("最小化", "Minimize")))
+        .child(button("maximize", w.platform === "windows" ? svg(`mods/inkstone-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize"), w.maximized ? pick("还原窗口", "Restore") : pick("最大化", "Maximize")))
+        .child(button("close-window", w.platform === "windows" ? svg("mods/inkstone-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"), pick("关闭窗口", "Close window")))))
       // 纸感：标签条底边不是 1px 描边，而是铅笔压出来的一道横线（只在最底下露 2px）。
       .when(PAPER(t), el => el.relative().child(div().absolute().left(0).right(0).bottom(0).h(2).overflow_hidden()
         .child(image("mods/inkstone-chrome/ink/rule-h.svg").absolute().left(-12).top(-12).w(3864).h(26))));

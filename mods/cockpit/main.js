@@ -8,9 +8,13 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, spaces, run, theme, props, closeOverlay } from "herdr";
+import { agents, spaces, run, theme, props, closeOverlay, shared } from "herdr";
 
-const LABEL = { working: "运行中", blocked: "待处理", done: "已完成", idle: "空闲" };
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
+
+const LABEL = { working: pick("运行中", "Running"), blocked: pick("待处理", "Waiting"), done: pick("已完成", "Done"), idle: pick("空闲", "Idle") };
 const tone = (t, s) => (s === "blocked" ? t.blocked : s === "done" ? t.done : s === "working" ? t.working : t.idle ?? t.dim);
 const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
 const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FOOT = 40;
@@ -83,7 +87,7 @@ function since(spaceId, tabId) {
 function duration(ms) {
   if (!ms || ms < 0) return "";
   const m = Math.floor(ms / 60000);
-  if (m < 1) return "刚刚";
+  if (m < 1) return pick("刚刚", "just now");
   if (m < 60) return `${m} 分钟`;
   const h = Math.floor(m / 60);
   if (h < 24) return `${h} 小时`;
@@ -144,7 +148,7 @@ export default class Cockpit extends View {
       .rounded(8)
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
-      .tooltip(`${a.program?.name ?? a.app ?? "智能体"} · ${a.space_name} · ${a.tab_name}`)
+      .tooltip(`${a.program?.name ?? a.app ?? pick("智能体", "Agents")} · ${a.space_name} · ${a.tab_name}`)
       .on_click(() => this.go(a))
       .child(dot(t, a.status))
       .child(v_flex()
@@ -194,8 +198,8 @@ export default class Cockpit extends View {
         .border_b(1)
         .border_color(t.border)
         .child(svg("mods/workspace-chrome/layers.svg").size(14).flex_none().text_color(t.accent))
-        .child(div().flex_1().text_size(13).font_semibold().child("驾驶舱"))
-        .child(div().text_size(11).text_color(blocked.length ? t.blocked : t.dim).child(blocked.length ? `${blocked.length} 待您处理` : "全部就绪"))
+        .child(div().flex_1().text_size(13).font_semibold().child(pick("驾驶舱", "Cockpit")))
+        .child(div().text_size(11).text_color(blocked.length ? t.blocked : t.dim).child(blocked.length ? `${blocked.length} 待您处理` : pick("全部就绪", "All clear")))
         .when(Boolean(props()?.overlay), (el) => el.child(div()
           .id("ck-close")
           .px(6)
@@ -219,10 +223,10 @@ export default class Cockpit extends View {
           .gap(8)
           .px(10)
           .pt(10)
-          .child(this.tile("ck-t-agents", "智能体", String(list.length), t.foreground, t))
-          .child(this.tile("ck-t-needs", "待处理", String(blocked.length), blocked.length ? t.blocked : t.foreground, t))
-          .child(this.tile("ck-t-work", "运行中", String(working.length), t.foreground, t))
-          .child(this.tile("ck-t-done", "已完成", String(done.length), done.length ? t.done : t.foreground, t)))
+          .child(this.tile("ck-t-agents", pick("智能体", "Agents"), String(list.length), t.foreground, t))
+          .child(this.tile("ck-t-needs", pick("待处理", "Waiting"), String(blocked.length), blocked.length ? t.blocked : t.foreground, t))
+          .child(this.tile("ck-t-work", pick("运行中", "Running"), String(working.length), t.foreground, t))
+          .child(this.tile("ck-t-done", pick("已完成", "Done"), String(done.length), done.length ? t.done : t.foreground, t)))
         .when(Boolean(next), (el) => el.child(
           v_flex()
             .id("ck-next")
@@ -234,7 +238,7 @@ export default class Cockpit extends View {
             .bg(t.raised)
             .border(1)
             .border_color(blocked.length ? t.blocked : t.border)
-            .child(h_flex().gap(6).items_center().child(div().text_size(11).text_color(t.dim).child("下一步行动"))
+            .child(h_flex().gap(6).items_center().child(div().text_size(11).text_color(t.dim).child(pick("下一步行动", "Next step")))
               .child(div().flex_1())
               .child(div().text_size(11).text_color(t.dim).child(duration(Date.now() - (next.since ?? Date.now())))))
             .child(div().text_size(13).font_semibold().text_color(blocked.length ? t.blocked : t.foreground).truncate().child(clean(next.a.title) || next.a.program?.name || next.a.address))
@@ -254,11 +258,11 @@ export default class Cockpit extends View {
                 .cursor_pointer()
                 .hover((s) => s.opacity(0.88))
                 .on_click(() => this.go(next.a))
-                .child("去处理")))),
+                .child(pick("去处理", "Handle it"))))),
         )
-        .when(blocked.length > 0, (el) => el.child(header("待您处理", blocked.length, t.blocked)).children(blocked.map((a) => this.row(a, t, "等待中"))))
-        .child(header("智能体", list.length))
-        .when(list.length === 0, (el) => el.child(div().px(14).py(8).text_size(12).text_color(t.dim).child("还没有智能体在跑。在终端里启动一个 agent 就会出现在这里。")))
+        .when(blocked.length > 0, (el) => el.child(header(pick("待您处理", "Needs you"), blocked.length, t.blocked)).children(blocked.map((a) => this.row(a, t, pick("等待中", "Waiting")))))
+        .child(header(pick("智能体", "Agents"), list.length))
+        .when(list.length === 0, (el) => el.child(div().px(14).py(8).text_size(12).text_color(t.dim).child(pick("还没有智能体在跑。在终端里启动一个 agent 就会出现在这里。", "No agent is running yet. Start one in a terminal and it shows up here."))))
         .children(list.filter((a) => a.status !== "blocked").map((a) => {
           const started = since(a.space, a.tab);
           return this.row(a, t, started ? duration(Date.now() - started) : "");

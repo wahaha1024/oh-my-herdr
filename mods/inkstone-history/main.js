@@ -19,6 +19,10 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
 import { panes, props, run, exec, hc, theme, home, appHome, checking, shared, readTextFile, writeTextFile, closeOverlay, openOverlay, setShared, watchFolder } from "herdr";
 
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
+
 const PAPER = (t) => Boolean(t.paper);
 const ink = (t, slot, fallback) => (PAPER(t) ? t[slot] : (t[fallback] ?? t.foreground));
 const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
@@ -119,7 +123,7 @@ for (const line of lines) {
   const cs = Array.isArray(m.content) ? m.content : [];
   for (const c of cs) {
     if (c.type === "text" && c.text) { if (s) s += " "; s += c.text; continue; }
-    if (c.type === "image") { if (s) s += " "; s += "[图片]"; continue; }
+    if (c.type === "image") { if (s) s += " "; s += pick("[图片]", "[image]"); continue; }
     if (c.type !== "toolCall") continue;
     let ag = c.arguments;
     if (typeof ag === "string") { try { ag = JSON.parse(ag); } catch (e) { ag = null; } }
@@ -444,7 +448,7 @@ async function readMessages(file, fromByte = 0) {
     `if ($ag) { if ($ag.path) { $h=[string]$ag.path } elseif ($ag.command) { $h=([string]$ag.command).Split([char]10)[0] } elseif ($ag.query) { $h=[string]$ag.query } }; ` +
     `$t=[string]$c.intent; if (-not $t) { $t=[string]$c.name }; if ($h) { $t=$t+' '+$h }; ` +
     `if ($t.Length -gt 120) { $t=$t.Substring(0,120) }; [void]$tl.Add($t) } ` +
-    `elseif ($c.type -eq 'image') { if ($s) { $s += ' ' }; $s += '[图片]' } }; ` +
+    `elseif ($c.type -eq 'image') { if ($s) { $s += ' ' }; $s += pick("[图片]", "[image]") } }; ` +
     `if (-not $s -and $tl.Count -eq 0) { continue }; if ($s.Length -gt 4000) { $s=$s.Substring(0,4000) }; ` +
     `[pscustomobject]@{ k='m'; id=$o.id; ts=$o.timestamp; role=$m.role; text=$s; tools=$tl } | ` +
     `ConvertTo-Json -Compress -Depth 4 }; ` +
@@ -599,10 +603,10 @@ function align(messages, lines) {
   return out;
 }
 
-function historyStatus(can, lines, pending = "对齐中…") {
-  if (can) return "这一轮还在终端里";
+function historyStatus(can, lines, pending = pick("对齐中…", "Aligning…")) {
+  if (can) return pick("这一轮还在终端里", "This turn is still in the terminal");
   if (lines === null) return pending;
-  if (lines < 0) return "读不到终端历史";
+  if (lines < 0) return pick("读不到终端历史", "Can't read the terminal history");
   return `已滚出终端（仅留 ${lines} 行）`;
 }
 
@@ -647,7 +651,7 @@ export default class History extends View {
     this.following = null;
     this.pendingReload = null;
     this.handle = cx.focus_handle();
-    this.input = InputState.new({ placeholder: "搜索提问、回复或工具…" });
+    this.input = InputState.new({ placeholder: pick("搜索提问、回复或工具…", "Search prompts, replies or tools…") });
     this.input.on("change", (_e, c) => {
       this.query = this.input.value();
       c.notify();
@@ -750,7 +754,7 @@ export default class History extends View {
         this.raw = [];
         this.align = [];
         this.histLines = null;
-        this.note = "没找到这个会话的记录";
+        this.note = pick("没找到这个会话的记录", "No record found for this session");
         return;
       }
       file = found.file;
@@ -765,7 +769,7 @@ export default class History extends View {
       if (cached) {
         this.apply(cached.items, true);
         this.loading = false;
-        this.note = "同步中…";
+        this.note = pick("同步中…", "Syncing…");
         cx.notify();
       }
       // 2) 只解析上次之后新增的字节；node 不可用时 from = 0，整份重来（等同改造前的行为）。
@@ -773,7 +777,7 @@ export default class History extends View {
       if (!current()) return;
       const got = await readMessages(file, from);
       if (!current()) return;
-      if (!got) throw new Error("会话文件读不出来");
+      if (!got) throw new Error(pick("会话文件读不出来", "Can't read the session file"));
       const items = got.from > 0 && cached ? cached.items.concat(got.items) : got.items;
       PARSED.set(file, { seen: got.seen, at: Date.now(), items });
       if (PARSED.size > 4) PARSED.delete(PARSED.keys().next().value);
@@ -897,7 +901,7 @@ export default class History extends View {
     const h = await readHistory(this.term);
     if (this.closed || this.source !== source) return;
     if (!h) {
-      this.note = "读不到终端历史";
+      this.note = pick("读不到终端历史", "Can't read the terminal history");
       cx.notify();
       return;
     }
@@ -988,7 +992,7 @@ export default class History extends View {
     const on = this.sel === i;
     const hasReply = Boolean(m.reply);
     const n = (m.tools || []).length;
-    const text = flat(m.text).slice(0, 200) || "(空)";
+    const text = flat(m.text).slice(0, 200) || pick("(空)", "(empty)");
     return div()
       .id(`hx-${m.id || i}`)
       .h(30)
@@ -1069,7 +1073,7 @@ export default class History extends View {
             .bg(tint(t.done, "26"))
             .text_size(FS.badge)
             .text_color(t.done)
-            .child("回复"),
+            .child(pick("回复", "Reply")),
         ),
       )
       .child(
@@ -1088,8 +1092,8 @@ export default class History extends View {
               .text_size(12)
               .text_color(t.accent)
               .hover((h) => h.text_color(t.foreground))
-              .tooltip("跳到终端里的这一轮")
-              .accessibility_label("跳到终端")
+              .tooltip(pick("跳到终端里的这一轮", "Jump to this turn in the terminal"))
+              .accessibility_label(pick("跳到终端", "Jump to the terminal"))
               .on_click((e, c) => {
                 c.stop_propagation();
                 this.jump(i, c);
@@ -1125,7 +1129,7 @@ export default class History extends View {
           .flex_none()
           .items_center()
           .gap(4)
-          .child(div().flex_none().text_size(10.5).font_weight(700).text_color(t.accent).child("上下文压缩"))
+          .child(div().flex_none().text_size(10.5).font_weight(700).text_color(t.accent).child(pick("上下文压缩", "Context compaction")))
           .when(bits.length > 0, (el) =>
             el.child(div().flex_none().text_size(10).text_color(t.muted).child(`· ${bits.join(" · ")}`)),
           ),
@@ -1176,7 +1180,7 @@ export default class History extends View {
   detail(t, m, i, cx) {
     const paper = PAPER(t);
     const can = this.align[i] >= 0;
-    const text = m.text || "(空)";
+    const text = m.text || pick("(空)", "(empty)");
     const reply = String(m.reply || "");
     const tools = m.tools || [];
     // 面板宽 460，12px 一行约 36 字；按真实的换行分段估高，短代码块不会被压成两行。
@@ -1208,19 +1212,19 @@ export default class History extends View {
               .child(historyStatus(can, this.histLines)),
           )
           .child(div().flex_1())
-          .child(this.textButton(t, "hx-read", "阅读", (c) => this.openRead(i, c)))
+          .child(this.textButton(t, "hx-read", pick("阅读", "Reader"), (c) => this.openRead(i, c)))
           .when(est(text) > 3, (el) =>
             el.child(
-              this.textButton(t, "hx-more", this.longText ? "收起" : "全文", (c) => {
+              this.textButton(t, "hx-more", this.longText ? pick("收起", "Collapse") : pick("全文", "Full text"), (c) => {
                 this.longText = !this.longText;
                 c.notify();
               }),
             ),
           )
-          .child(this.textButton(t, "hx-copy-q", "复制原文", (c) => this.copy(text, c)))
-          .when(reply !== "", (el) => el.child(this.textButton(t, "hx-copy-a", "复制回复", (c) => this.copy(reply, c))))
+          .child(this.textButton(t, "hx-copy-q", pick("复制原文", "Copy the original"), (c) => this.copy(text, c)))
+          .when(reply !== "", (el) => el.child(this.textButton(t, "hx-copy-a", pick("复制回复", "Copy the reply"), (c) => this.copy(reply, c))))
           // 主操作实心 accent，放最右；其余四个是描边按钮，一眼分得出该点哪个。
-          .when(can, (el) => el.child(primaryButton(t, "hx-jump", "跳到终端", (c) => this.jump(i, c)))),
+          .when(can, (el) => el.child(primaryButton(t, "hx-jump", pick("跳到终端", "Jump to the terminal"), (c) => this.jump(i, c)))),
       )
       .child(
         v_flex()
@@ -1231,7 +1235,7 @@ export default class History extends View {
           .pb(8)
           .gap(6)
           .overflow_y_scrollbar()
-          .child(sectionLabel(t, "提问", t.accent))
+          .child(sectionLabel(t, pick("提问", "Prompt"), t.accent))
           .child(
             div()
               .w_full()
@@ -1266,7 +1270,7 @@ export default class History extends View {
                         .when(!this.expand, (s) => s.child(tools.join(" · "))),
                     )
                     .child(
-                      this.textButton(t, "hx-expand", this.expand ? "收起" : "展开", (c) => {
+                      this.textButton(t, "hx-expand", this.expand ? pick("收起", "Collapse") : pick("展开", "Expand"), (c) => {
                         this.expand = !this.expand;
                         c.notify();
                       }),
@@ -1293,7 +1297,7 @@ export default class History extends View {
                 .when(paper, (s) => s.border_t(1).border_color(tint(t.rule, "b8")))
                 .pt(5)
                 .gap(3)
-                .child(sectionLabel(t, "回复", t.done))
+                .child(sectionLabel(t, pick("回复", "Reply"), t.done))
                 .child(
                   div()
                     .w_full()
@@ -1358,10 +1362,10 @@ export default class History extends View {
         this,
         t,
         v_flex().size_full().bg(t.paper ?? t.background).items_center().justify_center()
-          .child(div().text_size(12).text_color(t.dim).child("内容没有递过来，回面板再点一次")),
+          .child(div().text_size(12).text_color(t.dim).child(pick("内容没有递过来，回面板再点一次", "The content didn't arrive; go back to the panel and click again"))),
       );
     }
-    const text = r.text || "(空)";
+    const text = r.text || pick("(空)", "(empty)");
     const reply = String(r.reply || "");
     const tools = r.tools || [];
     const para = (s, size = FS.readBody, lh = "22px") =>
@@ -1403,17 +1407,17 @@ export default class History extends View {
           .truncate()
           .text_size(FS.sub)
           .text_color(this.tip ? t.done : r.can ? t.muted : t.dim)
-          .child(this.tip || historyStatus(r.can, r.lines, "打开阅读时尚未对齐")),
+          .child(this.tip || historyStatus(r.can, r.lines, pick("打开阅读时尚未对齐", "Not aligned when the reader opened"))),
       )
-      .child(this.textButton(t, "hx-r-copy-q", "复制原文", (c) => this.copy(text, c)))
-      .when(reply !== "", (el) => el.child(this.textButton(t, "hx-r-copy-a", "复制回复", (c) => this.copy(reply, c))))
+      .child(this.textButton(t, "hx-r-copy-q", pick("复制原文", "Copy the original"), (c) => this.copy(text, c)))
+      .when(reply !== "", (el) => el.child(this.textButton(t, "hx-r-copy-a", pick("复制回复", "Copy the reply"), (c) => this.copy(reply, c))))
       .when(r.can, (el) =>
         el.child(
-          primaryButton(t, "hx-r-jump", "跳到终端", (c) => {
+          primaryButton(t, "hx-r-jump", pick("跳到终端", "Jump to the terminal"), (c) => {
             run("pane.focus", { terminal: r.term });
             run("terminal.scroll", { terminal: r.term, to: "top" });
             run("terminal.scroll", { terminal: r.term, lines: Math.max(0, r.top) });
-            this.tip = "终端已滚到这一轮";
+            this.tip = pick("终端已滚到这一轮", "The terminal is scrolled to this turn");
             c.notify();
           }),
         ),
@@ -1441,16 +1445,16 @@ export default class History extends View {
           .overflow_y_scrollbar()
           .mode("always")
           .track_scroll(this.scroll)
-          .child(label("提问", t.accent))
+          .child(label(pick("提问", "Prompt"), t.accent))
           .child(para(text))
-          .when(reply !== "", (el) => el.child(label("回复", t.done)).child(para(reply, 13, "21px")))
+          .when(reply !== "", (el) => el.child(label(pick("回复", "Reply"), t.done)).child(para(reply, 13, "21px")))
           .when(tools.length > 0, (el) =>
             el.child(
               h_flex().flex_none().w_full().items_center().gap(8)
                 .child(sectionLabel(t, `工具 ${tools.length} 步`, t.working, 11))
                 .child(div().flex_1().h(1).bg(tint(paper ? t.rule : t.border, "b8")))
                 .child(
-                  this.textButton(t, "hx-r-tools", this.toolsOpen ? "收起" : "展开", (c) => {
+                  this.textButton(t, "hx-r-tools", this.toolsOpen ? pick("收起", "Collapse") : pick("展开", "Expand"), (c) => {
                     this.toolsOpen = !this.toolsOpen;
                     c.notify();
                   }),
@@ -1520,7 +1524,7 @@ export default class History extends View {
           .text_size(FS.title)
           .font_weight(700)
           .text_color(ink(t, "ink", "foreground"))
-          .child("历史发言"),
+          .child(pick("历史发言", "History")),
       )
       .child(
         div()
@@ -1566,7 +1570,7 @@ export default class History extends View {
             .text_size(11)
             .text_color(t.dim)
             .cursor_pointer()
-            .tooltip("清空搜索")
+            .tooltip(pick("清空搜索", "Clear the search"))
             .hover((h) => h.bg(t.hover).text_color(t.foreground))
             .on_click((_e, c) => {
               c.stop_propagation();
@@ -1588,7 +1592,7 @@ export default class History extends View {
       .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(this.note ? t.blocked : t.dim).child(
         this.note ||
           (this.loading
-            ? "读取…"
+            ? pick("读取…", "Reading…")
             : this.query.trim()
               ? `命中 ${vis.length} / ${this.messages.length} 条发言`
               : `${this.messages.length} 条发言`),
@@ -1606,16 +1610,16 @@ export default class History extends View {
             c.stop_propagation();
             this.latest(c);
           })
-          .child("回到最新"),
+          .child(pick("回到最新", "Back to the latest")),
       );
 
     const hint = (s) => div().px(12).py(12).text_size(FS.body).text_color(t.dim).child(s);
     const body = this.loading && !this.messages.length
-      ? [hint("读取会话…")]
+      ? [hint(pick("读取会话…", "Reading the session…"))]
       : !this.messages.length
-        ? [hint(this.note || "这个会话还没有发言")]
+        ? [hint(this.note || pick("这个会话还没有发言", "This session has no turns yet"))]
         : this.query.trim() && !vis.length
-          ? [hint("没有匹配的发言")]
+          ? [hint(pick("没有匹配的发言", "No matching turns"))]
           : rows;
 
     const inner = v_flex()

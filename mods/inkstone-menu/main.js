@@ -6,7 +6,11 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, focused, exec, window } from "herdr";
+import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, focused, exec, window, shared } from "herdr";
+
+// 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
+const LANG = "inkstone.lang";
+const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
 
 // A space's live folder: its first terminal's, else where it was made.
 function place(s) {
@@ -35,24 +39,24 @@ function items(p, git, more) {
       // A terminal shown outside a tab has no pane to split, zoom or close.
       const inTab = panes().some((pane) => pane.pane === tg.pane);
       return [
-        ["粘贴", "terminal.paste", {}, false],
-        ["复制选中", "terminal.copy", {}, false],
+        [pick("粘贴", "Paste"), "terminal.paste", {}, false],
+        [pick("复制选中", "Copy selection"), "terminal.copy", {}, false],
         ...(inTab
           ? [
-              ["向右分屏", "pane.split", { direction: "right", pane: tg.pane }, true],
-              ["向下分屏", "pane.split", { direction: "down", pane: tg.pane }, false],
-              ["最大化 / 还原", "pane.zoom", { pane: tg.pane }, false],
+              [pick("向右分屏", "Split right"), "pane.split", { direction: "right", pane: tg.pane }, true],
+              [pick("向下分屏", "Split down"), "pane.split", { direction: "down", pane: tg.pane }, false],
+              [pick("最大化 / 还原", "Maximize / restore"), "pane.zoom", { pane: tg.pane }, false],
             ]
           : []),
         ...(term
           ? [
               toProgram
-                ? ["右键改用菜单", "terminal.right_click", { terminal: term.address, to: "menu" }, true]
-                : ["右键直接送达终端", "terminal.right_click", { terminal: term.address, to: "program" }, true],
+                ? [pick("右键改用菜单", "Switch right-click to the menu"), "terminal.right_click", { terminal: term.address, to: "menu" }, true]
+                : [pick("右键直接送达终端", "Send right-click straight to the terminal"), "terminal.right_click", { terminal: term.address, to: "program" }, true],
             ]
           : []),
-        ...(parent ? [[`交回 ${parent.name || parent.address}`, "terminal.park", { terminal: term.address }, true]] : []),
-        ...(inTab ? [["关闭窗格", "pane.close", { pane: tg.pane }, true]] : []),
+        ...(parent ? [[pick(`交回 ${parent.name || parent.address}`, `Hand back to ${parent.name || parent.address}`), "terminal.park", { terminal: term.address }, true]] : []),
+        ...(inTab ? [[pick("关闭窗格", "Close pane"), "pane.close", { pane: tg.pane }, true]] : []),
       ];
     }
     case "agent": {
@@ -60,16 +64,16 @@ function items(p, git, more) {
       // 二级视图：斜杠命令会原样打进会话并回车，所以收在这一层里，多点一次才执行。
       if (more) {
         return [
-          ["← 返回", "inkstone.back", {}, false],
-          ["/fork 分叉会话", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/fork" }, true],
-          ["/compact 压缩上下文", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/compact" }, false],
-          ["/context 上下文占用", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/context" }, false],
-          ["/cost 花费", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/cost" }, false],
-          ["/status 状态", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/status" }, false],
-          ["/tree 查看会话树", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/tree" }, false],
-          ["/export 导出会话", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/export" }, false],
-          ["/rewind 回退", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/rewind" }, true],
-          ["/clear 清空会话", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/clear" }, false],
+          [pick("← 返回", "← Back"), "inkstone.back", {}, false],
+          [pick("/fork 分叉会话", "/fork fork the session"), "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/fork" }, true],
+          [pick("/compact 压缩上下文", "/compact compact the context"), "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/compact" }, false],
+          [pick("/context 上下文占用", "/context context usage"), "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/context" }, false],
+          [pick("/cost 花费", "/cost cost"), "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/cost" }, false],
+          [pick("/status 状态", "/status status"), "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/status" }, false],
+          [pick("/tree 查看会话树", "/tree session tree"), "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/tree" }, false],
+          [pick("/export 导出会话", "/export export the session"), "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/export" }, false],
+          [pick("/rewind 回退", "/rewind rewind"), "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/rewind" }, true],
+          [pick("/clear 清空会话", "/clear clear the session"), "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/clear" }, false],
         ];
       }
       const working = tg.status === "working";
@@ -77,41 +81,41 @@ function items(p, git, more) {
         ?? spaces().find((s) => s.id === tg.space)?.folder
         ?? null;
       return [
-        ["重命名会话", "tab.rename", { id: tg.tab }, false],
-        [tg.pinned ? "取消置顶" : "置顶会话", "terminal.pin", { terminal: tg.terminal, pinned: !tg.pinned }, false],
-        ["暂存会话", "tab.settle", { id: tg.tab }, true],
-        ["前移", "tab.move", { id: tg.tab, by: "-" }, false],
-        ["后移", "tab.move", { id: tg.tab, by: "+" }, false],
-        ["同空间新标签", "tab.new", { space: tg.space }, false],
-        ["左右分屏", "pane.split", { pane: tg.pane, direction: "right" }, false],
-        ["向下分屏", "pane.split", { pane: tg.pane, direction: "down" }, false],
-        ["最大化 / 还原", "pane.zoom", { pane: tg.pane }, false],
-        ["快速窥视", "terminal.peek", { terminal: tg.terminal }, false],
-        ...(folder ? [["打开所在目录", "inkstone.open", { folder }, false]] : []),
+        [pick("重命名会话", "Rename session"), "tab.rename", { id: tg.tab }, false],
+        [tg.pinned ? pick("取消置顶", "Unpin") : pick("置顶会话", "Pin to top"), "terminal.pin", { terminal: tg.terminal, pinned: !tg.pinned }, false],
+        [pick("暂存会话", "Put the session away"), "tab.settle", { id: tg.tab }, true],
+        [pick("前移", "Move left"), "tab.move", { id: tg.tab, by: "-" }, false],
+        [pick("后移", "Move right"), "tab.move", { id: tg.tab, by: "+" }, false],
+        [pick("同空间新标签", "New tab in this space"), "tab.new", { space: tg.space }, false],
+        [pick("左右分屏", "Split right"), "pane.split", { pane: tg.pane, direction: "right" }, false],
+        [pick("向下分屏", "Split down"), "pane.split", { pane: tg.pane, direction: "down" }, false],
+        [pick("最大化 / 还原", "Maximize / restore"), "pane.zoom", { pane: tg.pane }, false],
+        [pick("快速窥视", "Peek"), "terminal.peek", { terminal: tg.terminal }, false],
+        ...(folder ? [[pick("打开所在目录", "Open its folder"), "inkstone.open", { folder }, false]] : []),
         // 会改变 agent 行为的两条单独放：跑着时只给「中断」，停下了才给「压缩」。
         working
-          ? ["中断当前回合", "inkstone.hc", { hc: "interrupt", terminal: tg.terminal }, true]
-          : ["压缩上下文（/compact）", "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/compact" }, true],
-        ["更多命令…", "inkstone.more", {}, false],
-        ["复制终端地址", "inkstone.copy", { text: tg.terminal ?? "" }, true],
-        ["关闭会话", "tab.close", { id: tg.tab }, false],
+          ? [pick("中断当前回合", "Interrupt this turn"), "inkstone.hc", { hc: "interrupt", terminal: tg.terminal }, true]
+          : [pick("压缩上下文（/compact）", "Compact the context (/compact)"), "inkstone.hc", { hc: "send", terminal: tg.terminal, text: "/compact" }, true],
+        [pick("更多命令…", "More commands…"), "inkstone.more", {}, false],
+        [pick("复制终端地址", "Copy terminal address"), "inkstone.copy", { text: tg.terminal ?? "" }, true],
+        [pick("关闭会话", "Close session"), "tab.close", { id: tg.tab }, false],
       ];
     }
     case "tab":
       return [
-        ["重命名标签", "tab.rename", { id: tg.id }, false],
-        ["新建标签", "tab.new", { space: tg.space }, false],
-        ["暂存标签", "tab.settle", { id: tg.id }, false],
-        ["关闭标签", "tab.close", { id: tg.id }, true],
+        [pick("重命名标签", "Rename tab"), "tab.rename", { id: tg.id }, false],
+        [pick("新建标签", "New tab"), "tab.new", { space: tg.space }, false],
+        [pick("暂存标签", "Put the tab away"), "tab.settle", { id: tg.id }, false],
+        [pick("关闭标签", "Close tab"), "tab.close", { id: tg.id }, true],
       ];
     case "dir": {
       // 目录头右键：这里的动作都以「目录」为目标，不是某个空间。
       const local = !tg.machine;
       return [
-        ["新建文件夹…", "inkstone.space", { mode: "folder", folder: tg.folder, machine: tg.machine ?? null }, false],
-        ["在此新建空间…", "inkstone.space", { mode: "space", folder: tg.folder, machine: tg.machine ?? null }, false],
-        ["复制路径", "inkstone.copy", { text: tg.folder ?? "" }, true],
-        ...(local ? [["在文件管理器中打开", "inkstone.open", { folder: tg.folder }, false]] : []),
+        [pick("新建文件夹…", "New folder…"), "inkstone.space", { mode: "folder", folder: tg.folder, machine: tg.machine ?? null }, false],
+        [pick("在此新建空间…", "New space here…"), "inkstone.space", { mode: "space", folder: tg.folder, machine: tg.machine ?? null }, false],
+        [pick("复制路径", "Copy path"), "inkstone.copy", { text: tg.folder ?? "" }, true],
+        ...(local ? [[pick("在文件管理器中打开", "Show in files"), "inkstone.open", { folder: tg.folder }, false]] : []),
       ];
     }
     case "machine": {
@@ -119,38 +123,38 @@ function items(p, git, more) {
       const on = tg.machine ?? null;
       const root = tg.root ?? null;
       return [
-        ["新建文件夹…", "inkstone.space", { mode: "folder", folder: root, machine: on }, false],
-        ["在此新建空间…", "inkstone.space", { mode: "space", folder: root, machine: on }, false],
-        ["设置根目录…", "inkstone.space", { mode: "root", machine: on }, true],
-        ...(root ? [["复制路径", "inkstone.copy", { text: root }, false]] : []),
+        [pick("新建文件夹…", "New folder…"), "inkstone.space", { mode: "folder", folder: root, machine: on }, false],
+        [pick("在此新建空间…", "New space here…"), "inkstone.space", { mode: "space", folder: root, machine: on }, false],
+        [pick("设置根目录…", "Set the root folder…"), "inkstone.space", { mode: "root", machine: on }, true],
+        ...(root ? [[pick("复制路径", "Copy path"), "inkstone.copy", { text: root }, false]] : []),
       ];
     }
     case "space":
       return [
-        ["重命名空间", "space.rename", { id: tg.id }, false],
-        ["新开终端页", "tab.new", { space: tg.id }, false],
+        [pick("重命名空间", "Rename space"), "space.rename", { id: tg.id }, false],
+        [pick("新开终端页", "New terminal tab"), "tab.new", { space: tg.id }, false],
         ...(git
           ? [
-              ["新建工作树", "worktree", { space: tg.id, action: "new" }, true],
-              ["打开工作树", "worktree", { space: tg.id, action: "open" }, false],
+              [pick("新建工作树", "New worktree"), "worktree", { space: tg.id, action: "new" }, true],
+              [pick("打开工作树", "Open worktree"), "worktree", { space: tg.id, action: "open" }, false],
             ]
           : []),
-        ...(git === "linked" ? [["移除工作树", "worktree", { space: tg.id, action: "remove" }, false]] : []),
+        ...(git === "linked" ? [[pick("移除工作树", "Remove worktree"), "worktree", { space: tg.id, action: "remove" }, false]] : []),
         // 归属目录决定这个空间在侧栏归到哪个项目，独立于它此刻的 cwd。
-        ["设置归属目录…", "inkstone.space", { mode: "bind", space: tg.id, folder: tg.folder ?? null, machine: tg.machine ?? null }, true],
-        ["关闭空间", "space.close", { id: tg.id }, true],
+        [pick("设置归属目录…", "Set the project folder…"), "inkstone.space", { mode: "bind", space: tg.id, folder: tg.folder ?? null, machine: tg.machine ?? null }, true],
+        [pick("关闭空间", "Close space"), "space.close", { id: tg.id }, true],
       ];
     default:
       return [
-        ["新建空间", "space.new", {}, false],
-        ["命令面板", "app.palette", {}, false],
-        ["设置", "app.settings", {}, false],
-        ["OMH 偏好", "mod.open", { name: "inkstone-settings" }, false],
-        ["快捷键", "app.help", {}, true],
-        ["主题：青瓷（浅）", "app.theme", { name: "qingci" }, true],
-        ["主题：宣纸（浅）", "app.theme", { name: "xuanzhi" }, false],
-        ["主题：玄墨（深）", "app.theme", { name: "xuanmo" }, false],
-        ["主题：沧海（深）", "app.theme", { name: "canghai" }, false],
+        [pick("新建空间", "New space"), "space.new", {}, false],
+        [pick("命令面板", "Command palette"), "app.palette", {}, false],
+        [pick("设置", "Settings"), "app.settings", {}, false],
+        [pick("OMH 偏好", "Layout preferences"), "mod.open", { name: "inkstone-settings" }, false],
+        [pick("快捷键", "Shortcuts"), "app.help", {}, true],
+        [pick("主题：青瓷（浅）", "Theme: Qingci (light)"), "app.theme", { name: "qingci" }, true],
+        [pick("主题：宣纸（浅）", "Theme: Xuanzhi (light)"), "app.theme", { name: "xuanzhi" }, false],
+        [pick("主题：玄墨（深）", "Theme: Xuanmo (dark)"), "app.theme", { name: "xuanmo" }, false],
+        [pick("主题：沧海（深）", "Theme: Canghai (dark)"), "app.theme", { name: "canghai" }, false],
       ];
   }
 }
