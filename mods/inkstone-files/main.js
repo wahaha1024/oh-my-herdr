@@ -298,11 +298,16 @@ export default class InkstoneFiles extends View {
 
   refresh(cx) {
     const { cwd, on } = location();
-    const base = this.above ?? cwd;
     const next = locKey();
-    if (next !== this.context?.key) {
+    const switching = next !== this.context?.key;
+    if (switching) {
       this.stopWatching();
-      if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
+      if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file, above: this.above });
+      // 上级目录跟着空间走：切回原空间还在那一层，切到别的空间不会拿它的父目录。
+      this.above = this.saved.get(next)?.above ?? null;
+    }
+    const base = this.above ?? cwd;
+    if (switching) {
       const saved = this.saved.get(next);
       this.context = { key: next, cwd: base, on };
       this.root = base;
@@ -321,7 +326,7 @@ export default class InkstoneFiles extends View {
       this.loading = false;
       if (saved?.file) this.show(saved.file, cx);
     }
-    if (!cwd || this.loading) return;
+    if (!base || this.loading) return;
     const context = this.context;
     this.loading = true;
     this.limited = false;
@@ -331,7 +336,7 @@ export default class InkstoneFiles extends View {
           if (!this.current(context)) return;
           await this.loadFolder(path, context);
         }
-        const { vcs, marks } = await this.detectMarks(cwd, on);
+        const { vcs, marks } = await this.detectMarks(base, on);
         if (!this.current(context)) return;
         if (vcs !== this.vcs) {
           this.vcs = vcs;
@@ -340,7 +345,7 @@ export default class InkstoneFiles extends View {
         }
         this.marks = marks;
         this.error = null;
-        this.watch(cwd, cx);
+        this.watch(base, cx);
         if (!this.indexReady && !this.indexLoading) {
           this.loadIndex(cx);
         }
@@ -426,8 +431,12 @@ export default class InkstoneFiles extends View {
     const full = normPath(path);
     const root = normPath(this.root);
     if (!root || !isAbs(full)) return path;
-    if (full === root) return null;
-    if (full.startsWith(`${root}/`)) return full.slice(root.length + 1);
+    // Windows 路径大小写不敏感：E:/dsh/x 与 E:/DSH/x 是同一个目录，
+    // 按原样比较会把根内的文件当成根外，预览就退成绝对路径、复制也带上盘符。
+    const f = full.toLowerCase();
+    const r = root.toLowerCase();
+    if (f === r) return null;
+    if (f.startsWith(`${r}/`)) return full.slice(root.length + 1);
     return path;
   }
 
@@ -529,8 +538,8 @@ export default class InkstoneFiles extends View {
       .text_size(10)
       .text_color(ok ? t.done : t.dim)
       .cursor_pointer()
-      .tooltip(ok ? pick("已复制", "Copied") : `复制 @${path}（可粘贴到终端引用）`)
-      .accessibility_label(`复制引用 @${path}`)
+      .tooltip(ok ? pick("已复制", "Copied") : pick(`复制 @${path}（可粘贴到终端引用）`, `Copy @${path} (paste it into a terminal to reference it)`))
+      .accessibility_label(pick(`复制引用 @${path}`, `Copy reference @${path}`))
       .hover((s) => s.bg(t.raised).text_color(t.foreground))
       .on_click((_e, cx) => {
         cx.stop_propagation();
@@ -562,7 +571,7 @@ export default class InkstoneFiles extends View {
           .hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => (entry.dir ? this.toggle(path, cx) : this.show(path, cx)))
           .child(entry.dir
-            ? svg(`mods/files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim)
+            ? svg(`mods/inkstone-chrome/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim)
             : div().w(12).flex_none())
           .child(image(fileIcon(path, entry.dir, open, dark)).size(14).flex_none())
           .child(div().flex_1().min_w(0).truncate().text_size(12).child(entry.name))
@@ -630,8 +639,8 @@ export default class InkstoneFiles extends View {
     const markCount = Object.keys(this.marks).length;
     const hits = q ? this.searchHits() : null;
     const footerLeft = this.vcs
-      ? `${this.vcs.toUpperCase()} · ${markCount} 处改动`
-      : (this.indexReady ? `已索引 ${this.index.length} 个文件` : (this.root ? pick("普通目录", "Folder") : pick("无目录", "No folder")));
+      ? pick(`${this.vcs.toUpperCase()} · ${markCount} 处改动`, `${this.vcs.toUpperCase()} · ${markCount} changes`)
+      : (this.indexReady ? pick(`已索引 ${this.index.length} 个文件`, `${this.index.length} files indexed`) : (this.root ? pick("普通目录", "Folder") : pick("无目录", "No folder")));
 
     return v_flex()
       .id("inkstone-files")
@@ -692,7 +701,7 @@ export default class InkstoneFiles extends View {
           .text_size(11)
           .text_color(this.copied === this.file ? t.done : t.muted)
           .cursor_pointer()
-          .tooltip(`复制 @${this.file}`)
+          .tooltip(pick(`复制 @${this.file}`, `Copy @${this.file}`))
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click((_e, cx) => this.copyMention(this.file, cx))
           .child(this.copied === this.file ? pick("已复制", "Copied") : pick("复制 @路径", "Copy @path"))))

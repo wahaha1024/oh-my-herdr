@@ -73,8 +73,11 @@ const SOURCES = {
   codebuddy: { label: "CodeBuddy", dir: ".codebuddy/projects", bin: "codebuddy", argv: (id) => ["--resume", id] },
   pi: { label: "Pi", dir: ".pi/agent/sessions", bin: "pi", argv: (id) => ["--session", id] },
   opencode: { label: "OpenCode", bin: "opencode", argv: (id) => ["--session", id] },
-  local: { label: pick("本地", "Local"), bin: null, argv: null },
+  local: { label: "Local", bin: null, argv: null },
 };
+// 只有「本地」这一项随语言变；其余是产品名，不翻译。
+const srcLabel = (k) => (k === "local" ? pick("本地", "Local") : SOURCES[k]?.label ?? k);
+
 
 const SOURCE_ORDER = ["omp", "codex", "claude", "codebuddy", "pi", "opencode", "local"];
 
@@ -288,9 +291,9 @@ const SH_SCAN = [
 const ago = (sec) => {
   const d = Math.max(0, Math.floor(Date.now() / 1000) - sec);
   if (d < 60) return pick("刚刚", "just now");
-  if (d < 3600) return `${Math.floor(d / 60)} 分钟前`;
-  if (d < 86400) return `${Math.floor(d / 3600)} 小时前`;
-  if (d < 86400 * 30) return `${Math.floor(d / 86400)} 天前`;
+  if (d < 3600) return pick(`${Math.floor(d / 60)} 分钟前`, `${Math.floor(d / 60)}m ago`);
+  if (d < 86400) return pick(`${Math.floor(d / 3600)} 小时前`, `${Math.floor(d / 3600)}h ago`);
+  if (d < 86400 * 30) return pick(`${Math.floor(d / 86400)} 天前`, `${Math.floor(d / 86400)}d ago`);
   return new Date(sec * 1000).toLocaleDateString("zh-CN");
 };
 const base = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
@@ -515,7 +518,7 @@ export default class Sessions extends View {
     const fail = (reason) => {
       if (silent && !on) return;
       this.failed = true;
-      this.failReason = on ? `「${on}」上的会话扫描需要 sh 和 awk。${reason}` : reason;
+      this.failReason = on ? pick(`「${on}」上的会话扫描需要 sh 和 awk。${reason}`, `Scanning sessions on ${on} needs sh and awk. ${reason}`) : reason;
     };
     const job = useWin
       ? exec("powershell", buildPsScan(target), { timeout: 25000 })
@@ -525,7 +528,7 @@ export default class Sessions extends View {
         if (this.scanContext !== context) return;
         if (r?.code !== 0) {
           const err = String(r?.stderr ?? "").trim().split(/\r?\n/).filter(Boolean).pop();
-          const code = `退出码 ${r?.code ?? pick("未知", "Unknown")}`;
+          const code = pick(`退出码 ${r?.code ?? pick("未知", "Unknown")}`, `exit ${r?.code ?? pick("未知", "Unknown")}`);
           fail(err ? `${code}：${err}` : code);
           return;
         }
@@ -616,7 +619,7 @@ export default class Sessions extends View {
     const src = SOURCES[s.src];
     if (!src.bin || !src.argv) {
       cx.write_to_clipboard(s.id);
-      notify({ title: pick("本地对话归档", "Local chat archive"), body: `已复制记录 ID：${s.id}`, level: "info" });
+      notify({ title: pick("本地对话归档", "Local chat archive"), body: pick(`已复制记录 ID：${s.id}`, `Copied record id: ${s.id}`), level: "info" });
       return;
     }
     const bin = this.bins.get(this.activeMachine())?.paths[s.src] ?? src.bin;
@@ -624,7 +627,7 @@ export default class Sessions extends View {
     if (s.cwd) args.folder = s.cwd;
     this.resumed.add(s.id);
     run("terminal.open", args);
-    notify({ title: `正在恢复 ${src.label} 会话`, body: s.t || s.id, level: "info" });
+    notify({ title: `${pick("正在恢复", "Resuming")} ${srcLabel(s.src)} ${pick("会话", "session")}`, body: s.t || s.id, level: "info" });
   }
 
   copyCmd(s, cx) {
@@ -679,7 +682,7 @@ export default class Sessions extends View {
     const okFiles = new Set();
     const okOc = new Set();
     let errMsg = "";
-    const remoteHint = on ? `无法在「${on}」完成删除，请确认远端在线且可运行 sh。` : "";
+    const remoteHint = on ? pick(`无法在「${on}」完成删除，请确认远端在线且可运行 sh。`, `Could not delete on ${on}; check that the machine is online and can run sh.`) : "";
     try {
       if (useWin) {
         const removeBatch = async (batch, db) => {
@@ -729,7 +732,7 @@ export default class Sessions extends View {
               else if (db && ln.startsWith("OC\t")) okOc.add(`${db}\0${ln.slice(3)}`);
               else if (ln.startsWith("ERR\t")) errMsg ||= ln.split("\t").slice(2).join(" ");
             }
-            if (r.code !== 0) errMsg ||= r.stderr.trim() || `PowerShell 退出码 ${r.code}`;
+            if (r.code !== 0) errMsg ||= r.stderr.trim() || pick(`PowerShell 退出码 ${r.code}`, `PowerShell exit ${r.code}`);
           } catch (e) {
             errMsg ||= String(e?.message ?? e);
           }
@@ -744,7 +747,7 @@ export default class Sessions extends View {
           const r = await exec("sh", ["-c", shDel, "sh", ...files], { on, timeout: 20000 });
           for (const ln of String(r?.stdout ?? "").split(/\r?\n/)) {
             if (ln.startsWith("OK\t")) okFiles.add(ln.slice(3));
-            else if (ln.startsWith("ERR\t") && !errMsg) errMsg = `删除失败：${ln.slice(4)}`;
+            else if (ln.startsWith("ERR\t") && !errMsg) errMsg = pick(`删除失败：${ln.slice(4)}`, `Delete failed: ${ln.slice(4)}`);
           }
           if (r?.code !== 0 && !errMsg) errMsg = String(r?.stderr ?? "").trim() || `sh 退出码 ${r?.code ?? pick("未知", "Unknown")}`;
         }
@@ -815,7 +818,7 @@ export default class Sessions extends View {
         String(s.t ?? "").toLowerCase().includes(q)
         || String(s.cwd ?? "").toLowerCase().includes(q)
         || String(s.id ?? "").toLowerCase().includes(q)
-        || (SOURCES[s.src]?.label ?? "").toLowerCase().includes(q)
+        || srcLabel(s.src).toLowerCase().includes(q)
       ));
     }
     return items;
@@ -840,12 +843,12 @@ export default class Sessions extends View {
     const askingDel = !this.manage && this.confirmOne === key;
     const canDel = s.src === "opencode" ? Boolean(s.file && s.id) : (s.files ?? (s.file ? [s.file] : [])).some(safeSessionFile);
     const tip = this.manage
-      ? `${s.cwd || "?"}\n点击选中或取消选中`
+      ? `${s.cwd || "?"}\n${pick("点击选中或取消选中", "click to select or deselect")}`
       : up
-        ? `${s.cwd || "?"}\n这个会话正开着：点一下切过去，不重新加载`
+        ? `${s.cwd || "?"}\n${pick("这个会话正开着：点一下切过去，不重新加载", "this session is already open: click to switch to it without reloading")}`
         : src.bin
-          ? `${s.cwd || "?"}\n点一下：${this.cmdString(s)}`
-          : `${s.cwd || "?"}\n本地归档记录（点一下复制 ID）`;
+          ? `${s.cwd || "?"}\n${pick("点一下", "click to run")}: ${this.cmdString(s)}`
+          : `${s.cwd || "?"}\n${pick("本地归档记录（点一下复制 ID）", "local archive entry (click to copy its id)")}`;
     return h_flex()
       .id(`ses-${i}`)
       .h(46)
@@ -875,7 +878,7 @@ export default class Sessions extends View {
         .bg(checked ? t.accent : t.background)
         .when(checked, (b) => b.child(svg("mods/inkstone-chrome/check.svg").size(10).text_color(t.accent_foreground)))))
       .child(div().w(44).flex_none().flex().items_center().justify_center().rounded(5).h(18).bg(t.raised)
-        .child(div().text_size(9).text_color(this.badgeColor(s.src, t)).child(src.label)))
+        .child(div().text_size(9).text_color(this.badgeColor(s.src, t)).child(srcLabel(s.src))))
       .child(v_flex()
         .flex_1()
         .min_w(0)
@@ -1126,8 +1129,8 @@ export default class Sessions extends View {
         .pt(6)
         .gap(4)
         .flex_wrap()
-        .child(this.pill(t, "all", `全部 ${scoped.length}`, cx))
-        .children(activeSources.map((k) => this.pill(t, k, `${SOURCES[k].label} ${counts[k]}`, cx)))))
+        .child(this.pill(t, "all", pick(`全部 ${scoped.length}`, `All ${scoped.length}`), cx))
+        .children(activeSources.map((k) => this.pill(t, k, `${srcLabel(k)} ${counts[k]}`, cx)))))
       .when(scoped.length > 0 || this.timeRange !== "all", (el) => el.child(h_flex()
         .flex_none()
         .px(8)
@@ -1135,9 +1138,9 @@ export default class Sessions extends View {
         .gap(4)
         .flex_wrap()
         .child(this.timePill(t, "all", pick("不限时间", "Any time"), cx))
-        .child(this.timePill(t, "7d", `7天内 ${tCounts["7d"]}`, cx))
-        .child(this.timePill(t, "30d", `30天内 ${tCounts["30d"]}`, cx))
-        .child(this.timePill(t, "gt30d", `30天外 ${tCounts["gt30d"]}`, cx))))
+        .child(this.timePill(t, "7d", pick(`7天内 ${tCounts["7d"]}`, `7 days ${tCounts["7d"]}`), cx))
+        .child(this.timePill(t, "30d", pick(`30天内 ${tCounts["30d"]}`, `30 days ${tCounts["30d"]}`), cx))
+        .child(this.timePill(t, "gt30d", pick(`30天外 ${tCounts["gt30d"]}`, `Older ${tCounts["gt30d"]}`), cx))))
       .when(this.manage, (el) => {
         const allSelected = list.length > 0 && list.every((s) => this.selected.has(`${s.src}:${s.id}`));
         const selItems = this.list.filter((s) => this.selected.has(`${s.src}:${s.id}`));
@@ -1173,7 +1176,7 @@ export default class Sessions extends View {
               cx.notify();
             })
             .child(allSelected ? pick("取消全选", "Deselect all") : pick("全选", "Select all")))
-          .child(div().text_size(11).text_color(t.dim).child(`已选 ${nSel}`))
+          .child(div().text_size(11).text_color(t.dim).child(pick(`已选 ${nSel}`, `${nSel} selected`)))
           .child(div().flex_1())
           .when(this.confirmBatch && nSel > 0, (b) => b
             .child(div()
@@ -1249,7 +1252,7 @@ export default class Sessions extends View {
         .text_size(10)
         .text_color(t.dim)
         .child(div().truncate().child(activeSources.length
-          ? `来源：${activeSources.map((k) => SOURCES[k].label).join(" · ")}`
+          ? `${pick("来源", "Sources")}: ${activeSources.map(srcLabel).join(" · ")}`
           : pick("OMP / Codex / Claude / Pi / 本地", "OMP / Codex / Claude / Pi / Local")))
         .child(div().flex_none().child(this.manage ? pick("点行勾选 · Esc 退出", "Click a row to tick it · Esc leaves") : pick("点行恢复 · Esc 清空搜索", "Click a row to resume · Esc clears the search"))));
   }
@@ -1342,7 +1345,7 @@ export default class Sessions extends View {
             this.all = true;
             cx.notify();
           })
-          .child(`查看全部目录 (${this.list.length})`));
+          .child(pick(`查看全部目录 (${this.list.length})`, `Show all folders (${this.list.length})`)));
     }
     return div().p(10).text_size(12).text_color(t.dim).child(pick("还没有找到会话记录。", "No sessions found yet."));
   }

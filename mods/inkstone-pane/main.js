@@ -74,8 +74,10 @@ export default class Pane extends View {
   }
 
   // 只给 OMP 终端加历史按钮：它的会话记录存在 ~/.omp 下，别的程序没有。
+  // 远端机器上的终端地址带机器前缀（`server|t1`），会话在本机读不到，不显示按下没反应的按钮。
   isOmp(p) {
-    return Boolean(p?.terminal) && (p.app === "omp" || p.program?.key === "omp");
+    if (!(Boolean(p?.terminal) && (p.app === "omp" || p.program?.key === "omp"))) return false;
+    return !String(p.terminal).includes("|");
   }
 
   // 常驻的历史发言按钮：开过就高亮，再点一次收起。

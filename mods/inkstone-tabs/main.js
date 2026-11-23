@@ -161,6 +161,9 @@ function closePanel() {
 export default class Tabs extends View {
   init(_p, cx) {
     this.pressed = null;
+    this.pressedAt = 0;      // 上次按下的时刻：拖出标签栏再松开时 root 收不到 mouse_up，靠它判过期
+    this.closing = null;     // 等二次确认的标签 id
+    this.closingAt = 0;
     this.scroll = ScrollHandle.new();
     this.workWidth = null;
     this.drawerConstrained = false;
@@ -303,7 +306,7 @@ export default class Tabs extends View {
   branchChip(t) {
     return h_flex().id("branch-chip").flex_none().h(26).px(7).gap(5).items_center().rounded(6)
       .text_color(t.muted).tooltip(this.branch ?? pick("当前目录不在 Git 仓库中", "This folder is not in a Git repository")).accessibility_label(pick(`分支 ${this.branch ?? "无"}`, `branch ${this.branch ?? "none"}`))
-      .child(svg("mods/workspace-chrome/git-branch.svg").size(12).flex_none().text_color(t.dim))
+      .child(svg("mods/inkstone-chrome/git-branch.svg").size(12).flex_none().text_color(t.dim))
       .child(div().max_w(150).truncate().text_size(12).child(this.branch ?? ""));
   }
 
@@ -321,7 +324,7 @@ export default class Tabs extends View {
       .tooltip(tip).accessibility_label(pick(`拉取请求 ${p.number} ${label}`, `pull request ${p.number} ${label}`)).hover(s => s.bg(t.hover))
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click(() => exec("gh", ["pr", "view", String(p.number), "--web"], { timeout: 0 }).catch(() => {}))
-      .child(svg("mods/workspace-chrome/git-compare.svg").size(11).flex_none().text_color(color))
+      .child(svg("mods/inkstone-chrome/git-compare.svg").size(11).flex_none().text_color(color))
       .child(div().text_size(11).text_color(t.foreground).child(`#${p.number}`))
       .child(div().text_size(11).text_color(color).child(label))
       .when(this.prStale, el => el.child(div().text_size(10).text_color(t.dim).child("?")));
@@ -407,21 +410,43 @@ export default class Tabs extends View {
           .when(Boolean(wash), (x) => x.bg(wash))
           .when(!wash && c.active, (x) => x.bg(`${MARK}9e`))
           .hover(s => s.bg(wash ? tint(tone, "3d") : (c.active ? `${MARK}9e` : `${MARK}4d`))))
-        .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
+        .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; this.pressedAt = Date.now(); if (e.click_count === 2) run("tab.rename", { id: c.id }); })
         .on_mouse_up("left", () => {
           const from = this.pressed; this.pressed = null;
-          if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
+          // 拖到标签栏外再松手时 root 收不到 mouse_up，pressed 会留到下一次点击：
+          // 超过 4 秒的按压不当拖拽，只做选中，免得点另一个标签时把它挪走。
+          const stale = Date.now() - this.pressedAt > 4000;
+          const moving = from !== null && from !== i && !stale ? shown[from] : null;
+          if (moving) run("tab.move", { id: moving.id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
           else run("tab.select", { id: c.id });
         })
-        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
+        .on_mouse_down("right", (_e, cx) => { cx.stopPropagation(); openOverlay({ mod: "inkstone-menu", kind: "popup", width: 236, height: 260, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
         .when(st !== "idle", el => el.child(dot(t, st)))
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(16)))
         .child(div().max_w(200).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.active, el => el.child(div().id(`close-${c.id}`).size(28).flex_none().flex().items_center().justify_center()
           .rounded(5).text_color(t.dim).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground))
-          .tooltip(pick("关闭标签", "Close tab")).accessibility_label(pick("关闭标签", "Close tab"))
-          .on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); })
-          .child(svg("mods/pane/close.svg").size(12))));
+          .tooltip(this.closing === c.id ? pick("再点一次关闭", "Click again to close") : pick("关闭标签", "Close tab"))
+          .accessibility_label(pick("关闭标签", "Close tab"))
+          .when(this.closing === c.id, (x) => x.bg(t.blocked).text_color(t.background))
+          .on_mouse_down("left", stop).on_click((_e, cx) => {
+            cx.stop_propagation();
+            // 28px 按钮紧挨标签，误点一次就丢会话：第一次点变红问一次，3 秒内再点才关。
+            if (this.closing === c.id && Date.now() - this.closingAt < 3000) {
+              this.closing = null;
+              run("tab.close", { id: c.id });
+              return;
+            }
+            this.closing = c.id;
+            this.closingAt = Date.now();
+            cx.notify();
+            cx.timer.after(3000, () => {
+              if (this.closing !== c.id) return;
+              this.closing = null;
+              cx.notify();
+            });
+          })
+          .child(svg("mods/inkstone-chrome/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.
@@ -431,7 +456,7 @@ export default class Tabs extends View {
     const panel = find(root, "panel");
     const enabled = PANELS;
     const drawerFits = this.drawerFits(panel);
-    const icons = { files: "mods/files/file.svg", sessions: "mods/inkstone-chrome/terminal.svg", favorites: "mods/inkstone-chrome/pin.svg" };
+    const icons = { files: "mods/inkstone-chrome/file.svg", sessions: "mods/inkstone-chrome/terminal.svg", favorites: "mods/inkstone-chrome/pin.svg" };
     const names = { files: pick("文件", "Files"), sessions: pick("会话", "Sessions"), favorites: pick("收藏", "Favourites") };
     const drawerPage = shownPanel(panel, enabled);
     const pending = this.pending;
@@ -494,7 +519,7 @@ export default class Tabs extends View {
       .when(w?.buttons, el => el.child(h_flex().flex_none().gap(0)
         .child(button("minimize", w.platform === "windows" ? svg("mods/inkstone-tabs/win-min.svg").size(16) : "−", () => run("window.minimize"), pick("最小化", "Minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/inkstone-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize"), w.maximized ? pick("还原窗口", "Restore") : pick("最大化", "Maximize")))
-        .child(button("close-window", w.platform === "windows" ? svg("mods/inkstone-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"), pick("关闭窗口", "Close window")))))
+        .child(button("close-window", w.platform === "windows" ? svg("mods/inkstone-tabs/win-close.svg").size(16) : svg("mods/inkstone-chrome/close.svg").size(13), () => run("window.close"), pick("关闭窗口", "Close window")))))
       // 纸感：标签条底边不是 1px 描边，而是铅笔压出来的一道横线（只在最底下露 2px）。
       .when(PAPER(t), el => el.relative().child(div().absolute().left(0).right(0).bottom(0).h(2).overflow_hidden()
         .child(image("mods/inkstone-chrome/ink/rule-h.svg").absolute().left(-12).top(-12).w(3864).h(26))));

@@ -161,11 +161,11 @@ export default class Metrics extends View {
       const r = plat() === "windows"
         ? await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction Stop`], opts)
         : await exec("kill", ["-9", String(pid)], opts);
-      if (r.code !== 0) throw new Error(r.stderr.trim() || `退出码 ${r.code}`);
+      if (r.code !== 0) throw new Error(r.stderr.trim() || pick(`退出码 ${r.code}`, `exit ${r.code}`));
       this.stopVersion++;
       this.procs = this.procs.filter((p) => p.pid !== pid);
     } catch (e) {
-      this.stopError = `结束 ${name}（PID ${pid}）失败：${e?.message ?? e}`;
+      this.stopError = pick(`结束 ${name}（PID ${pid}）失败：${e?.message ?? e}`, `Could not stop ${name} (PID ${pid}): ${e?.message ?? e}`);
     } finally {
       this.stopping = false;
       cx.notify();
@@ -177,7 +177,7 @@ export default class Metrics extends View {
     if (!target && !this.stopError && !this.stopping) return div();
     return v_flex().flex_none().px(12).py(6).gap(4).bg(t.raised)
       .child(div().text_size(12).text_color(t.blocked)
-        .child(target ? `强制结束 ${target.name}（PID ${target.pid}）？` : this.stopError || pick("正在结束进程…", "Ending the process…")))
+        .child(target ? pick(`强制结束 ${target.name}（PID ${target.pid}）？`, `Force quit ${target.name} (PID ${target.pid})?`) : this.stopError || pick("正在结束进程…", "Ending the process…")))
       .when(Boolean(target), (el) => el.child(h_flex().gap(8)
         .child(div().id("metrics-stop-cancel").h(28).px(8).flex().items_center().rounded(5).bg(t.hover).cursor_pointer()
           .on_click((_e, c) => { this.stopTarget = null; c.notify(); }).child(pick("取消", "Cancel")))
@@ -216,11 +216,11 @@ export default class Metrics extends View {
       .border_l(1)
       .border_color(t.border)
       .cursor_pointer()
-      .tooltip(this.total ? `内存 ${ff(this.used ?? 0)} / ${ff(this.total)} GB\n${cpu} · 点开看进程` : pick("读取系统资源…", "Reading system resources…"))
-      .accessibility_label(`系统资源 CPU ${cpu} 内存 ${mem}`)
+      .tooltip(this.total ? pick(`内存 ${ff(this.used ?? 0)} / ${ff(this.total)} GB\n${cpu} · 点开看进程`, `Memory ${ff(this.used ?? 0)} / ${ff(this.total)} GB\n${cpu} · click to see processes`) : pick("读取系统资源…", "Reading system resources…"))
+      .accessibility_label(pick(`系统资源 CPU ${cpu} 内存 ${mem}`, `System resources, CPU ${cpu}, memory ${mem}`))
       .hover((s) => s.bg(t.hover))
       .on_click(() => run("mod.open", { name: "inkstone-metrics" }))
-      .child(svg("mods/workspace-chrome/monitor.svg").size(12).flex_none().text_color(this.tone(t)))
+      .child(svg("mods/inkstone-chrome/monitor.svg").size(12).flex_none().text_color(this.tone(t)))
       .child(div().w(44).flex_none().whitespace_nowrap().text_size(11).text_color(this.tone(t)).child(`CPU ${cpu}`))
       .child(div().text_size(11).text_color(t.dim).child("·"))
       .child(div().w(56).flex_none().whitespace_nowrap().text_size(11).text_color(t.muted).child(mem));
@@ -242,7 +242,7 @@ export default class Metrics extends View {
         .items_center()
         .border_b(1)
         .border_color(t.border)
-        .child(svg("mods/workspace-chrome/monitor.svg").size(14).flex_none().text_color(t.accent))
+        .child(svg("mods/inkstone-chrome/monitor.svg").size(14).flex_none().text_color(t.accent))
         .child(div().flex_1().text_size(13).font_semibold().child(pick("系统资源", "System resources")))
         .child(div()
           .id("metrics-close")

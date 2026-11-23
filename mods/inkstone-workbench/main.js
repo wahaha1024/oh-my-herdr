@@ -68,13 +68,13 @@ function place(s, ps, binds) {
 // 不扫工作树、不显示分支标签，侧栏只按目录归拢空间。
 const gitOn = () => shared("inkstone.git") === true;
 
-const STATUS = {
+const STATUS = () => ({
   blocked: pick("待处理", "Waiting"),
   working: pick("运行中", "Running"),
   done: pick("已完成", "Done"),
   idle: pick("空闲", "Idle"),
-};
-const statusLabel = (s) => STATUS[s] ?? pick("无状态", "No status");
+});
+const statusLabel = (s) => STATUS()[s] ?? pick("无状态", "No status");
 
 // 智能体状态点：形状与颜色一起编码，色弱也能分辨——
 // 待处理 = 方块，已完成 = 实心圆，运行中 = 圆环，空闲 / 无状态 = 空心圆。
@@ -95,6 +95,21 @@ function dot(t, status, size = 7) {
   if (status === "working") return div().size(size).flex_none().rounded_full().border(2).border_color(t.working);
   return div().size(size).flex_none().rounded_full().border(1.5).border_color(status === "idle" ? t.idle : t.dim);
 }
+
+// 与智能体面板 / 标签栏同一套状态配色：待处理红、运行中琥珀、已完成绿。
+const isDark = (t) => luminance(t.background ?? "#ffffff") < 0.5;
+const FLOW_RED = (t) => t.blocked ?? "#c23142";
+const FLOW_YELLOW = (t) => (PAPER(t) ? t.working : isDark(t) ? (t.working ?? "#e2c027") : "#b78b26");
+const FLOW_GREEN = (t) => (PAPER(t) ? (t.up ?? t.done) : (t.done ?? "#1a6840"));
+const flowTone = (t, st) => (st === "blocked" ? FLOW_RED(t) : st === "working" ? FLOW_YELLOW(t) : st === "done" ? FLOW_GREEN(t) : null);
+
+// 一个标签可能开着多个窗格：状态取最需要关注的那个（与标签栏同一套优先级）。
+const RANK = { blocked: 3, working: 2, done: 1, idle: 0 };
+const statusOf = (list, fallback) => {
+  let best = fallback ?? "idle";
+  for (const a of list) if ((RANK[a.status] ?? 0) > (RANK[best] ?? 0)) best = a.status;
+  return best;
+};
 
 // 每个空间一个固定的颜色：不同目录、不同空间靠名字就能分开。
 // 索引存进 shared，切明暗主题时只换亮度档，色相不变——认的还是同一个空间。
@@ -270,9 +285,12 @@ export default class Workbench extends View {
     // 目录探测缓存 5 分钟、工作树列表 30 秒。只看 key 的话定时器形同虚设：
     // 空间没变就永远不再扫，新建的工作树要等下次增删空间才出现。
     // 缓存键必须与写入处一致（带机器前缀），否则每项都判过期、每次刷新重扫所有仓库。
+    // 探测失败（超时、SSH 断开）不是「不在 Git 仓库中」：前者下一次刷新（≤30 秒）就重试，后者缓存 5 分钟。
+    const GIT_FAIL_TTL = 10000;
     const repoStale = [...folders.keys()].some((fk) => {
       const r = this.repos[fk];
-      return !r || Date.now() - r.at >= 300000;
+      if (!r) return true;
+      return Date.now() - r.at >= (r.failed ? GIT_FAIL_TTL : 300000);
     });
     // 非 Git 目录也过期重试：用户中途 git init 之后不该永远是「不在 Git 仓库中」。
     const treeStale = Object.values(this.repos).some((r) => {
@@ -288,7 +306,7 @@ export default class Workbench extends View {
       try {
         for (const [fk, { folder, on }] of folders) {
           const cached = this.repos[fk];
-          if (cached && (cached.value || Date.now() - cached.at < 300000)) continue;
+          if (cached && Date.now() - cached.at < (cached.failed ? GIT_FAIL_TTL : 300000)) continue;
           const top = await exec("git", [...git, "rev-parse", "--show-toplevel"], { cwd: folder, on }).catch(() => null);
           // 同一仓库的多个工作树必须归到一个项目：「--show-toplevel」给的是各工作树自己，
           // 靠「--git-common-dir」的父目录才能认出主仓库。
@@ -304,9 +322,13 @@ export default class Workbench extends View {
             : null;
           const [ahead, behind] = counts?.code === 0 ? counts.stdout.trim().split(/\s+/).map(Number) : [0, 0];
           const root = top?.code === 0 ? top.stdout.trim() : null;
+          // 只有 git 明确说「不是仓库」才长缓存；超时、SSH 断开等失败 10 秒后就重试。
+          const notRepo = top?.code === 128 && /not a git repository/i.test(String(top.stderr ?? ""));
+          const failed = !top || (top.code !== 0 && !notRepo);
           this.repos[fk] = {
             at: Date.now(),
             on,
+            failed,
             value: root
               ? {
                 root,
@@ -362,6 +384,15 @@ export default class Workbench extends View {
     else this.fold.add(id);
     setShared("inkstone.folded", [...this.fold]);
     cx.notify();
+  }
+
+  // 折叠是按「项目」记的：不同机器上同名目录不是同一个项目，键里要带机器前缀。
+  // 旧版本存的是裸路径，读的时候两种都认，再点一次折叠就会换成新键。
+  foldKey(g) {
+    return `${g.on ?? ""}|${g.root}`;
+  }
+  isFolded(g) {
+    return this.fold.has(this.foldKey(g)) || this.fold.has(g.root);
   }
 
   // 机器层自己的折叠：与本机/各服务器的空间互不影响。
@@ -525,9 +556,14 @@ export default class Workbench extends View {
   }
 
   // 一个智能体一行：状态点、名字、右侧「待处理 / 已完成」。
+  // 当前打开的行底色跟状态走（与 Agents 面板同一套色）；空闲用选中底。
   agentRow(a, t, pad = 0) {
     const name = clean(a.title) || a.program?.name || a.app || a.address;
     const detail = [statusLabel(a.status), a.tab_name, a.address].filter(Boolean).join(" · ");
+    const tone = flowTone(t, a.status === "idle" ? "done" : a.status);
+    const opened = Boolean(a.tab && spaces().find((s) => s.id === a.space)?.active
+      && spaces().find((s) => s.id === a.space)?.tabs?.find((x) => x.id === a.tab)?.active);
+    const wash = opened && tone ? tint(tone, PAPER(t) ? "3d" : "2e") : null;
     return h_flex()
       .id(`wb-a-${a.address}`)
       .h(26)
@@ -538,7 +574,10 @@ export default class Workbench extends View {
       .items_center()
       .rounded(6)
       .cursor_pointer()
-      .hover((s) => s.bg(PAPER(t) ? "#f8dc4c4d" : t.hover))
+      .when(Boolean(wash), (el) => el.bg(wash))
+      .when(!wash && opened, (el) => swipeOn(t, el))
+      .when(!opened, (el) => el.hover((s) => s.bg(PAPER(t) ? "#f8dc4c4d" : t.hover)))
+      .when(Boolean(wash), (el) => el.hover((s) => s.bg(tint(tone, PAPER(t) ? "4d" : "38"))))
       .tooltip(`${name}\n${detail}`)
       .accessibility_label(`${name} ${detail}`)
       .on_click(() => this.openAgent(a))
@@ -562,11 +601,15 @@ export default class Workbench extends View {
   }
 
   // 没跑智能体的终端也要有自己一行：否则徽章上的 tab 数在下面找不到对应的行。
+  // 当前打开的行底色跟状态走（与 Agents 面板同一套色）：琥珀在跑、绿已完成、红待处理。
   termRow(s, c, t, pad = 0) {
     const ps = panes();
     const lead = ps.find((p) => p.tab === c.id);
     const prog = lead?.program;
     const name = clean(c.name) || prog?.name || pick("终端", "Terminal");
+    const tone = flowTone(t, statusOf(agents().filter((a) => a.tab === c.id), c.status));
+    const opened = Boolean(c.active && s.active);
+    const wash = opened && tone ? tint(tone, PAPER(t) ? "3d" : "2e") : null;
     return h_flex()
       .id(`wb-tab-${c.id}`)
       .h(26)
@@ -577,10 +620,12 @@ export default class Workbench extends View {
       .items_center()
       .rounded(6)
       .cursor_pointer()
-      .when(Boolean(c.active && s.active), (el) => swipeOn(t, el))
-      .when(!(c.active && s.active), (el) => el.hover((h) => h.bg(PAPER(t) ? "#f8dc4c4d" : t.hover)))
+      .when(Boolean(wash), (el) => el.bg(wash))
+      .when(!wash && opened, (el) => swipeOn(t, el))
+      .when(!opened, (el) => el.hover((h) => h.bg(PAPER(t) ? "#f8dc4c4d" : t.hover)))
+      .when(Boolean(wash), (el) => el.hover((h) => h.bg(tint(tone, PAPER(t) ? "4d" : "38"))))
       .tooltip(`${lead?.cwd ?? s.folder ?? ""}${prog?.name ? `\n${prog.name}` : ""}`)
-      .accessibility_label(`终端 ${name}`)
+      .accessibility_label(pick(`终端 ${name}`, `Terminal ${name}`))
       .on_click(() => {
         if (!s.active) run("space.select", { id: s.id });
         if (!c.active) run("tab.select", { id: c.id });
@@ -613,7 +658,7 @@ export default class Workbench extends View {
       .cursor_pointer()
       .tooltip(`${w.folder}\n${pick("未打开 · 点一下在此工作树中新建空间", "not open · click to make a space here")}`)
       .on_click(() => run("space.new", { folder: w.folder, name: base(w.folder), machine: w.on ?? "" }))
-      .child(svg("mods/workspace-chrome/git-branch.svg").size(11).flex_none().text_color(t.dim))
+      .child(svg("mods/inkstone-chrome/git-branch.svg").size(11).flex_none().text_color(t.dim))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(base(w.folder)))
       .child(div().flex_none().text_size(10).text_color(t.dim).child(w.branch ?? ""));
   }
@@ -639,7 +684,7 @@ export default class Workbench extends View {
       .when(on, (el) => swipeOn(t, el))
       .when(!on, (el) => swipeHover(t, el))
       .tooltip(`${folder ?? s.folder}${branch ? `\n${branch}` : ""}`)
-      .accessibility_label(`${label} · ${count} 个终端 · ${statusLabel(s.status)}`)
+      .accessibility_label(pick(`${label} · ${count} 个终端 · ${statusLabel(s.status)}`, `${label} · ${count} terminals · ${statusLabel(s.status)}`))
       .on_click(() => (on ? null : run("space.select", { id: s.id })))
       .on_mouse_down("right", () => this.menu({ id: s.id, folder: folder ?? s.folder ?? null, machine: s.machine ?? null }, "space"))
       // 折叠是空间自己的开关：与「切换到空间」分开，免得想看子项就得跳过去。
@@ -657,9 +702,9 @@ export default class Workbench extends View {
           cx.stop_propagation();
           this.toggleFold(s.id, cx);
         })
-        .child(svg(folded ? "mods/workspace-chrome/chevron-right.svg" : "mods/workspace-chrome/chevron-down.svg").size(10).flex_none().text_color(t.dim)))
+        .child(svg(folded ? "mods/inkstone-chrome/chevron-right.svg" : "mods/inkstone-chrome/chevron-down.svg").size(10).flex_none().text_color(t.dim)))
       // 空间标记是它的固定身份：颜色分目录归属，字母 / 图案分空间。
-      .child(this.mark(s.id, t, { art, fill, tip: `${count} 个终端` }))
+      .child(this.mark(s.id, t, { art, fill, tip: pick(`${count} 个终端`, `${count} terminals`) }))
       .child(div()
         .flex_1()
         .min_w(0)
@@ -680,8 +725,8 @@ export default class Workbench extends View {
       .id(`wb-sp-${id}`)
       .flex_none()
       .h(16).flex().items_center().justify_center().cursor_pointer()
-      .tooltip(`${tip} · Alt+点击换图案`)
-      .accessibility_label(`空间标记 ${art}`)
+      .tooltip(pick(`${tip} · Alt+点击换图案`, `${tip} · Alt+click changes the mark`))
+      .accessibility_label(pick(`空间标记 ${art}`, `Space mark ${art}`))
       .on_mouse_down("left", (e, cx) => {
         if (!e.modifiers.alt) return;
         cx.stop_propagation();
@@ -728,7 +773,7 @@ export default class Workbench extends View {
       .cursor_pointer()
       .hover((h) => h.bg(PAPER(t) ? "#f8dc4c4d" : t.hover))
       .tooltip(`${m.name ?? pick("本机", "This computer")} · ${stateWord}`)
-      .accessibility_label(`${m.key} ${open} 个空间`)
+      .accessibility_label(pick(`${m.key} · ${open} 个空间`, `${m.key} · ${open} spaces`))
       .on_click((_e, c) => this.toggleMachine(m, c))
       .on_mouse_down("right", () => this.menu({ machine: m.name ?? null, root: m.root ?? null }, "machine"))
       .child(div()
@@ -761,15 +806,15 @@ export default class Workbench extends View {
           c.stop_propagation();
           this.newSpace(m.name);
         })
-        .child(svg("mods/workspace-chrome/plus.svg").size(12).flex_none().text_color(t.muted)))
+        .child(svg("mods/inkstone-chrome/plus.svg").size(12).flex_none().text_color(t.muted)))
       .child(div().size(6).flex_none().rounded_full().bg(tone))
-      .child(svg(folded ? "mods/workspace-chrome/chevron-right.svg" : "mods/workspace-chrome/chevron-down.svg").size(10).flex_none().text_color(t.dim));
+      .child(svg(folded ? "mods/inkstone-chrome/chevron-right.svg" : "mods/inkstone-chrome/chevron-down.svg").size(10).flex_none().text_color(t.dim));
   }
 
   // 目录层用「文件夹图标 + 深色粗体名」，空间层用「标记 + 彩色名」——
   // 两层靠符号形状区分；纸感下项目头下面一条铅笔线，组与组之间不再另加灰线。
   projectRow(g, t, fill, pad = 0) {
-    const folded = this.fold.has(g.root);
+    const folded = this.isFolded(g);
     const open = g.spaces.filter((x) => x.space).length;
     const name = base(g.root);
     // 机器根目录下的子项目用字母头像：与空间的像素精灵分开，也让从属关系一眼可见。
@@ -793,17 +838,17 @@ export default class Workbench extends View {
         .child(div().absolute().left(6).right(6).bottom(-2).h(1).bg("#b2c3dcb8")))
       .when(!PAPER(t), (el) => el.hover((s) => s.bg(t.hover)))
       .tooltip(g.root)
-      .accessibility_label(`目录 ${base(g.root)} ${open}/${g.spaces.length}`)
-      .on_click((_e, cx) => this.toggleFold(g.root, cx))
+      .accessibility_label(pick(`目录 ${base(g.root)} ${open}/${g.spaces.length}`, `Folder ${base(g.root)} ${open}/${g.spaces.length}`))
+      .on_click((_e, cx) => this.toggleFold(this.foldKey(g), cx))
       .on_mouse_down("right", () => this.menu({ folder: g.root, machine: g.on }, "dir"))
-      .child(svg(folded ? "mods/workspace-chrome/chevron-right.svg" : "mods/workspace-chrome/chevron-down.svg").size(11).flex_none().text_color(t.dim))
+      .child(svg(folded ? "mods/inkstone-chrome/chevron-right.svg" : "mods/inkstone-chrome/chevron-down.svg").size(11).flex_none().text_color(t.dim))
       .child(head)
       .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(name))
       .child(div().flex_none().text_size(10).text_color(t.dim).child(g.spaces.length ? `${open}/${g.spaces.length}` : ""));
   }
 
   // rail 模式：一个空间只剩它的标记，名字、终端数与分支收进 tooltip。
-  railSpace(s, t, fill, art, colorIndex) {
+  railSpace(s, t, fill, art) {
     const on = Boolean(s.active);
     const count = (s.tabs ?? []).length;
     const label = clean(s.name) || base(s.folder) || pick("未命名空间", "Untitled");
@@ -816,16 +861,16 @@ export default class Workbench extends View {
       .cursor_pointer()
       .when(on, (el) => swipeOn(t, el))
       .when(!on, (el) => swipeHover(t, el))
-      .tooltip(`${label} · ${count} 个终端 · ${statusLabel(s.status)}`)
-      .accessibility_label(`${label} · ${count} 个终端`)
+      .tooltip(pick(`${label} · ${count} 个终端 · ${statusLabel(s.status)}`, `${label} · ${count} terminals · ${statusLabel(s.status)}`))
+      .accessibility_label(pick(`${label} · ${count} 个终端`, `${label} · ${count} terminals`))
       .on_click(() => (on ? null : run("space.select", { id: s.id })))
       .on_mouse_down("right", () => this.menu({ id: s.id, folder: s.folder ?? null, machine: s.machine ?? null }, "space"))
-      .child(this.mark(s.id, t, { art, fill, tip: `${count} 个终端` }));
+      .child(this.mark(s.id, t, { art, fill, tip: pick(`${count} 个终端`, `${count} terminals`) }));
   }
 
   // rail 模式下的目录头：一个 folder 图标，点一下折叠整组。
   railProject(g, t, fill) {
-    const folded = this.fold.has(g.root);
+    const folded = this.isFolded(g);
     return h_flex()
       .id(`wb-rp-${g.root}`)
       .h(24)
@@ -836,8 +881,8 @@ export default class Workbench extends View {
       .cursor_pointer()
       .hover((s) => s.bg(PAPER(t) ? "#f8dc4c4d" : t.hover))
       .tooltip(`${base(g.root)}${folded ? pick(" · 已折叠", " · collapsed") : ""}`)
-      .accessibility_label(`目录 ${base(g.root)}`)
-      .on_click((_e, cx) => this.toggleFold(g.root, cx))
+      .accessibility_label(pick(`目录 ${base(g.root)}`, `Folder ${base(g.root)}`))
+      .on_click((_e, cx) => this.toggleFold(this.foldKey(g), cx))
       .on_mouse_down("right", () => this.menu({ folder: g.root, machine: g.on }, "dir"))
       .child(glyph(FOLDER, fill ?? t.muted, { div, v_flex, h_flex }, 2));
   }
@@ -891,9 +936,9 @@ export default class Workbench extends View {
         const head = g.spaces.find((x) => x.space)?.space.id;
         const fill = head ? this.fill(t, colors[head] ?? 0) : null;
         rows.push(this.railProject(g, t, fill));
-        if (this.fold.has(g.root)) continue;
+        if (this.isFolded(g)) continue;
         for (const item of g.spaces) {
-          if (item.space) rows.push(this.railSpace(item.space, t, this.fill(t, colors[item.space.id] ?? 0), art[item.space.id] ?? "slime", colors[item.space.id] ?? 0));
+          if (item.space) rows.push(this.railSpace(item.space, t, this.fill(t, colors[item.space.id] ?? 0), art[item.space.id] ?? "slime"));
         }
       }
     } else {
@@ -920,7 +965,7 @@ export default class Workbench extends View {
           if (prev && !joined && !PAPER(t)) rows.push(div().h(1).flex_none().mx(8).my(6).bg(t.border));
           rows.push(this.projectRow(g, t, fill, pad));
           prev = g;
-          if (this.fold.has(g.root)) continue;
+          if (this.isFolded(g)) continue;
           const hint = g.rootRow ? null : this.hintRow(g, t, pad);
           if (hint) rows.push(hint);
           let trees = 0;
@@ -992,7 +1037,7 @@ export default class Workbench extends View {
             .tooltip(pick("新建空间", "New space"))
             .accessibility_label(pick("新建空间", "New space"))
             .on_click(() => this.newSpace(null))
-            .child(svg("mods/workspace-chrome/plus.svg").size(14)))
+            .child(svg("mods/inkstone-chrome/plus.svg").size(14)))
         : h_flex()
           .h(44)
           .pl(12)
@@ -1032,7 +1077,7 @@ export default class Workbench extends View {
               .border(1)
               .border_color(t.border)
               .child(div().size(5).rounded_full().bg(total > 0 ? t.accent : t.dim))
-              .child(div().text_size(10.5).text_color(t.muted).child((needs > 0 || (findNode(layout(), "sidebar")?.size?.px ?? 999) < 250) ? `${total}` : `${total} 智能体`)))
+              .child(div().text_size(10.5).text_color(t.muted).child((needs > 0 || (findNode(layout(), "sidebar")?.size?.px ?? 999) < 250) ? `${total}` : pick(`${total} 智能体`, `${total} agents`))))
             .child(paper
               ? this.newSlip()
               : div()
@@ -1052,7 +1097,7 @@ export default class Workbench extends View {
                 .tooltip(pick("新建空间", "New space"))
                 .accessibility_label(pick("新建空间", "New space"))
                 .on_click(() => this.newSpace(null))
-                .child(svg("mods/workspace-chrome/plus.svg").size(14)))))
+                .child(svg("mods/inkstone-chrome/plus.svg").size(14)))))
       .child(v_flex()
         .flex_1()
         .min_h(0)

@@ -142,7 +142,7 @@ function items(p, git, more) {
         ...(git === "linked" ? [[pick("移除工作树", "Remove worktree"), "worktree", { space: tg.id, action: "remove" }, false]] : []),
         // 归属目录决定这个空间在侧栏归到哪个项目，独立于它此刻的 cwd。
         [pick("设置归属目录…", "Set the project folder…"), "inkstone.space", { mode: "bind", space: tg.id, folder: tg.folder ?? null, machine: tg.machine ?? null }, true],
-        [pick("关闭空间", "Close space"), "space.close", { id: tg.id }, true],
+        [pick("关闭空间及其终端", "Close space and its terminals"), "space.close", { id: tg.id }, true],
       ];
     default:
       return [
@@ -184,7 +184,7 @@ function menuIcon(command) {
     : command.endsWith(".rename") ? "square-pen"
     : command.endsWith(".new") ? "plus"
     : "terminal";
-  return `mods/workspace-chrome/${name}.svg`;
+  return `mods/inkstone-chrome/${name}.svg`;
 }
 
 // The key bound to a command, for the hint on the right.

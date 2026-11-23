@@ -72,7 +72,7 @@ class InstallerTest(unittest.TestCase):
             base = self.pkg / dirname
             base.mkdir()
             for name in files:
-                (base / name).write_text("stub %s/%s\n" % (dirname, name), encoding="utf-8")
+                (base / name).write_text(f"stub {dirname}/{name}\n", encoding="utf-8")
         # 两个 mod，其中 inkstone-chrome 含嵌套子目录；gpui-kit.d.ts/jsconfig.json 不应安装。
         for mod, files in {
             "cockpit": ["main.js", "gpui-kit.d.ts", "jsconfig.json"],
@@ -83,7 +83,7 @@ class InstallerTest(unittest.TestCase):
             for name in files:
                 p = base / name
                 p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text("stub mod %s/%s\n" % (mod, name), encoding="utf-8")
+                p.write_text(f"stub mod {mod}/{name}\n", encoding="utf-8")
 
     # ---------- 结果读取辅助 ----------
 

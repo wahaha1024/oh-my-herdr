@@ -14,7 +14,7 @@ import { agents, spaces, run, theme, props, closeOverlay, shared } from "herdr";
 const LANG = "inkstone.lang";
 const pick = (zh, en) => (shared(LANG) === "en" ? en : zh);
 
-const LABEL = { working: pick("运行中", "Running"), blocked: pick("待处理", "Waiting"), done: pick("已完成", "Done"), idle: pick("空闲", "Idle") };
+const LABEL = () => ({ working: pick("运行中", "Running"), blocked: pick("待处理", "Waiting"), done: pick("已完成", "Done"), idle: pick("空闲", "Idle") });
 const tone = (t, s) => (s === "blocked" ? t.blocked : s === "done" ? t.done : s === "working" ? t.working : t.idle ?? t.dim);
 const tint = (hex, a) => (typeof hex === "string" && hex.length === 7 ? hex + a : hex);
 const EDGE_T = 12, EDGE_LONG = 3206, EDGE_TALL = 1794, EDGE_CORNER = 46, EDGE_FOOT = 40;
@@ -88,10 +88,10 @@ function duration(ms) {
   if (!ms || ms < 0) return "";
   const m = Math.floor(ms / 60000);
   if (m < 1) return pick("刚刚", "just now");
-  if (m < 60) return `${m} 分钟`;
+  if (m < 60) return pick(`${m} 分钟`, `${m} min`);
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时`;
-  return `${Math.floor(h / 24)} 天`;
+  if (h < 24) return pick(`${h} 小时`, `${h} h`);
+  return pick(`${Math.floor(h / 24)} 天`, `${Math.floor(h / 24)} d`);
 }
 
 // 智能体的标题来自终端输出，常带进度符号、Nerd Font 私有区图标和 emoji：
@@ -197,9 +197,9 @@ export default class Cockpit extends View {
         .items_center()
         .border_b(1)
         .border_color(t.border)
-        .child(svg("mods/workspace-chrome/layers.svg").size(14).flex_none().text_color(t.accent))
+        .child(svg("mods/inkstone-chrome/layers.svg").size(14).flex_none().text_color(t.accent))
         .child(div().flex_1().text_size(13).font_semibold().child(pick("驾驶舱", "Cockpit")))
-        .child(div().text_size(11).text_color(blocked.length ? t.blocked : t.dim).child(blocked.length ? `${blocked.length} 待您处理` : pick("全部就绪", "All clear")))
+        .child(div().text_size(11).text_color(blocked.length ? t.blocked : t.dim).child(blocked.length ? pick(`${blocked.length} 待您处理`, `${blocked.length} need you`) : pick("全部就绪", "All clear")))
         .when(Boolean(props()?.overlay), (el) => el.child(div()
           .id("ck-close")
           .px(6)
@@ -242,7 +242,7 @@ export default class Cockpit extends View {
               .child(div().flex_1())
               .child(div().text_size(11).text_color(t.dim).child(duration(Date.now() - (next.since ?? Date.now())))))
             .child(div().text_size(13).font_semibold().text_color(blocked.length ? t.blocked : t.foreground).truncate().child(clean(next.a.title) || next.a.program?.name || next.a.address))
-            .child(div().text_size(11).text_color(t.dim).child(`${next.a.space_name} · ${next.a.tab_name} · ${LABEL[next.a.status] ?? next.a.status}`))
+            .child(div().text_size(11).text_color(t.dim).child(`${next.a.space_name} · ${next.a.tab_name} · ${LABEL()[next.a.status] ?? next.a.status}`))
             .child(h_flex().gap(8).items_center().child(div().flex_1())
               .child(div()
                 .id("ck-go")

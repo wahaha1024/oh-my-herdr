@@ -210,11 +210,11 @@ export default class Ports extends View {
       const r = plat() === "windows"
         ? await exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction Stop`], opts)
         : await exec("kill", ["-9", String(pid)], opts);
-      if (r.code !== 0) throw new Error(r.stderr.trim() || `退出码 ${r.code}`);
+      if (r.code !== 0) throw new Error(r.stderr.trim() || pick(`退出码 ${r.code}`, `exit ${r.code}`));
       this.stopVersion++;
       this.list = this.list.filter((x) => x.pid !== pid);
     } catch (e) {
-      this.stopError = `结束 ${name}（PID ${pid}，端口 ${port}）失败：${e?.message ?? e}`;
+      this.stopError = pick(`结束 ${name}（PID ${pid}，端口 ${port}）失败：${e?.message ?? e}`, `Could not stop ${name} (PID ${pid}, port ${port}): ${e?.message ?? e}`);
     } finally {
       this.stopping = false;
       cx.notify();
@@ -226,7 +226,7 @@ export default class Ports extends View {
     if (!target && !this.stopError && !this.stopping) return div();
     return v_flex().flex_none().px(12).py(6).gap(4).bg(t.raised)
       .child(div().text_size(12).text_color(t.blocked)
-        .child(target ? `强制结束 ${target.name}（PID ${target.pid}，端口 ${target.port}）？` : this.stopError || pick("正在结束进程…", "Ending the process…")))
+        .child(target ? pick(`强制结束 ${target.name}（PID ${target.pid}，端口 ${target.port}）？`, `Force quit ${target.name} (PID ${target.pid}, port ${target.port})?`) : this.stopError || pick("正在结束进程…", "Ending the process…")))
       .when(Boolean(target), (el) => el.child(h_flex().gap(8)
         .child(div().id("ports-stop-cancel").h(28).px(8).flex().items_center().rounded(5).bg(t.hover).cursor_pointer()
           .on_click((_e, c) => { this.stopTarget = null; c.notify(); }).child(pick("取消", "Cancel")))
@@ -239,7 +239,7 @@ export default class Ports extends View {
   compact(t) {
     const n = this.list.length;
     const text = n ? String(n) : this.failed ? "!" : "—";
-    const tip = n ? `${n} 个端口在监听` : this.failed ? pick("读取端口失败 · 点开查看", "Couldn't read ports · click to see") : pick("没有端口在监听", "No ports are listening");
+    const tip = n ? pick(`${n} 个端口在监听`, `${n} ports listening`) : this.failed ? pick("读取端口失败 · 点开查看", "Couldn't read ports · click to see") : pick("没有端口在监听", "No ports are listening");
     return h_flex()
       .id("ports-compact")
       .size_full()
@@ -254,7 +254,7 @@ export default class Ports extends View {
       .accessibility_label(tip)
       .hover((s) => s.bg(t.hover))
       .on_click(() => openOverlay({ mod: "inkstone-ports", kind: "dialog", frame: "none", width: 404, height: 484, props: { framed: true } }))
-      .child(svg("mods/workspace-chrome/server.svg").size(12).flex_none().text_color(n ? t.accent : this.failed ? t.blocked : t.dim))
+      .child(svg("mods/inkstone-chrome/server.svg").size(12).flex_none().text_color(n ? t.accent : this.failed ? t.blocked : t.dim))
       .child(div().w(20).flex_none().text_size(11).text_color(n ? t.muted : this.failed ? t.blocked : t.dim).child(text));
   }
 
@@ -316,9 +316,9 @@ export default class Ports extends View {
         .items_center()
         .border_b(1)
         .border_color(t.border)
-        .child(svg("mods/workspace-chrome/server.svg").size(14).flex_none().text_color(t.accent))
+        .child(svg("mods/inkstone-chrome/server.svg").size(14).flex_none().text_color(t.accent))
         .child(div().flex_1().text_size(13).font_semibold().child(pick("活跃端口", "Open ports")))
-        .child(div().text_size(11).text_color(t.dim).child(this.list.length ? `${this.list.length} 个在监听` : pick("无", "None")))
+        .child(div().text_size(11).text_color(t.dim).child(this.list.length ? pick(`${this.list.length} 个在监听`, `${this.list.length} listening`) : pick("无", "None")))
         .child(div()
           .id("ports-close")
           .px(6)

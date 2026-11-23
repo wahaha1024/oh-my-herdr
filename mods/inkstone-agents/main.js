@@ -21,13 +21,13 @@ function findNode(node, id) {
 }
 const rail = () => (findNode(layout(), "sidebar")?.size?.px ?? 999) < 160;
 
-const STATUS = {
+const STATUS = () => ({
   blocked: pick("待处理", "Waiting"),
   working: pick("运行中", "Running"),
   done: pick("已完成", "Done"),
   idle: pick("空闲", "Idle"),
-};
-const statusLabel = (s) => STATUS[s] ?? pick("无状态", "No status");
+});
+const statusLabel = (s) => STATUS()[s] ?? pick("无状态", "No status");
 
 const PALETTE_LIGHT = ["#a84a50", "#8a5619", "#7d640c", "#357041", "#34618f", "#5f5399", "#805083"];
 const PALETTE_DARK = ["#f08a8a", "#f2a46a", "#e8c76a", "#7ecf86", "#6fb3ea", "#9a8ce6", "#c98ae6"];
@@ -255,7 +255,7 @@ export default class AgentsPanel extends View {
       .rounded(6)
       .cursor_pointer()
       .hover((s) => s.bg(PAPER(t) ? "#f8dc4c26" : t.hover))
-      .tooltip(open ? `收起 ${label}` : `展开 ${label}`)
+      .tooltip(open ? pick(`收起 ${label}`, `Collapse ${label}`) : pick(`展开 ${label}`, `Expand ${label}`))
       .accessibility_label(`${label} ${n}`)
       .on_click(() => this.toggleFlow(key, cx))
       .child(svg(open ? "mods/inkstone-chrome/chevron-down.svg" : "mods/inkstone-chrome/chevron-right.svg").size(10).flex_none().text_color(t.dim))

@@ -64,7 +64,7 @@ function paperCard(view, t, content) {
     .child(hEdge("bottom"));
 }
 const RANK = { blocked: 2, done: 1 };
-const LABEL = { blocked: pick("等你决定", "Needs you"), done: pick("已完成", "Done"), working: pick("运行中", "Running"), idle: pick("空闲", "Idle") };
+const LABEL = () => ({ blocked: pick("等你决定", "Needs you"), done: pick("已完成", "Done"), working: pick("运行中", "Running"), idle: pick("空闲", "Idle") });
 
 const waiting = () => agents()
   .filter((a) => RANK[a.status])
@@ -102,7 +102,7 @@ export default class Inbox extends View {
       .items_center()
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
-      .tooltip(list.length ? `${list.length} 个智能体在等你 · 点开看是哪些` : pick("没有智能体在等你", "No agent is waiting"))
+      .tooltip(list.length ? pick(`${list.length} 个智能体在等你 · 点开看是哪些`, `${list.length} agents are waiting · click to see them`) : pick("没有智能体在等你", "No agent is waiting"))
       .accessibility_label(pick("待处理列表", "Waiting list"))
       .on_click(() => openOverlay({ mod: "inkstone-inbox", kind: "dialog", frame: "none", width: 424, height: 344, props: { framed: true } }))
       .child(dot(t, urgent ? "blocked" : list.length ? "done" : "idle"))
@@ -110,7 +110,7 @@ export default class Inbox extends View {
         .text_size(11)
         .whitespace_nowrap()
         .text_color(!list.length ? t.dim : urgent ? t.blocked : t.done)
-        .child(list.length ? `待 ${list.length}` : pick("无待办", "Nothing waiting")));
+        .child(list.length ? pick(`待 ${list.length}`, `${list.length} waiting`) : pick("无待办", "Nothing waiting")));
   }
 
   row(a, i, t) {
@@ -133,7 +133,7 @@ export default class Inbox extends View {
         .gap(0)
         .child(div().w_full().truncate().text_size(12).child(nameOf(a)))
         .child(div().w_full().truncate().text_size(11).text_color(t.dim)
-          .child(`${LABEL[a.status] ?? a.status} · ${a.space_name} / ${a.tab_name}`)))
+          .child(`${LABEL()[a.status] ?? a.status} · ${a.space_name} / ${a.tab_name}`)))
       .child(svg("mods/inkstone-chrome/chevron-right.svg").size(12).flex_none().text_color(t.dim));
   }
 
@@ -153,7 +153,7 @@ export default class Inbox extends View {
         .border_color(t.border)
         .child(dot(t, list.some((a) => a.status === "blocked") ? "blocked" : "done"))
         .child(div().flex_1().text_size(13).font_semibold().child(pick("待处理", "Waiting")))
-        .child(div().text_size(11).text_color(t.dim).child(list.length ? `${list.length} 个` : pick("全部处理完了", "All handled")))
+        .child(div().text_size(11).text_color(t.dim).child(list.length ? pick(`${list.length} 个`, `${list.length}`) : pick("全部处理完了", "All handled")))
         .child(div()
           .id("inbox-close")
           .px(6)

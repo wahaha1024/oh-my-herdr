@@ -204,7 +204,7 @@ export default class NewSpace extends View {
       cx.notify();
       try {
         const r = await mkdir(target, this.machine);
-        if (r.code !== 0) throw new Error(r.stderr.trim() || `退出码 ${r.code}`);
+        if (r.code !== 0) throw new Error(r.stderr.trim() || pick(`退出码 ${r.code}`, `exit ${r.code}`));
       } catch (e) {
         this.busy = false;
         this.err = pick(`建目录失败：${String(e?.message ?? e)}`, `could not create the folder: ${String(e?.message ?? e)}`);

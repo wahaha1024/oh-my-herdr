@@ -293,7 +293,7 @@ async function liveDiff(repo, on, args, timeout) {
     const name = format.stdout.trim();
     if (name === "sha1") base = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
     else if (name === "sha256") base = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321";
-    else throw new Error(`不支持的 Git 对象格式：${name}`);
+    else throw new Error(pick(`不支持的 Git 对象格式：${name}`, `Unsupported Git object format: ${name}`));
   } else if (head.code !== 0) {
     throw new Error(head.stderr.trim() || pick("无法读取 Git HEAD", "Couldn't read Git HEAD"));
   }
@@ -590,7 +590,7 @@ export default class Review extends View {
       turnPromise,
       this.discoverRepos(cwd, on),
     ]);
-    setStage(`定位仓库 (${turn.paths.length} 条记录)`);
+    setStage(pick(`定位仓库 (${turn.paths.length} 条记录)`, `Locating the repo (${turn.paths.length} records)`));
     const turnSet = new Set(turn.paths.map(normPath));
     const repoMap = new Map(baseRepos.map((p) => [normPath(p), p]));
     const baseList = [...repoMap.keys()];
@@ -610,12 +610,12 @@ export default class Review extends View {
     const files = [];
     for (const repo of repos) {
       const rName = baseOf(repo);
-      setStage(`读取 ${rName}`);
+      setStage(pick(`读取 ${rName}`, `Reading ${rName}`));
       const [r, st] = await Promise.all([
         liveDiff(repo, on, ["--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "-U3"], 10000),
         exec("git", [...READ, "status", "--porcelain=v1", "-z", "-uall"], { cwd: repo, on, timeout: 8000 }).catch(() => null),
       ]);
-      if (r.code !== 0) throw new Error(r.stderr.trim() || `无法读取 ${rName} 的 Git 差异`);
+      if (r.code !== 0) throw new Error(r.stderr.trim() || pick(`无法读取 ${rName} 的 Git 差异`, `Could not read the Git diff for ${rName}`));
       const seenRel = new Set();
       for (const f of parseDiff(r.stdout)) {
         seenRel.add(f.path);
@@ -718,8 +718,8 @@ export default class Review extends View {
     const hasChange = s.mod + s.add + s.del > 0;
     const repoList = (s.repos ?? []).map(baseOf).join(" · ");
     const tip = hasChange
-      ? `未提交变更：${s.mod} 修改 · ${s.add} 新增 · ${s.del} 删除（+${s.plusLines} / −${s.minusLines} 行）\n仓库：${repoList || pick("当前目录", "This folder")}\n点击打开审查`
-      : (s.repos?.length ? `工作区干净（${repoList}）\n点击打开审查` : pick("未检测到 Git 仓库\n点击打开审查", "No Git repository found\nClick to open review"));
+      ? pick(`未提交变更：${s.mod} 修改 · ${s.add} 新增 · ${s.del} 删除（+${s.plusLines} / −${s.minusLines} 行）\n仓库：${repoList || pick("当前目录", "This folder")}\n点击打开审查`, `Uncommitted: ${s.mod} modified · ${s.add} added · ${s.del} deleted (+${s.plusLines} / −${s.minusLines} lines)\nRepo: ${repoList || pick("当前目录", "This folder")}\nClick to open review`)
+      : (s.repos?.length ? pick(`工作区干净（${repoList}）\n点击打开审查`, `Working tree clean (${repoList})\nClick to open review`) : pick("未检测到 Git 仓库\n点击打开审查", "No Git repository found\nClick to open review"));
     return h_flex()
       .id("review-compact")
       .size_full()
@@ -733,7 +733,7 @@ export default class Review extends View {
       .tooltip(tip)
       .hover((h) => h.bg(t.hover))
       .on_click(() => openOverlay({ mod: "inkstone-review", kind: "dialog", frame: "none", width: 1264, height: 864, props: { review: true, framed: true } }))
-      .child(svg("mods/workspace-chrome/git-compare.svg").size(12).flex_none().text_color(hasChange ? t.accent : t.muted))
+      .child(svg("mods/inkstone-chrome/git-compare.svg").size(12).flex_none().text_color(hasChange ? t.accent : t.muted))
       .child(div().flex_none().text_size(11).text_color(hasChange ? t.foreground : t.muted).child(pick("审查", "Review")))
       .when(hasChange, (el) => el.child(h_flex()
         .flex_1()
@@ -838,7 +838,7 @@ export default class Review extends View {
       .mode("always")
       .track_scroll(this.diffScroll)
       .children((this.split ? f.split : f.unified).map((row) => (this.split ? this.splitRow(row, t) : this.unifiedRow(row, t))))
-      .when(f.lines.length > MAX_ROWS, (el) => el.child(div().px(10).py(6).text_size(11).text_color(t.dim).child(`预览已截断，仅显示前 ${MAX_ROWS} 行。`)));
+      .when(f.lines.length > MAX_ROWS, (el) => el.child(div().px(10).py(6).text_size(11).text_color(t.dim).child(pick(`预览已截断，仅显示前 ${MAX_ROWS} 行。`, `Preview truncated to the first ${MAX_ROWS} lines.`))));
   }
 
   button(id, label, active, onClick, t) {
@@ -880,14 +880,14 @@ export default class Review extends View {
         .items_center()
         .border_b(1)
         .border_color(t.border)
-        .child(svg("mods/workspace-chrome/git-compare.svg").size(15).flex_none().text_color(t.accent))
+        .child(svg("mods/inkstone-chrome/git-compare.svg").size(15).flex_none().text_color(t.accent))
         .child(div().text_size(13).font_semibold().child(pick("审查", "Review")))
         .when((this.turnCount ?? 0) > 0, (el) => el
-          .child(div().h(18).px(5).flex().items_center().rounded(4).bg(t.accent + "22").text_size(11).text_color(t.accent).child(`本轮 ${this.turnCount}`)))
-        .child(div().px(5).py(1).rounded(4).border(1).border_color(t.border).text_size(11).text_color(t.muted).child(`${files.length} 个文件`))
-        .when(modCnt > 0, (el) => el.child(div().text_size(11).font_medium().text_color(t.working).child(`${modCnt} 修改`)))
-        .when(addCnt > 0, (el) => el.child(div().text_size(11).font_medium().text_color(t.done).child(`${addCnt} 新增`)))
-        .when(delCnt > 0, (el) => el.child(div().text_size(11).font_medium().text_color(t.blocked).child(`${delCnt} 删除`)))
+          .child(div().h(18).px(5).flex().items_center().rounded(4).bg(t.accent + "22").text_size(11).text_color(t.accent).child(pick(`本轮 ${this.turnCount}`, `This turn ${this.turnCount}`))))
+        .child(div().px(5).py(1).rounded(4).border(1).border_color(t.border).text_size(11).text_color(t.muted).child(pick(`${files.length} 个文件`, `${files.length} files`)))
+        .when(modCnt > 0, (el) => el.child(div().text_size(11).font_medium().text_color(t.working).child(pick(`${modCnt} 修改`, `${modCnt} modified`))))
+        .when(addCnt > 0, (el) => el.child(div().text_size(11).font_medium().text_color(t.done).child(pick(`${addCnt} 新增`, `${addCnt} added`))))
+        .when(delCnt > 0, (el) => el.child(div().text_size(11).font_medium().text_color(t.blocked).child(pick(`${delCnt} 删除`, `${delCnt} deleted`))))
         .child(div().text_size(11).text_color(t.done).child(`+${add}`))
         .child(div().text_size(11).text_color(t.blocked).child(`−${del}`))
         .child(div().flex_1())
@@ -911,7 +911,7 @@ export default class Review extends View {
           .cursor_pointer()
           .hover((s) => s.bg(t.hover))
           .on_click(() => closeOverlay(props()?.overlay))
-          .child(svg("mods/workspace-chrome/x.svg").size(14).text_color(t.muted))))
+          .child(svg("mods/inkstone-chrome/x.svg").size(14).text_color(t.muted))))
       .child(h_flex()
         .flex_1()
         .min_h(0)
@@ -935,7 +935,7 @@ export default class Review extends View {
             .track_scroll(this.filesScroll)
             .children(files.length
               ? files.map((f) => this.fileRow(f, t, cx))
-              : [div().px(8).py(8).text_size(12).text_color(t.dim).child(this.stage ? `读取差异… ${this.stage}` : pick("没有改动", "No changes"))])))
+              : [div().px(8).py(8).text_size(12).text_color(t.dim).child(this.stage ? pick(`读取差异… ${this.stage}`, `Reading the diff… ${this.stage}`) : pick("没有改动", "No changes"))])))
         .child(v_flex()
           .flex_1()
           .min_w(0)
