@@ -156,6 +156,7 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 + **界面文案走 `pick(zh, en)`，不建字典**：每个 mod 在最后一个 `import` 之后加 `const pick = (zh, en) => (shared("inkstone.lang") === "en" ? en : zh);`，UI 字面量就地换成 `pick("中文", "English")`。`shared` 改动会让所有 mod 重绘，切语言立即生效；设置页再 `run("layout.switch", { name: LAYOUT })` 重建一次，让常驻的设置页自己也换。
 + **`pick` 的常量别叫 `LANG`**：`inkstone-files` 里已有 `const LANG = { ts: "js", … }`（扩展名映射），同名会让 qjs 报 `invalid redefinition of global identifier`，那份用 `LANG_KEY`。
 + **需要跟着语言变的表要写成函数**：设置页 `THEMES` / `STATUS` 若写成模块顶层数组，`pick` 在加载时就固化了，切语言后只有它们停在旧语言；写成 `const THEMES = () => [...]` 并在渲染处 `THEMES().map`。
++ **`mods/*/jsconfig.json` 关掉 `noImplicitAny`**：这份文件不进仓库（`.gitignore` 有意排除，它是语言服务的垫片），但模板是 `strict: true`，而 mod 的 JS 从不写参数类型 —— pi-lens 会给每个函数参数报 7006，workbench 一个目录就 182 条 error，把真问题全淹了。加 `"noImplicitAny": false`（放在 `"strict": true,` 下一行）后该目录降到 27 条，剩下的是 `#${string}` 颜色参数（`theme()` 的颜色槽是模板字面量类型）与 `shared()` 返回 `unknown` 后直接取属性，属真实类型不精确但运行时无害。换机器后要重做这一步。
 + **嵌入 PowerShell 脚本的中文不翻译**：`inkstone-sessions` / `inkstone-review` 里 `Command` 串中的字面量属于执行用文本，翻译会连错误解析一起改。
 
 ## 装好了怎么验
