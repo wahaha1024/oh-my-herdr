@@ -5,9 +5,10 @@
 //   - 状态标记：同时支持 Git 与 Jujutsu (jj) 变更标记（M / A / D / U）；
 //   - 全中文界面，Esc 清空搜索或退出文件预览。
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, InputState, Input } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, checking } from "herdr";
+import ICONS from "./icons.js";
 
 const LANG = {
   ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js",
@@ -84,9 +85,62 @@ function normPath(p) {
   return String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
+// 盘符、UNC、POSIX 根都算绝对路径：show() 直接读，不再拼 root。
+const isAbs = (p) => /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(String(p ?? ""));
+
+// 文件/目录图标照 VS Code 的 Material Icon Theme 规则挑：路径规则胜过文件名，文件名胜过扩展名，最长扩展名优先。
+const DIR = "mods/inkstone-files";
+const bare = (name) => name.replace(/^__(.+)__$/, "$1").replace(/^[._-]/, "");
+const openedId = (id) => (id.endsWith("_light") ? `${id.slice(0, -6)}-open_light` : `${id}-open`);
+const lookupIcon = (table, key, dark) => (dark ? undefined : ICONS.light[table][key]) ?? ICONS[table][key];
+
+function fileIcon(path, dir, open, dark) {
+  const parts = String(path ?? "").toLowerCase().split("/");
+  const name = parts[parts.length - 1] ?? "";
+  const table = dir ? "folderNames" : "fileNames";
+  const find = (key) => lookupIcon(table, key, dark) ?? (dir ? lookupIcon(table, bare(key), dark) : undefined);
+  let id;
+  for (let i = 0; !id && i < parts.length - 1; i++) id = find(parts.slice(i).join("/"));
+  if (dir) {
+    id ??= find(name) ?? ICONS.folder;
+    return `${DIR}/icons/${open ? openedId(id) : id}.svg`;
+  }
+  id ??= lookupIcon(table, name, dark);
+  for (let dot = name.indexOf("."); !id && dot !== -1; dot = name.indexOf(".", dot + 1)) {
+    id = lookupIcon("fileExtensions", name.slice(dot + 1), dark);
+  }
+  return `${DIR}/icons/${id ?? ICONS.file}.svg`;
+}
+
+// 上一层目录：`E:\a\b` → `E:\a`，`E:\a` → `E:\`，`/a/b` → `/a`；到顶返回 null。
+function parentOf(path) {
+  const p = normPath(path);
+  const cut = p.lastIndexOf("/");
+  if (cut < 0) return null;
+  if (cut === 0) return "/";
+  const head = p.slice(0, cut);
+  return head.endsWith(":") ? `${head}/` : head;
+}
+
+// 搜索框里写 `mods/x/main.js:120`（或 `main.js L9`、`(9,3)`）直接预览到行。
+function parseTarget(text) {
+  const raw = String(text ?? "")
+    .replace(/^[\s"'`([{<]+/, "")
+    .replace(/[\s"'`)\]}>]+$/, "")
+    .trim();
+  if (!raw || raw.length > 500 || /\n/.test(raw)) return null;
+  const m = /^(.*?)(?::(\d+)(?::\d+)?|\(\s*(\d+)\s*,\s*\d+\s*\)|(?:[Ll](?:ine)?\s*)(\d+))$/.exec(raw);
+  const path = (m ? m[1] : raw).replace(/[,;，；:]+$/, "").trim();
+  if (!path) return null;
+  if (!/[\\/]/.test(path) && !/\.[A-Za-z0-9]{1,8}$/.test(path)) return null;
+  const line = m ? Number(m[2] ?? m[3] ?? m[4]) : 0;
+  return { path, line: Number.isFinite(line) && line > 0 ? line : 0 };
+}
+
 export default class InkstoneFiles extends View {
   init(_props, cx) {
     this.saved = new Map();
+    this.above = null; // 浏览根：null 跟项目目录，否则是上去之后的目录。
     this.entries = new Map();
     this.folders = new Set();
     this.pending = new Set();
@@ -104,6 +158,17 @@ export default class InkstoneFiles extends View {
       if (this.query.trim() && !this.indexReady && !this.indexLoading) {
         this.loadIndex(cx);
       }
+      cx.notify();
+    });
+    // 回车：整行是路径（可带行号）就直接预览过去；不然照旧只做过滤。
+    this.input.on("submit", (_e, cx) => {
+      const hit = parseTarget(this.input.value());
+      if (!hit) return;
+      this.query = "";
+      this.input.set_value("");
+      const rel = this.mapPath(hit.path);
+      if (rel === null) return;
+      this.show(rel, cx, hit.line);
       cx.notify();
     });
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
@@ -229,13 +294,14 @@ export default class InkstoneFiles extends View {
 
   refresh(cx) {
     const { cwd, on } = location();
+    const base = this.above ?? cwd;
     const next = locKey();
     if (next !== this.context?.key) {
       this.stopWatching();
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
       const saved = this.saved.get(next);
-      this.context = { key: next, cwd, on };
-      this.root = cwd;
+      this.context = { key: next, cwd: base, on };
+      this.root = base;
       this.on = on;
       this.entries = new Map();
       this.folders = new Set(saved?.folders);
@@ -306,7 +372,7 @@ export default class InkstoneFiles extends View {
     cx.notify();
   }
 
-  show(path, cx) {
+  show(path, cx, line = 0) {
     this.code?.release();
     this.code = null;
     this.file = path;
@@ -315,9 +381,10 @@ export default class InkstoneFiles extends View {
     const context = this.context;
     const root = this.root;
     const on = this.on;
+    const target = isAbs(path) ? path : `${root}/${path}`;
     cx.spawn(async (cx) => {
       try {
-        const text = await readTextFile(`${root}/${path}`, { on });
+        const text = await readTextFile(target, { on });
         if (this.file !== path || !this.current(context)) return;
         if (text === null) { this.fileError = "该文件已不存在"; return; }
         if (text.includes("\0")) { this.fileError = "二进制文件 · 无法预览文本"; return; }
@@ -339,6 +406,7 @@ export default class InkstoneFiles extends View {
             constant: t.ansi6,
           },
         });
+        if (line > 0) this.gotoLine(text, line);
       } catch {
         if (this.file === path && this.current(context)) {
           this.fileError = "无法预览此文件（二进制、过大或无读取权限）";
@@ -347,6 +415,32 @@ export default class InkstoneFiles extends View {
         cx.notify();
       }
     });
+  }
+
+  // 面板根目录下的绝对路径转成相对路径；在外面的原样交给 show 读绝对路径。
+  mapPath(path) {
+    const full = normPath(path);
+    const root = normPath(this.root);
+    if (!root || !isAbs(full)) return path;
+    if (full === root) return null;
+    if (full.startsWith(`${root}/`)) return full.slice(root.length + 1);
+    return path;
+  }
+
+  // 光标落到第 line 行行首：编辑器拿到焦点就会跟过去。
+  gotoLine(text, line) {
+    const code = this.code;
+    if (!code) return;
+    let off = 0;
+    for (let n = 1; n < line; n++) {
+      const at = text.indexOf("\n", off);
+      if (at < 0) { off = text.length; break; }
+      off = at + 1;
+    }
+    try {
+      code.set_selected_range({ start: off, end: off });
+      code.focus();
+    } catch {}
   }
 
   copyMention(relPath, cx) {
@@ -368,6 +462,51 @@ export default class InkstoneFiles extends View {
     if (mark === "A") return t.ansi2;
     if (mark === "D" || mark === "U") return t.ansi1;
     return t.blocked;
+  }
+
+  // 换浏览根：`dir` 为 null 表示回到项目目录。
+  goTo(dir, cx) {
+    if (dir !== null && !dir) return;
+    this.above = dir;
+    this.stopWatching();
+    this.context = null;
+    this.folders = new Set();
+    this.entries = new Map();
+    this.pending = new Set();
+    this.marks = {};
+    this.vcs = undefined;
+    this.index = [];
+    this.indexReady = false;
+    this.indexLoading = false;
+    this.show(null);
+    this.refresh(cx);
+    cx.notify();
+  }
+
+  up(cx) {
+    const parent = parentOf(this.root);
+    if (parent) this.goTo(parent, cx);
+  }
+
+  home(cx) {
+    if (this.above !== null) this.goTo(null, cx);
+  }
+
+  navButton(id, label, tip, on, t, fn) {
+    return div()
+      .id(id)
+      .px(5)
+      .py(2)
+      .rounded(4)
+      .flex_none()
+      .text_size(12)
+      .text_color(on ? t.muted : t.dim)
+      .when(on, (el) => el
+        .cursor_pointer()
+        .tooltip(tip)
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click((_e, cx) => fn(cx)))
+      .child(label);
   }
 
   mentionButton(path, idKey, t, cx) {
@@ -395,6 +534,7 @@ export default class InkstoneFiles extends View {
   }
 
   rows(prefix, depth, out, t, cx) {
+    const dark = Boolean(settings().dark);
     if (out.length >= TOTAL || depth > 40) return out;
     const rootNorm = normPath(this.root);
     for (const entry of this.entries.get(prefix) ?? []) {
@@ -418,7 +558,7 @@ export default class InkstoneFiles extends View {
           .child(entry.dir
             ? svg(`mods/files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim)
             : div().w(12).flex_none())
-          .child(svg(`mods/files/${entry.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(t.muted))
+          .child(image(fileIcon(path, entry.dir, open, dark)).size(14).flex_none())
           .child(div().flex_1().min_w(0).truncate().text_size(12).child(entry.name))
           .when(Boolean(mark), (el) => el.child(div().flex_none().text_size(10).text_color(this.markColor(mark, t)).child(mark)))
           .child(this.mentionButton(path, `file-at-${path}`, t, cx)),
@@ -465,7 +605,7 @@ export default class InkstoneFiles extends View {
         .hover((s) => s.bg(t.hover))
         .tooltip(path)
         .on_click((_e, cx) => this.show(path, cx))
-        .child(svg("mods/files/file.svg").size(13).flex_none().text_color(t.muted))
+        .child(image(fileIcon(path, false, false, Boolean(settings().dark))).size(13).flex_none())
         .child(v_flex()
           .flex_1()
           .min_w(0)
@@ -530,7 +670,11 @@ export default class InkstoneFiles extends View {
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click((_e, cx) => { this.show(null); cx.notify(); })
           .child("←")))
-        .when(!this.file, (el) => el.child(svg("mods/files/file.svg").size(13).flex_none().text_color(t.accent)))
+        .when(!this.file, (el) => el.child(image(fileIcon("file.txt", false, false, Boolean(settings().dark))).size(13).flex_none()))
+        .when(!this.file, (el) => el
+          .child(this.navButton("files-up", "↑", "上级目录", Boolean(parentOf(this.root)), t, (cx) => this.up(cx)))
+          .child(this.navButton("files-home", "⌂", "回到项目目录", this.above !== null, t, (cx) => this.home(cx))))
+        .when(Boolean(this.file), (el) => el.child(image(fileIcon(this.file, false, false, Boolean(settings().dark))).size(13).flex_none()))
         .child(div().text_size(12).font_semibold().child(this.file ? "预览" : "文件"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(11).text_color(t.dim)
           .child(this.file ?? this.root?.split(/[\\/]/).filter(Boolean).pop() ?? ""))
