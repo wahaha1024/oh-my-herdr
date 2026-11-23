@@ -34,6 +34,7 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 | See who needs you | Check agent status in the sidebar and tabs | Scan separate waiting, running and done groups. Click a waiting agent to go straight to its terminal. |
 | Find a file without leaving the terminal | Use the built-in files and changes panels | Open one drawer for files, sessions and favourites. Search and preview files, then copy an `@relative/path` reference in one click. |
 | Recognise the current pane at a glance | Use the default pane header and theme | See the program, folder and status in each pane header. Qingci and Xuanmo follow the system’s light and dark modes; the optional [paper theme](screenshot-paper.png) adds torn edges and highlighter selection. |
+| Work in English or Chinese | English only | Pick either language in the preferences page; the sidebar, tabs, drawer, right-click menus and every setting follow |
 
 ## New workflows, not just a new look
 
@@ -44,6 +45,7 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 - **Run a session from one right-click.** Pin it, put it away, move it left or right, open a tab beside it, split right or down, zoom, peek, or open its folder. A running session offers *Interrupt*; a stopped one offers *Compact* instead. Slash commands — `/fork`, `/tree`, `/cost`, `/export` and the rest — sit in *More commands…*, so you don't have to remember them.
 - **Read the tab strip as a status board.** Waiting is a red square, running an amber ring, done a green dot — the same palette as the agents panel, and the tab's tint follows it.
 - **Jump to a line, not just a file.** Type `path:line` in the drawer's search box to land on that line, `↑` for the parent folder and `⌂` back to the project.
+- **Switch between Chinese and English in one click.** Pick a language at the top of the preferences page and the sidebar, tabs, drawer, right-click menus and settings change together. The choice lives in `shared`, so it survives a restart.
 - **Check ports and resource use without switching away.** See CPU, memory and listening ports in the status bar, or open a local service in your browser from the port list. Favourite frequently used project folders so you don’t have to browse for them again.
 
 ## Themes

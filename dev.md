@@ -153,6 +153,10 @@ herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 + **旧发言没有箭头时，先看终端保留区**：对当前终端执行 `hc read <term> --lines 20000 --json`；返回 `complete: false` 说明只拿到保留的部分，不代表日志解析失败。不要测同 cwd 下已经结束的兄弟终端。大日志由子进程筛选，`readTextFile` 只读小缓存。
 + **经 `exec` 传给 PowerShell 的命令串里不能有双引号**：Windows 命令行解析会先把 `"` 剥掉，PowerShell 认为语句没结束而挂起等输入，调用只能等超时才返回。所有引号用 `[string][char]34` 拼。命令串前面还要加 `[Console]::OutputEncoding=[Text.Encoding]::UTF8;`，否则中文路径回来是乱码，查找静默失败。
 + **按 `pane.cwd` 定位 OMP 会话，不要全库搜标题**：`~/.omp/agent/sessions/<cwd 里 [:\/] 换成 ->` 目录里只放这个项目的会话；扫全库再退回「最近写过的那个文件」，会在标题还是空的时候把别的项目的对话显示出来。
++ **界面文案走 `pick(zh, en)`，不建字典**：每个 mod 在最后一个 `import` 之后加 `const pick = (zh, en) => (shared("inkstone.lang") === "en" ? en : zh);`，UI 字面量就地换成 `pick("中文", "English")`。`shared` 改动会让所有 mod 重绘，切语言立即生效；设置页再 `run("layout.switch", { name: LAYOUT })` 重建一次，让常驻的设置页自己也换。
++ **`pick` 的常量别叫 `LANG`**：`inkstone-files` 里已有 `const LANG = { ts: "js", … }`（扩展名映射），同名会让 qjs 报 `invalid redefinition of global identifier`，那份用 `LANG_KEY`。
++ **需要跟着语言变的表要写成函数**：设置页 `THEMES` / `STATUS` 若写成模块顶层数组，`pick` 在加载时就固化了，切语言后只有它们停在旧语言；写成 `const THEMES = () => [...]` 并在渲染处 `THEMES().map`。
++ **嵌入 PowerShell 脚本的中文不翻译**：`inkstone-sessions` / `inkstone-review` 里 `Command` 串中的字面量属于执行用文本，翻译会连错误解析一起改。
 
 ## 装好了怎么验
 ```shell

@@ -45,6 +45,7 @@ The installer needs an initialised config directory (`~/.config/herdr-app` with 
 | Click the clock in a pane header | Opens that pane's OMP history: search prompts, replies and tool calls, read by turn, jump back while the turn is still in scrollback |
 | Click Review in the status bar | Live `git diff HEAD` with the files this agent turn touched listed first, unified or side by side |
 | Change the system appearance | Qingci ↔ Xuanmo; choose Zhi in Preferences for the paper look |
+| Pick a language in Preferences | Chinese or English for the whole layout: sidebar, tabs, drawer, right-click menus and every setting |
 
 ## Built from
 
