@@ -1,5 +1,6 @@
 ﻿# Oh My Herdr 安装器（PowerShell 5.1，无新增运行时依赖）。
 param(
+  [string]$Source = "",
   [string]$Target = "",
   [switch]$Force,
   [switch]$DryRun,
@@ -7,7 +8,8 @@ param(
   [string]$Restore = ""
 )
 $ErrorActionPreference = "Stop"
-$src = [System.IO.Path]::GetFullPath($PSScriptRoot)
+$src = if ($Source) { [System.IO.Path]::GetFullPath($Source) } else { [System.IO.Path]::GetFullPath($PSScriptRoot) }
+if (-not (Test-Path -LiteralPath $src -PathType Container)) { throw "安装包目录不存在：$src" }
 
 if ($Uninstall -and $Restore) { throw "-Uninstall 与 -Restore 不能同时使用。" }
 if (-not $Target) {
@@ -24,7 +26,15 @@ function Read-Json($path, $label) {
   if (($label -eq "源 programs.json" -or $label -eq "目标 programs.json") -and -not $raw.TrimStart().StartsWith("{")) { throw "$label 根必须是对象，原文件未修改。" }
   try { return ($raw | ConvertFrom-Json) } catch { throw "$label 无法解析，原文件未修改：$($_.Exception.Message)" }
 }
-function Hash-File($path) { return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+function Hash-File($path) {
+  # 不用 Get-FileHash：部分机器的 Windows PowerShell 5.1 被裁剪后该命令缺失。
+  $stream = [System.IO.File]::OpenRead($path)
+  try {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return ([System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+  } finally { $stream.Dispose() }
+}
 function Ensure-Object($obj, $label) { if ($null -eq $obj -or $obj -isnot [pscustomobject]) { throw "$label 必须是对象，原文件未修改。" } }
 function Add-Prop($obj, $name, $value) {
   $p = $obj.PSObject.Properties[$name]
@@ -39,7 +49,8 @@ function Rel-Files {
     foreach ($f in @(Get-ChildItem -LiteralPath $base -Recurse -File)) {
       if ($f.Name -eq "gpui-kit.d.ts" -or $f.Name -eq "jsconfig.json") { continue }
       $rel = $f.FullName.Substring($base.Length).TrimStart('\','/')
-      $result += [pscustomobject]@{ Source=$f.FullName; Rel=(Join-Path $dir $rel) }
+      # 清单里的相对路径统一用正斜杠：两个安装器写出的清单才是同一份形状。
+      $result += [pscustomobject]@{ Source=$f.FullName; Rel=(("$dir/$rel") -replace '\\', '/') }
     }
   }
   return $result

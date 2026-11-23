@@ -17,15 +17,19 @@ INSTALL_PS1 = REPO / "install.ps1"
 INSTALL_SH = REPO / "install.sh"
 
 
-def run_script(args, cwd):
-    """跨平台执行安装器：Windows 用 powershell.exe，其他用 sh。"""
+def run_script(args, cwd, source=None):
+    """跨平台执行安装器：Windows 用 powershell.exe，其他用 sh。
+
+    source 指向伪安装包目录：不传时安装器会用仓库自身当源，
+    用例就失去了隔离（断言的是 stub 包内容，装的却是真实仓库）。
+    """
     if IS_WINDOWS:
         cmd = [
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-File", str(INSTALL_PS1),
-        ] + args
+        ] + (["-Source", str(source)] if source else []) + args
     else:
-        cmd = ["sh", str(INSTALL_SH)] + args
+        cmd = ["sh", str(INSTALL_SH)] + (["--source", str(source)] if source else []) + args
     return subprocess.run(
         cmd, cwd=str(cwd), capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=120,
@@ -140,7 +144,7 @@ class InstallerTest(unittest.TestCase):
     # ---------- 用例 ----------
 
     def test_01_first_install_writes_all_and_manifest(self):
-        r = run_script(self.install_args(), self.tmp)
+        r = run_script(self.install_args(), self.tmp, self.pkg)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertTrue((self.target / "layouts" / "oh-my-herdr.json").is_file())
         self.assertTrue((self.target / "mods" / "cockpit" / "main.js").is_file())
@@ -155,54 +159,55 @@ class InstallerTest(unittest.TestCase):
         self.assertTrue(self.backup_ids(), "首次安装应有备份目录")
 
     def test_02_dry_run_writes_nothing(self):
-        r = run_script(self.install_args(["dry"]), self.tmp)
+        r = run_script(self.install_args(["dry"]), self.tmp, self.pkg)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertEqual(self.file_count(), 1)  # 仅 settings.json
         self.assertFalse((self.target / ".omh").exists())
 
     def test_03_repeat_install_is_idempotent(self):
-        run_script(self.install_args(), self.tmp)
+        run_script(self.install_args(), self.tmp, self.pkg)
         before_count = self.file_count()
         before_manifest = self.manifest()
-        r = run_script(self.install_args(), self.tmp)
+        r = run_script(self.install_args(), self.tmp, self.pkg)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertEqual(self.file_count(), before_count)
         self.assertEqual(self.manifest(), before_manifest)
         self.assertEqual(self.prog_keys(), ["codebuddy", "omp"])
 
     def test_04_broken_target_json_preflight_aborts_untouched(self):
-        run_script(self.install_args(), self.tmp)
+        run_script(self.install_args(), self.tmp, self.pkg)
         (self.target / "programs.json").write_text("{broken", encoding="utf-8")
         before = self.file_count()
         for extra in ([], ["dry"]):
-            r = run_script(self.install_args(extra), self.tmp)
+            r = run_script(self.install_args(extra), self.tmp, self.pkg)
             self.assertNotEqual(r.returncode, 0, "坏 JSON 必须让安装器失败")
             self.assertEqual(self.file_count(), before, "预检失败后目标不得有任何变化")
 
     def test_05_force_backup_and_restore_roundtrip(self):
-        run_script(self.install_args(), self.tmp)
+        run_script(self.install_args(), self.tmp, self.pkg)
         layout = self.target / "layouts" / "oh-my-herdr.json"
         layout.write_text("user v1\n", encoding="utf-8")
         # Force 覆盖前必须先备份用户版本。
-        r = run_script(self.install_args(["force"]), self.tmp)
+        r = run_script(self.install_args(["force"]), self.tmp, self.pkg)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         bid = self.backup_ids()[-1]
         self.assertIn("user v1", self.backup_file(bid, "layouts/oh-my-herdr.json")
                       .read_text(encoding="utf-8"))
         self.assertNotIn("user v1", layout.read_text(encoding="utf-8"))
         # 恢复到覆盖前的用户版本。
-        r = run_script(self.install_args(["restore"]), self.tmp)
+        r = run_script(self.install_args(["restore"]), self.tmp, self.pkg)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertIn("user v1", layout.read_text(encoding="utf-8"))
 
     def test_06_uninstall_keeps_user_modified_and_restores_preexisting(self):
         # 安装前就存在的文件应被登记为 previous 并在卸载时恢复。
+        (self.target / "themes").mkdir(parents=True, exist_ok=True)
         (self.target / "themes" / "qingci.json").write_text("pre-existing\n", encoding="utf-8")
-        r = run_script(self.install_args(["force"]), self.tmp)
+        r = run_script(self.install_args(["force"]), self.tmp, self.pkg)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         # 用户改了另一个文件再卸载：改过的保留、没改的删除/恢复。
         (self.target / "mods" / "cockpit" / "main.js").write_text("user edit\n", encoding="utf-8")
-        r = run_script(self.install_args(["uninstall"]), self.tmp)
+        r = run_script(self.install_args(["uninstall"]), self.tmp, self.pkg)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertIn("pre-existing",
                       (self.target / "themes" / "qingci.json").read_text(encoding="utf-8"))
@@ -212,11 +217,11 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse((self.target / ".omh" / "install.json").exists())
 
     def test_07_restore_does_not_clobber_later_user_edits(self):
-        run_script(self.install_args(), self.tmp)
+        run_script(self.install_args(), self.tmp, self.pkg)
         theme = self.target / "themes" / "zhi.json"
         # 安装后用户改了文件；恢复不得覆盖这个更新过的内容。
         theme.write_text("user edit v2\n", encoding="utf-8")
-        r = run_script(self.install_args(["restore"]), self.tmp)
+        r = run_script(self.install_args(["restore"]), self.tmp, self.pkg)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertIn("user edit v2", theme.read_text(encoding="utf-8"))
 
@@ -227,7 +232,7 @@ class InstallerTest(unittest.TestCase):
         saved = self.target
         self.target = alt
         try:
-            r = run_script(self.install_args(), self.tmp)
+            r = run_script(self.install_args(), self.tmp, self.pkg)
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertTrue((alt / "layouts" / "oh-my-herdr.json").is_file())
             self.assertEqual(self.prog_keys(), ["codebuddy", "omp"])
@@ -235,11 +240,11 @@ class InstallerTest(unittest.TestCase):
             self.target = saved
 
     def test_09_uninstall_then_reinstall_clean(self):
-        run_script(self.install_args(), self.tmp)
-        run_script(self.install_args(["uninstall"]), self.tmp)
+        run_script(self.install_args(), self.tmp, self.pkg)
+        run_script(self.install_args(["uninstall"]), self.tmp, self.pkg)
         self.assertFalse((self.target / ".omh" / "install.json").exists())
         # 卸载后重装必须完整可用。
-        r = run_script(self.install_args(), self.tmp)
+        r = run_script(self.install_args(), self.tmp, self.pkg)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertEqual(self.prog_keys(), ["codebuddy", "omp"])
 
@@ -248,7 +253,7 @@ class InstallerTest(unittest.TestCase):
             "programs": {"omp": {"icon": "user-icon.svg"}},
             "extra": True,
         })
-        r = run_script(self.install_args(), self.tmp)
+        r = run_script(self.install_args(), self.tmp, self.pkg)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         doc = self.read_target_programs()
         self.assertEqual(doc["programs"]["omp"], {"icon": "user-icon.svg"})

@@ -14,6 +14,12 @@
 - **Issue 模板**：`.github/ISSUE_TEMPLATE/bug_report.yml` 引导先运行诊断脚本并预览脱敏输出，再粘贴。
 - `VERSION` 单行版本文件（`0.2.0`），发布流程以它为版本事实来源。
 
+### 修复
+
+- **安装器不再依赖 `Get-FileHash`**：部分机器的 Windows PowerShell 5.1 被裁剪（`Microsoft.PowerShell.Commands.Utility.dll` 缺失）后该命令不可用，`install.ps1` 会整段安装失败。`Hash-File` 改用 `System.Security.Cryptography.SHA256` 直接算流哈希，与 cmdlet 结果逐字节一致。
+- **安装器支持指定安装包目录**：`install.ps1 -Source`、`install.sh --source`，默认仍是脚本所在目录。`tests/test_install.py` 用它把伪安装包与目标目录隔离开——此前用例没传源目录，跑的是仓库自身，`assets/icon.svg` 这类断言依赖真实仓库结构而误报。
+- **安装清单相对路径统一用正斜杠**：Windows 之前写 `themes\qingci.json`，*nix 写 `themes/qingci.json`，同一份清单在两个平台形状不同；现在都以 `/` 记录，`Join-Path` 仍能正确落位。
+
 ### 限制
 
 - CI 的 Release 步骤上传 `SHA256SUMS`，其中只含 zip 的哈希；`SHA256SUMS` 自身的哈希在打包时打印到日志，无法自包含。

@@ -2,7 +2,7 @@
 # Oh My Herdr 安装器：POSIX sh 外壳，JSON 与清单操作使用 Python 标准库。
 set -eu
 
-FORCE=0; DRY=0; UNINSTALL=0; RESTORE=""; TARGET=""
+FORCE=0; DRY=0; UNINSTALL=0; RESTORE=""; TARGET=""; SOURCE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=1 ;;
@@ -12,6 +12,8 @@ while [ "$#" -gt 0 ]; do
     --restore=*) RESTORE=${1#--restore=} ;;
     --target) shift; [ "$#" -gt 0 ] || { echo "--target 需要目录" >&2; exit 2; }; TARGET=$1 ;;
     --target=*) TARGET=${1#--target=} ;;
+    --source) shift; [ "$#" -gt 0 ] || { echo "--source 需要目录" >&2; exit 2; }; SOURCE=$1 ;;
+    --source=*) SOURCE=${1#--source=} ;;
     -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -19,7 +21,11 @@ while [ "$#" -gt 0 ]; do
 done
 [ "$UNINSTALL" = 0 ] || [ -z "$RESTORE" ] || { echo "--uninstall 与 --restore 不能同时使用" >&2; exit 2; }
 
-SRC=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -n "$SOURCE" ]; then
+  SRC=$(CDPATH= cd -- "$SOURCE" 2>/dev/null && pwd) || { echo "安装包目录不存在：$SOURCE" >&2; exit 2; }
+else
+  SRC=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+fi
 if [ -z "$TARGET" ]; then
   if [ -n "${HERDR_APP_HOME:-}" ]; then TARGET=$HERDR_APP_HOME
   elif [ -n "${XDG_CONFIG_HOME:-}" ]; then TARGET=$XDG_CONFIG_HOME/herdr-app
