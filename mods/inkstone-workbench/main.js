@@ -13,6 +13,7 @@ const git = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
 // 机器层（This computer / myserver…）在最上面，目录层往下缩进一档；
 // 下面几处行内的左内边距都按 IND 加，层次一眼能数出来。
 const IND = 10;
+const PAD = 12; // 根目录下的子项目比根目录行再缩进这么多
 const LOCAL = "This computer";
 // 缓存键带上机器：两台机器上同名目录不能共用一份 git 探测结果。
 const mkey = (on, path) => `${on ?? ""}\u0000${path ?? ""}`;
@@ -198,12 +199,13 @@ const swipeHover = (t, el) => (PAPER(t)
   ? el.rounded_tl(3).rounded_tr(8).rounded_br(4).rounded_bl(9).hover((s) => s.bg("#f8dc4c4d"))
   : el.hover((s) => s.bg(t.hover)));
 
-// 空间标记：默认沿用上一版的像素精灵；偏好里可以切成头像式标记。
-const markMode = () => (shared("inkstone.spaces.mark") === "avatar" ? "avatar" : "sprite");
 const TONE = { 0: "tomato", 1: "tangerine", 2: "lemon", 3: "grass", 4: "sky", 5: "grape", 6: "bubblegum" };
 
-// 头像式空间标记：色相仍由空间的调色板序号决定（与像素精灵一一对应），字母取名字首字，
-// 状态点在右下角（待处理 = 忙，已完成 = 在线）。
+// 字母头像：给根目录下的子项目用，跟空间的像素精灵区分开。
+// 色相取名字的字符和，同一个项目每次渲染都是同一个颜色。
+const toneOf = (text) => [...String(text ?? "")].reduce((a, c) => a + (c.codePointAt(0) ?? 0), 0);
+
+// 字母头像：色相由序号决定，字母取名字首字，状态点在右下角（待处理 = 忙，已完成 = 在线）。
 function avatar(t, idx, letter, status) {
   const tone = TONE[Math.abs(Number(idx) || 0) % 7] ?? "teal";
   const dot = status === "blocked" ? "busy" : status === "done" ? "online" : null;
@@ -487,25 +489,39 @@ export default class Workbench extends View {
     return order.map((m) => {
       const on = m.name ?? null;
       const mine = list.filter((s) => (s.machine ?? null) === on);
-      const groups = this.groupsOf(mine);
-      // 机器根目录本身也占一行：那里还没有空间时，也要能右键在它下面建子目录。
+      let groups = this.groupsOf(mine);
+      // 机器根目录：落在它里面的项目缩进一级挂在它下面，其余组照旧排在后面；
+      // 根目录本身还没有空间时也占一行，能右键在它下面建子项目。
       const root = rootsOf()[on ?? ""] ?? null;
-      if (root && !groups.some((g) => samePath(g.root, root))) {
-        groups.unshift({ root, on, repo: null, spaces: [], trees: [], scanned: true, rootRow: true });
+      if (root) {
+        const inside = [];
+        const outside = [];
+        for (const g of groups) {
+          const same = samePath(g.root, root);
+          if (same || under(g.root, root)) {
+            g.parent = root;
+            g.pad = same ? 0 : PAD;
+            inside.push(g);
+          } else outside.push(g);
+        }
+        if (!inside.some((g) => samePath(g.root, root))) {
+          inside.unshift({ root, on, repo: null, spaces: [], trees: [], scanned: true, rootRow: true, pad: 0 });
+        }
+        groups = [...inside, ...outside];
       }
       return { name: on, state: m.state, root, spaces: mine, groups, key: m.name ?? LOCAL };
     });
   }
 
   // 一个智能体一行：状态点、名字、右侧「待处理 / 已完成」。
-  agentRow(a, t) {
+  agentRow(a, t, pad = 0) {
     const name = clean(a.title) || a.program?.name || a.app || a.address;
     const detail = [statusLabel(a.status), a.tab_name, a.address].filter(Boolean).join(" · ");
     return h_flex()
       .id(`wb-a-${a.address}`)
       .h(26)
       .flex_none()
-      .pl(38 + IND)
+      .pl(38 + IND + pad)
       .pr(8)
       .gap(6)
       .items_center()
@@ -531,7 +547,7 @@ export default class Workbench extends View {
   }
 
   // 没跑智能体的终端也要有自己一行：否则徽章上的 tab 数在下面找不到对应的行。
-  termRow(s, c, t) {
+  termRow(s, c, t, pad = 0) {
     const ps = panes();
     const lead = ps.find((p) => p.tab === c.id);
     const prog = lead?.program;
@@ -540,7 +556,7 @@ export default class Workbench extends View {
       .id(`wb-tab-${c.id}`)
       .h(26)
       .flex_none()
-      .pl(38 + IND)
+      .pl(38 + IND + pad)
       .pr(8)
       .gap(6)
       .items_center()
@@ -560,13 +576,13 @@ export default class Workbench extends View {
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(name));
   }
 
-  treeRow(w, t, n = 0) {
+  treeRow(w, t, n = 0, pad = 0) {
     return h_flex()
       .id(`wb-t-${w.path}`)
       .h(26)
       .flex_none()
       .relative()
-      .ml(20 + IND)
+      .ml(20 + IND + pad)
       .pl(6)
       .pr(8)
       .gap(6)
@@ -588,7 +604,7 @@ export default class Workbench extends View {
 
   // 空间行：30 高、14 号彩色名字 + tab 数，夹在 27 高的项目头与 26 高的终端行之间，
   // 三层用高度、字号、颜色分开。选中是一道荧光笔，其他主题仍是淡色底。
-  spaceRow({ space: s, folder, branch, name, ahead, behind, repo }, t, fill, art, colorIndex, mark) {
+  spaceRow({ space: s, folder, branch, name, ahead, behind, repo }, t, fill, art, colorIndex, pad = 0) {
     const on = s.active;
     const has = s.status === "blocked" || s.status === "done" || s.status === "working";
     const folded = this.fold.has(s.id);
@@ -598,7 +614,7 @@ export default class Workbench extends View {
       .id(`wb-s-${s.id}`)
       .h(30)
       .flex_none()
-      .pl(10 + IND)
+      .pl(10 + IND + pad)
       .pr(8)
       .gap(6)
       .items_center()
@@ -627,7 +643,7 @@ export default class Workbench extends View {
         })
         .child(svg(folded ? "mods/workspace-chrome/chevron-right.svg" : "mods/workspace-chrome/chevron-down.svg").size(10).flex_none().text_color(t.dim)))
       // 空间标记是它的固定身份：颜色分目录归属，字母 / 图案分空间。
-      .child(this.mark(s.id, t, { mode: mark, art, fill, idx: colorIndex, letter: label, status: s.status, tip: `${count} 个终端` }))
+      .child(this.mark(s.id, t, { art, fill, tip: `${count} 个终端` }))
       .child(div()
         .flex_1()
         .min_w(0)
@@ -642,21 +658,20 @@ export default class Workbench extends View {
       .when(has, (el) => el.child(dot(t, s.status, 7)));
   }
 
-  // 空间的标记：偏好的头像（默认）或像素精灵，两条路径都是活的。
-  mark(id, t, { mode, art, fill, idx, letter, status, tip }) {
-    const sprite = mode === "sprite";
+  // 空间标记：像素精灵，Alt+点击换图案。子项目用头像，所以这里不再有开关。
+  mark(id, t, { art, fill, tip }) {
     return div()
       .id(`wb-sp-${id}`)
       .flex_none()
-      .when(sprite, (el) => el.h(16).flex().items_center().justify_center().cursor_pointer())
-      .tooltip(sprite ? `${tip} · Alt+点击换图案` : tip)
-      .accessibility_label(`空间标记 ${sprite ? art : [...letter][0] ?? ""}`)
+      .h(16).flex().items_center().justify_center().cursor_pointer()
+      .tooltip(`${tip} · Alt+点击换图案`)
+      .accessibility_label(`空间标记 ${art}`)
       .on_mouse_down("left", (e, cx) => {
         if (!e.modifiers.alt) return;
         cx.stop_propagation();
-        if (sprite) this.cycleSprite(id, cx);
+        this.cycleSprite(id, cx);
       })
-      .child(sprite ? spriteArt(art, fill) : avatar(t, idx, [...letter][0]?.toUpperCase() ?? "·", status));
+      .child(spriteArt(art, fill));
   }
 
   // 铅笔尾巴：分支名与空间名同名（或就是 main / master）、仓库名与空间名同名时都不显示；
@@ -736,14 +751,19 @@ export default class Workbench extends View {
 
   // 目录层用「文件夹图标 + 深色粗体名」，空间层用「标记 + 彩色名」——
   // 两层靠符号形状区分；纸感下项目头下面一条铅笔线，组与组之间不再另加灰线。
-  projectRow(g, t, fill) {
+  projectRow(g, t, fill, pad = 0) {
     const folded = this.fold.has(g.root);
     const open = g.spaces.filter((x) => x.space).length;
+    const name = base(g.root);
+    // 机器根目录下的子项目用字母头像：与空间的像素精灵分开，也让从属关系一眼可见。
+    const head = pad > 0
+      ? avatar(t, toneOf(name), [...name][0]?.toUpperCase() ?? "·", null)
+      : glyph(FOLDER, fill ?? t.muted, { div, v_flex, h_flex }, 2);
     return h_flex()
       .id(`wb-p-${g.root}`)
       .h(27)
       .flex_none()
-      .pl(8 + IND)
+      .pl(8 + IND + pad)
       .pr(8)
       .gap(6)
       .items_center()
@@ -760,13 +780,13 @@ export default class Workbench extends View {
       .on_click((_e, cx) => this.toggleFold(g.root, cx))
       .on_mouse_down("right", () => this.menu({ folder: g.root, machine: g.on }, "dir"))
       .child(svg(folded ? "mods/workspace-chrome/chevron-right.svg" : "mods/workspace-chrome/chevron-down.svg").size(11).flex_none().text_color(t.dim))
-      .child(glyph(FOLDER, fill ?? t.muted, { div, v_flex, h_flex }, 2))
-      .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(base(g.root)))
+      .child(head)
+      .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(name))
       .child(div().flex_none().text_size(10).text_color(t.dim).child(g.spaces.length ? `${open}/${g.spaces.length}` : ""));
   }
 
   // rail 模式：一个空间只剩它的标记，名字、终端数与分支收进 tooltip。
-  railSpace(s, t, fill, art, colorIndex, mark) {
+  railSpace(s, t, fill, art, colorIndex) {
     const on = Boolean(s.active);
     const count = (s.tabs ?? []).length;
     const label = clean(s.name) || base(s.folder) || "未命名空间";
@@ -783,7 +803,7 @@ export default class Workbench extends View {
       .accessibility_label(`${label} · ${count} 个终端`)
       .on_click(() => (on ? null : run("space.select", { id: s.id })))
       .on_mouse_down("right", () => this.menu({ id: s.id, folder: s.folder ?? null, machine: s.machine ?? null }, "space"))
-      .child(this.mark(s.id, t, { mode: mark, art, fill, idx: colorIndex, letter: label, status: s.status, tip: `${count} 个终端` }));
+      .child(this.mark(s.id, t, { art, fill, tip: `${count} 个终端` }));
   }
 
   // rail 模式下的目录头：一个 folder 图标，点一下折叠整组。
@@ -807,7 +827,7 @@ export default class Workbench extends View {
 
   // 组下没有工作树可列时，说清是哪一种空（扫描中 / 不是仓库 / 只有主工作树），
   // 别让一个空白的项目看起来像坏了。
-  hintRow(g, t) {
+  hintRow(g, t, pad = 0) {
     if (!gitOn()) return null;
     let text = null;
     // 非 Git 目录永远扫不到工作树，先判 repo：否则会一直停在「正在扫描」。
@@ -815,19 +835,7 @@ export default class Workbench extends View {
     else if (!g.scanned) text = "正在扫描工作树…";
     else if (g.trees.length <= 1) text = "没有其他工作树 · 右键项目新建";
     if (!text) return null;
-    return div().pl(30 + IND).pr(8).py(2).text_size(11).text_color(t.dim).child(text);
-  }
-
-  // 机器根目录那一行：下面还没有空间时，说清这里是新建子项目的起点。
-  rootHint(g, t) {
-    if (g.spaces.length) return this.hintRow(g, t);
-    return div()
-      .pl(30 + IND)
-      .pr(8)
-      .py(2)
-      .text_size(11)
-      .text_color(t.dim)
-      .child("根目录 · 右键新建子项目");
+    return div().pl(30 + IND + pad).pr(8).py(2).text_size(11).text_color(t.dim).child(text);
   }
 
   // 新建空间的墨线纸片：一张手绘方片，悬停换描深一档（Looseleaf 的 ib-c）。
@@ -860,7 +868,6 @@ export default class Workbench extends View {
     const needs = agents().filter((a) => a.status === "blocked").length;
     const rows = [];
     const narrow = rail();
-    const mark = markMode();
     const paper = PAPER(t) && !narrow;
     if (narrow) {
       for (const g of groups) {
@@ -869,12 +876,13 @@ export default class Workbench extends View {
         rows.push(this.railProject(g, t, fill));
         if (this.fold.has(g.root)) continue;
         for (const item of g.spaces) {
-          if (item.space) rows.push(this.railSpace(item.space, t, this.fill(t, colors[item.space.id] ?? 0), art[item.space.id] ?? "slime", colors[item.space.id] ?? 0, mark));
+          if (item.space) rows.push(this.railSpace(item.space, t, this.fill(t, colors[item.space.id] ?? 0), art[item.space.id] ?? "slime", colors[item.space.id] ?? 0));
         }
       }
     } else {
       // 机器层：本机与每台服务器各一段，目录分组收在它下面——新建空间时不会再
-      // 悄悄建在最后一次点过的远程空间那台机器上。
+      // 悄悄建在最后一次点过的远程空间那台机器上。设了机器根目录时，根目录行在上，
+      // 落在它里面的项目缩进一级挂在下面。
       for (const m of buckets) {
         rows.push(this.machineRow(m, t));
         if (this.foldM.has(m.key)) continue;
@@ -882,40 +890,47 @@ export default class Workbench extends View {
           rows.push(div().pl(18 + IND).pr(8).py(2).text_size(11).text_color(t.dim).child(m.state === "unavailable" ? "连不上这台机器" : "这台机器上还没有空间"));
           continue;
         }
-        for (const [gi, g] of m.groups.entries()) {
+        let prev = null;
+        for (const g of m.groups) {
+          // 根目录折叠时，挂在它下面的子项目一起收起来。
+          if (g.parent && this.fold.has(g.parent)) continue;
+          const pad = g.pad ?? 0;
           const head = g.spaces.find((x) => x.space)?.space.id;
           const fill = head ? this.fill(t, colors[head] ?? 0) : null;
-      // 组与组之间一条细分隔线：目录是上一层边界，不是又一行空间。纸感下改由项目头的铅笔线承担。
-      if (gi > 0 && !PAPER(t)) rows.push(div().h(1).flex_none().mx(8).my(6).bg(t.border));
-      rows.push(this.projectRow(g, t, fill));
-      if (this.fold.has(g.root)) continue;
-      const hint = g.rootRow ? this.rootHint(g, t) : this.hintRow(g, t);
-      if (hint) rows.push(hint);
-      let trees = 0;
-      for (const item of g.spaces) {
-        if (!item.space) {
-          rows.push(this.treeRow(item, t, trees++));
-          continue;
-        }
-        const s = item.space;
-        rows.push(this.spaceRow(item, t, this.fill(t, colors[s.id] ?? 0), art[s.id] ?? "slime", colors[s.id] ?? 0, mark));
-        if (this.fold.has(s.id)) continue;
-        // 每个终端一行：跑着智能体的显示智能体（一个标签可能多个窗格），
-        // 普通终端显示程序名——这样徽章上的 tab 数在下面都数得出来。
-        const tabs = s.tabs ?? [];
-        if (!tabs.length) {
-          rows.push(div().pl(38 + IND).pr(8).py(2).text_size(11).text_color(t.dim).child("还没有终端"));
-          continue;
-        }
-        const list = agents();
-        for (const c of tabs) {
-          const mine = list.filter((a) => a.tab === c.id);
-          if (mine.length) for (const a of mine) rows.push(this.agentRow(a, t));
-          else rows.push(this.termRow(s, c, t));
+          // 组与组之间一条细分隔线：目录是上一层边界，不是又一行空间。
+          // 根目录与它的第一个子项目之间不画，那是一条从属关系。
+          const joined = Boolean(g.parent && prev && samePath(prev.root, g.parent));
+          if (prev && !joined && !PAPER(t)) rows.push(div().h(1).flex_none().mx(8).my(6).bg(t.border));
+          rows.push(this.projectRow(g, t, fill, pad));
+          prev = g;
+          if (this.fold.has(g.root)) continue;
+          const hint = g.rootRow ? null : this.hintRow(g, t, pad);
+          if (hint) rows.push(hint);
+          let trees = 0;
+          for (const item of g.spaces) {
+            if (!item.space) {
+              rows.push(this.treeRow(item, t, trees++, pad));
+              continue;
+            }
+            const s = item.space;
+            rows.push(this.spaceRow(item, t, this.fill(t, colors[s.id] ?? 0), art[s.id] ?? "slime", colors[s.id] ?? 0, pad));
+            if (this.fold.has(s.id)) continue;
+            // 每个终端一行：跑着智能体的显示智能体（一个标签可能多个窗格），
+            // 普通终端显示程序名——这样徽章上的 tab 数在下面都数得出来。
+            const tabs = s.tabs ?? [];
+            if (!tabs.length) {
+              rows.push(div().pl(38 + IND + pad).pr(8).py(2).text_size(11).text_color(t.dim).child("还没有终端"));
+              continue;
+            }
+            const list = agents();
+            for (const c of tabs) {
+              const mine = list.filter((a) => a.tab === c.id);
+              if (mine.length) for (const a of mine) rows.push(this.agentRow(a, t, pad));
+              else rows.push(this.termRow(s, c, t, pad));
+            }
+          }
         }
       }
-    }
-    }
     }
     const inner = v_flex()
       .size_full()
