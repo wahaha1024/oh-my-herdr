@@ -23,11 +23,14 @@ Or run the script:
 
 ```sh
 git clone https://github.com/wahaha1024/oh-my-herdr
-cd oh-my-herdr && ./install.ps1 -Force        # macOS / Linux: ./install.sh --force
+cd oh-my-herdr && ./install.ps1 -DryRun     # macOS / Linux: sh install.sh --dry-run
+./install.ps1                             # macOS / Linux: sh install.sh
 herdr-app do layout.switch '{"name":"oh-my-herdr"}'
 ```
 
 The installer needs an initialised config directory (`~/.config/herdr-app` with `settings.json`), so launch Herdr once first. Without `-Force` / `--force` it reports and skips files that already exist.
+
+See [README](README.md#upgrade-restore-and-uninstall) for backup, restore and manifest-based uninstall commands. Do not delete mod/theme directories with wildcards. `refresh.ps1` copies the live Herdr config **into this repository**; it is not a deployment command. Use the installer to deploy repository changes.
 
 ## How it behaves
 
@@ -71,10 +74,10 @@ Themes: `themes/qingci.json` (light) and `themes/xuanmo.json` (dark) are named i
 
 ## Watch out
 
-- The history panel reads local OMP session logs on Windows only.
-- OpenCode sessions need `sqlite3` on the machine that holds them.
-- The installers never delete themes from an earlier install. If the torn edges look wrong after upgrading, delete the old `inkstone-*` folders from `themes/` and reinstall with `-Force`; the layout needs Herdr 0.1.16 or later, which is when `themes` became importable from a mod.
-- Most UI text is Chinese (待你处理, 审查, 会话, 收藏). The layout works in any locale, but those labels stay Chinese.
+- History reads local OMP logs: Node is preferred; Windows falls back to PowerShell, macOS/Linux to the shell parser. Remote history is unavailable; use Sessions to resume it.
+- OpenCode sessions need `sqlite3` on the machine that holds them. CodeBuddy icons use the viewing app's program table, but CodeBuddy does not report OSC 7501 working/done status.
+- Existing files are preserved unless Force is requested; changed files are backed up and recorded under `.omh`. Program-table keys are never overwritten. Herdr 0.1.16+ is required for theme imports.
+- The layout supports Chinese and English; choose the language in Preferences. The first-use guide can be dismissed and reopened there. Returning to the default layout does not terminate terminals.
 
 ## Done when
 

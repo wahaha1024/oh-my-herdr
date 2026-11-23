@@ -9,3 +9,7 @@ layouts/.state/
 mods/*/gpui-kit.d.ts
 mods/*/jsconfig.json
 
+# 本地发行包与 Python 缓存由 CI 重建
+dist/
+__pycache__/
+*.pyc
