@@ -20,6 +20,7 @@
 验证：`node --check` 跑遍 40 个 `mods/*/main.js` 全部通过；`herdr-app status` 的 `errors` 为空；截图确认侧栏「空间 / 智能体」、三段「待你处理 / 进行中 / 已完成」与空态全中文。此前无法核实的引导卡也用 Cua Driver 实测：窗口为 480×372，三条说明与「打开偏好」按钮完整可见；操作后已关引导卡、恢复此前前台应用，并将 Herdr 恢复到原先最小化状态。
 
 Windows 的 `node` 不认 MSYS 路径，`node --check /e/...` 会被解释成 `C:\e\...`，把文件临时复制到 mod 目录再用相对名。`herdr-app shot` 只拍主窗口，不含 overlay；`status.overlays` 有条目也不等于截图能看到。Windows GUI 操作改用 Cua Driver（见下节），不再用 PowerShell `mouse_event` 模拟点击。
+
 ### Cua Driver（Windows 操作默认走后台）
 
 已装 Cua Driver `0.59.4`，路径 `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin`，自动启动任务 `cua-driver-serve` 已注册并运行。下载必须走本机 `http://127.0.0.1:7890`：PowerShell 5.1 包装脚本要同时设置 `[System.Net.WebRequest]::DefaultWebProxy` 与 `HTTP_PROXY` / `HTTPS_PROXY`；可用 `CUA_DRIVER_RS_DOWNLOAD_BASE_URL` 指向本地镜像让官方安装器复用已下载资产。此次 zip 与官方 `SHA256SUMS` 一致，安装器也验证了 staged exe 的 Authenticode；当时没有 `cosign`，所以 Sigstore 只显示 warning，未做 bundle 验签。
@@ -30,6 +31,16 @@ Windows 的 `node` 不认 MSYS 路径，`node --check /e/...` 会被解释成 `C
 - 最小化窗口 `list_windows` 会报告 `minimized: true` 与离屏坐标（本机曾为 `-31993,-32000`）；`set_window_frame` 会明确拒绝最小化目标，要求先恢复窗口。像素后台点击只能在目标可截图时使用。验证欢迎卡时先恢复、移到 `(180,80,1300,900)`，背景点击「引导」`(78,874)`，截图确认 372px 卡片按钮完整，再背景点击关闭 `(860,291)`；最后 CUA 恢复先前的 Chrome 前台进程并把 Herdr 最小化。
 - `cua-driver test` 在本机误报“can't use mouse and keyboard / can't see your screen”；以 `doctor`、`check_permissions` 和真实窗口动作判定：daemon 正常、UIA 与 `post_message` 可用，`get_window_state` 成功，后台像素点击确实打开 / 关闭引导卡。若重测仍失败，记录具体 Windows 构建与 daemon 日志，不要改用前台模拟输入绕过。
 
+
+### 2026-11-23 布局被快照写回（标题栏按钮独占一行 + 右侧常驻「新建空间」）
+
+现象：窗口顶部 − □ × 单独占一行；右边缘常驻 320px「新建空间」面板。
+
+原因：本机 `layouts/oh-my-herdr.json` 被整体改写。顶层 `children` 多了一个 `{ "content": { "mod": "inkstone-space" }, "size": { "px": 320 } }`，把 overlay（`mod.json` 里 `overlay: { width: 470 }`）固化成常驻块；同时 `titlebar: "none"` 与 `traffic_lights: [12, 16]` 被挪进内层 `column`，而 Herdr 只认布局文档最外层的这两个键，内层的被静默忽略，系统标题栏于是重新出现。形态像一次 `layout.set` / `layout.clone` 把运行时活动树写回布局：`content.mod`、`size.px`、内嵌 titlebar 键都是活动树的序列化结果。仓库里的 mod 没有任何 `layout.set` 调用，不是 mod 自动写的。
+
+恢复：`.omh/backups/<run>/files/layouts/oh-my-herdr.json` 每次 `install.ps1` 覆盖前都会留一份正确结构；用它覆盖 `layouts/oh-my-herdr.json`，把坏文件移到 `.omh/backups/oh-my-herdr.json.broken-<date>` 留证，再 `layout.switch main` → `layout.switch oh-my-herdr`。验证点：− □ × 回到 42px 标签行右端、右侧没有常驻「新建空间」、`herdr-app status` 的 `errors` 为空。
+
+预防：不要对个人布局直接执行 `layout.set` / `layout.clone` 后保存；「新建空间」是 overlay，入口在侧栏「+」和右键菜单，不应出现在布局树里。再遇到同样形态，先比对顶层 `children` 数量与最外层 `titlebar` 键，再决定恢复。
 
 ## 下一步（2026-11-20）
 
