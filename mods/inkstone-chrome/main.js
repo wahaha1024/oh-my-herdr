@@ -92,7 +92,7 @@ export default class WorkspaceChrome extends View {
         .when(!collapsed, (el) => el.child(div().text_size(12).whitespace_nowrap().child(label)))
         .when(badge && Boolean(updates().app.ready), (el) => el.child(collapsed ? ready.absolute().top(1).right(4) : ready));
       const openPrefs = () => openOverlay({ mod: "inkstone-settings", kind: "dialog", frame: "none", width: 784, height: 544, props: { framed: true } });
-      const openWelcome = () => openOverlay({ mod: "inkstone-chrome", kind: "dialog", frame: "none", width: 480, height: 300, key: "omh-welcome", props: { welcome: true } });
+      const openWelcome = () => openOverlay({ mod: "inkstone-chrome", kind: "dialog", frame: "none", width: 480, height: 372, key: "omh-welcome", props: { welcome: true } });
       if (collapsed) {
         return v_flex().size_full().bg(t.chrome).border_t(1).border_color(t.border).py(1).gap(1).items_center().justify_center()
           .child(item("prefs", "layers", pick("偏好", "Preferences"), false, openPrefs, pick("OMH 布局偏好 · 主题 / 右键 / 状态栏 / 面板", "Layout preferences · themes, right-click, status bar, panels")))
@@ -129,7 +129,7 @@ export default class WorkspaceChrome extends View {
     if (this.welcome && !collapsed && !props()?.footer) {
       this.welcome = false;
       setShared("inkstone.welcomed", "shown");
-      openOverlay({ mod: "inkstone-chrome", kind: "dialog", frame: "none", width: 480, height: 300, key: "omh-welcome", props: { welcome: true } });
+      openOverlay({ mod: "inkstone-chrome", kind: "dialog", frame: "none", width: 480, height: 372, key: "omh-welcome", props: { welcome: true } });
     }
     return collapsed ? head.bg(t.chrome) : head;
   }
@@ -174,6 +174,6 @@ export default class WorkspaceChrome extends View {
             .accessibility_label(pick("打开偏好", "Open preferences"))
             .on_click(() => { closeOverlay(props()?.overlay); openOverlay({ mod: "inkstone-settings", kind: "dialog", frame: "none", width: 784, height: 544, props: { framed: true } }); })
             .child(pick("打开偏好", "Open preferences")))
-          .child(div().flex_1()))));
+          .child(div().flex_1())));
   }
 }

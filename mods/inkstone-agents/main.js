@@ -442,22 +442,22 @@ export default class AgentsPanel extends View {
     if (rail()) return this.railView(t, waiting.length, running.length, done.length);
 
     const showNeeds = open.needs !== false;
-    rows.push(this.head("needs", "Needs you", waiting.length, FLOW_RED(t), t, showNeeds, cx));
+    rows.push(this.head("needs", pick("待你处理", "Needs you"), waiting.length, FLOW_RED(t), t, showNeeds, cx));
     if (showNeeds) {
-      if (!waiting.length) rows.push(this.empty("all clear", t));
+      if (!waiting.length) rows.push(this.empty(pick("都处理完了", "all clear"), t));
       else for (const a of waiting) rows.push(this.askCard(a, t, asks, colors));
     }
     const showFlight = open.flight !== false;
-    rows.push(this.head("flight", "In flight", running.length, FLOW_YELLOW(t), t, showFlight, cx));
+    rows.push(this.head("flight", pick("进行中", "In flight"), running.length, FLOW_YELLOW(t), t, showFlight, cx));
     if (showFlight) {
-      if (!running.length) rows.push(this.empty("nothing running", t));
+      if (!running.length) rows.push(this.empty(pick("没有在跑的", "nothing running"), t));
       else for (const a of running) rows.push(this.row(a, t, colors, FLOW_YELLOW(t), "running", FLOW_YELLOW(t)));
     }
     const showDone = open.done !== false;
     const green = FLOW_GREEN(t);
-    rows.push(this.head("done", "Done", done.length, green, t, showDone, cx));
+    rows.push(this.head("done", pick("已完成", "Done"), done.length, green, t, showDone, cx));
     if (showDone) {
-      if (!done.length) rows.push(this.empty("nothing yet", t));
+      if (!done.length) rows.push(this.empty(pick("还没有", "nothing yet"), t));
       else for (const a of done) {
         const finished = a.status === "done";
         rows.push(this.row(a, t, colors, finished ? green : t.dim, finished ? "done" : "idle", green));
@@ -485,7 +485,7 @@ export default class AgentsPanel extends View {
           .line_height("18px")
           .font_bold()
           .text_color(inkOf(t, "ink", "foreground"))
-          .child("Agents"))
+          .child(pick("智能体", "Agents")))
         .child(h_flex()
           .gap(6)
           .items_center()

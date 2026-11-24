@@ -1052,7 +1052,7 @@ export default class Workbench extends View {
             .line_height(paper ? "17px" : "19px")
             .font_bold()
             .text_color(inkOf(t, "ink", "foreground"))
-            .child("Spaces"))
+            .child(pick("空间", "Spaces")))
           .child(h_flex()
             .gap(6)
             .items_center()
