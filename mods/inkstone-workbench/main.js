@@ -391,8 +391,12 @@ export default class Workbench extends View {
   foldKey(g) {
     return `${g.on ?? ""}|${g.root}`;
   }
+  // 同一个判断要给「父组」用：g.parent 只有路径，机器在 g.on 上。
+  isFoldedAt(on, path) {
+    return this.fold.has(`${on ?? ""}|${path}`) || this.fold.has(path);
+  }
   isFolded(g) {
-    return this.fold.has(this.foldKey(g)) || this.fold.has(g.root);
+    return this.isFoldedAt(g.on, g.root);
   }
 
   // 机器层自己的折叠：与本机/各服务器的空间互不影响。
@@ -541,8 +545,12 @@ export default class Workbench extends View {
         for (const g of groups) {
           const same = samePath(g.root, root);
           if (same || under(g.root, root)) {
-            g.parent = root;
-            g.pad = same ? 0 : PAD;
+            // 只有真正的子项目才有 parent：机器根目录那一组若也挂着 parent，
+            // 它会把自己当成“父组已折叠”而整行消失。
+            if (!same) {
+              g.parent = root;
+              g.pad = PAD;
+            } else g.pad = 0;
             inside.push(g);
           } else outside.push(g);
         }
@@ -955,7 +963,7 @@ export default class Workbench extends View {
         let prev = null;
         for (const g of m.groups) {
           // 根目录折叠时，挂在它下面的子项目一起收起来。
-          if (g.parent && this.fold.has(g.parent)) continue;
+          if (g.parent && this.isFoldedAt(g.on, g.parent)) continue;
           const pad = g.pad ?? 0;
           const head = g.spaces.find((x) => x.space)?.space.id;
           const fill = head ? this.fill(t, colors[head] ?? 0) : null;
