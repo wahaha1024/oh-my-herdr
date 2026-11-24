@@ -10,7 +10,7 @@
 
 另一台机器推到 `3e4e7c0`（21 个提交：`pick` 中英切换、项目归组与字母头像、标签状态色、安装器安全升级与 `-Source`、CodeBuddy 识别、抽屉线稿图标）。本机 `git fetch` 只跟踪 `main`（`remote.origin.fetch` 只有 `+refs/heads/main:...` 一行），所以 `origin/dev` 一直停在旧值 `3e50bb5`；拉 `dev` 要显式 `git fetch origin refs/heads/dev:refs/remotes/origin/dev`，或者先把 refspec 补成两条。
 
-装完（`install.ps1 -Force`，写入 1352 个文件）有两个 mod 起不来，`herdr-app status` 的 `errors` 直接报语法错误；另有几处显示不对。本机工作树已修好，尚未提交：
+安装远程 `3e4e7c0`（`install.ps1 -Force`，写入 1352 个文件）后发现两个 mod 因语法错误无法加载，另有几处显示不对；修复已提交到 dev：`1f1c436`。
 
 - **`inkstone-chrome` 多一个括号**：`renderWelcome()` 结尾 `.child(div().flex_1()))));` 比需要多一层 `)`，qjs 报 `expecting ';'`，整个品牌条、底部按钮和引导卡都不渲染。删到 `...flex_1())));`。
 - **`inkstone-settings` 两处**：`left(t, cx) {` 连写两遍（qjs 报 `Unexpected token '{'`，位置在第二个方法签名上）；`right()` 里 `.child(v_flex().w_full().gap(5)` 少一个闭合 `)`，错误落到下一行的 `.when(...)`（`missing ) after argument list`）。偏好浮层因此完全不加载，改完两个方法都恢复正常。
@@ -41,6 +41,35 @@ Windows 的 `node` 不认 MSYS 路径，`node --check /e/...` 会被解释成 `C
 恢复：`.omh/backups/<run>/files/layouts/oh-my-herdr.json` 每次 `install.ps1` 覆盖前都会留一份正确结构；用它覆盖 `layouts/oh-my-herdr.json`，把坏文件移到 `.omh/backups/oh-my-herdr.json.broken-<date>` 留证，再 `layout.switch main` → `layout.switch oh-my-herdr`。验证点：− □ × 回到 42px 标签行右端、右侧没有常驻「新建空间」、`herdr-app status` 的 `errors` 为空。
 
 预防：不要对个人布局直接执行 `layout.set` / `layout.clone` 后保存；「新建空间」是 overlay，入口在侧栏「+」和右键菜单，不应出现在布局树里。再遇到同样形态，先比对顶层 `children` 数量与最外层 `titlebar` 键，再决定恢复。
+
+## 2026-11-24 布局结构契约、标题里的 Nerd Font 图标与字体登记
+
+### 标题符号：终端能画、界面画成豆腐块
+
+智能体标题由 OMP 写成 `π - <card icon> <CODE>: <title> - <cwd>`（`π -` 来自 `~/.omp/agent/extensions/orca-titlebar-spinner.ts`，卡片是 `@oh-my-pi/pi-coding-agent` 的 `title-card`）。图标按 `title.icons: nf+emoji` 选：有 Nerd Font 字形就用字形，否则用 emoji，所以本机标题里是私用区码位（本次是 U+F056E，补面 15）。
+
+终端区能画出来，是因为 Herdr 自带 `Symbols Nerd Font` 做终端的符号回退；**mod 文本没有这层回退**：它用 `settings().ui_font_family` 指定的字体，字体不存在就退回 Geist，私用区码位直接画成豆腐块。实测 `.font_family("…")` 选中不了系统没加载的家族：名字不存在时静默退回，且不会触发按码位的回退。Herdr 匹配字体名和别名（`fonts()` 只列一个规范名，`ui_font` 用字体内部的另一个名字也能命中，例如 `JetBrainsMono NF` ↔ `JetBrainsMono Nerd Font`）；但如果字体本身没被系统加载，任何名字都命不中——这次就是这种情况。
+
+根因是字体登记，不是布局或 mod：用户字体表 `HKCU\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts` 里三个 JBM 只写了文件名（`JBM-Regular.ttf`），没写绝对路径。用户字体目录是 `%LOCALAPPDATA%\Microsoft\Windows\Fonts`，只写文件名时系统会去 `C:\Windows\Fonts` 找，找不到就不加载；文件还在，但 DirectWrite / GDI / Herdr 都枚举不到这个家族。证据：修复前 `[Windows.Media.Fonts]::SystemFontFamilies` 与 mod 里的 `fonts()` 都没有该家族；`herdr-app` 的字体表里只有 Herdr 自带的四个（Geist / Geist Mono / JetBrains Mono / Symbols Nerd Font）。
+
+修复与验证：把三条登记改成绝对路径，`AddFontResourceEx` 加载并广播 `WM_FONTCHANGE`，重启 app 窗口（`herdr-app` 只是 UI，`hc` 里的终端不受影响）。重启后 `fonts()` = 155，含 `JetBrainsMono Nerd Font`；标签、智能体面板、窗格头的 `󰕮` 正常渲染，`ui_font` 仍是 `JetBrainsMono NF`（按别名命中）。同一台机器上 `Symbols Nerd Font` 的登记也补成了绝对路径。
+
+防复发：
+- `scripts/diagnose.py` 新增 `font_registry_problems()` / `font_registry_errors()`：用户字体表里出现相对路径记 `fonts: relative-registry-path xN`，绝对路径指向不存在的文件记 `fonts: registered-file-missing xN`；只报计数，不透传字体名或路径。修完后本机输出 `fonts: registered`。
+- 手动自检：mod 里 `fonts()` 的结果可以写进 `shared.json` 回读；改字体后必须重开窗口，`fonts()` 在启动时建表，热重载不会重建。
+
+### 布局结构契约（`scripts/check.py`）
+
+`layout.set` / `layout.clone` 会把运行时活动树序列化回布局文件（见上一节）。现在 `check_layout()` 直接校验结构，发布前就能拦住同样的写回：
+
+- 顶层必须有 `titlebar: "none"` 与两个 `traffic_lights`；这两个键出现在任何内层节点都报错。
+- 顶层 `children` 只能有一个 `id=root`、`type=row` 的节点；所有节点 `id` 非空且不重复。
+- `inkstone-space` 是 overlay-only，序列化成布局 block 时报错。
+- `font` 必须包含 `Nerd Font`，保证窗格标题里的智能体私用区图标有字形来源。
+
+`scripts/diagnose.py` 的 `layout_structure_errors()` 对**已安装**的布局做同样的分类检查，输出只有类别名（`layout: titlebar-not-top-level-none`、`layout: overlay-mod-pinned-as-block` 等）。`tests/test_check.py` 与 `tests/test_diagnose.py` 合计 27 项测试覆盖这些规则。
+
+验证命令：`python scripts/check.py`（1364 个文件）、`python -m unittest discover -s tests`、`python scripts/diagnose.py`、`herdr-app status` 的 `errors` 为空。
 
 ## 下一步（2026-11-20）
 

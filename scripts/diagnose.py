@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from omh_assets import repo_root  # noqa: E402
@@ -115,6 +116,100 @@ def app_status_errors() -> list[str]:
     return lines or []
 
 
+def layout_structure_errors() -> list[str]:
+    """检查已安装 oh-my-herdr JSON，摘要结构损坏而不透传用户值。"""
+    home = Path.home() / ".config" / "herdr-app" / "layouts" / "oh-my-herdr.json"
+    try:
+        data = json.loads(home.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ["layout: unavailable"]
+    if not isinstance(data, dict):
+        return ["layout: invalid-root"]
+
+    errors: list[str] = []
+    if data.get("titlebar") != "none":
+        errors.append("layout: titlebar-not-top-level-none")
+    lights = data.get("traffic_lights")
+    if not isinstance(lights, list) or len(lights) != 2:
+        errors.append("layout: traffic-lights-not-top-level-pair")
+    children = data.get("children")
+    if (not isinstance(children, list) or len(children) != 1
+            or not isinstance(children[0], dict)
+            or children[0].get("id") != "root"
+            or children[0].get("type") != "row"):
+        errors.append("layout: unexpected-root-children")
+
+    overlay_mods = {"inkstone-space"}
+    found_overlay = False
+
+    def walk(node: object) -> None:
+        nonlocal found_overlay
+        if not isinstance(node, dict):
+            return
+        content = node.get("content")
+        if isinstance(content, dict) and content.get("mod") in overlay_mods:
+            found_overlay = True
+        for child in node.get("children", []) if isinstance(node.get("children", []), list) else []:
+            walk(child)
+
+    for child in children if isinstance(children, list) else []:
+        walk(child)
+    if found_overlay:
+        errors.append("layout: overlay-mod-pinned-as-block")
+    return errors
+
+
+_FONT_SUFFIXES = (".ttf", ".otf", ".ttc", ".otc", ".fon", ".fnt")
+
+
+def font_registry_problems(entries: list[tuple[str, str]], exists=os.path.exists) -> list[str]:
+    """按用户字体表找「登记了但系统没加载」的字体。
+
+    Windows 的用户字体要用绝对路径登记；只写文件名时系统会去 `C:\\Windows\\Fonts`
+    找，找不到就静默跳过。字体文件还在，但应用枚举不到它，标题里的 Nerd Font 私用区
+    图标只能画成豆腐块。只报计数，不透传字体名或路径。
+    """
+    relative = missing = 0
+    for _name, value in entries:
+        text = str(value or "").strip()
+        if not text.lower().endswith(_FONT_SUFFIXES):
+            continue
+        path = PureWindowsPath(text)
+        if not path.is_absolute():
+            relative += 1
+        elif not exists(str(path)):
+            missing += 1
+    problems: list[str] = []
+    if relative:
+        problems.append(f"fonts: relative-registry-path x{relative}")
+    if missing:
+        problems.append(f"fonts: registered-file-missing x{missing}")
+    return problems
+
+
+def font_registry_errors() -> list[str]:
+    """当前用户的字体登记是否会被系统忽略（只在 Windows 上检查）。"""
+    if platform.system() != "Windows":
+        return []
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows NT\CurrentVersion\Fonts") as key:
+            entries: list[tuple[str, str]] = []
+            index = 0
+            while True:
+                try:
+                    name, value, _kind = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                entries.append((str(name), str(value)))
+                index += 1
+    except OSError:
+        return []
+    return font_registry_problems(entries)
+
+
 def collect() -> dict:
     version = (repo_root() / "VERSION").read_text(encoding="utf-8").strip()
     return {
@@ -128,6 +223,8 @@ def collect() -> dict:
             "sqlite3": run_version(["sqlite3", "--version"]),
         },
         "status_errors": app_status_errors(),
+        "layout_errors": layout_structure_errors(),
+        "font_errors": font_registry_errors(),
     }
 
 
@@ -145,6 +242,16 @@ def render(data: dict) -> str:
             lines.append(f"  - {e}")
     else:
         lines.append("status errors: none")
+    if data.get("layout_errors"):
+        lines.append("layout errors:")
+        lines.extend(f"  - {e}" for e in data["layout_errors"])
+    else:
+        lines.append("layout structure: valid")
+    if data.get("font_errors"):
+        lines.append("font registration errors:")
+        lines.extend(f"  - {e}" for e in data["font_errors"])
+    else:
+        lines.append("fonts: registered")
     return "\n".join(lines)
 
 
