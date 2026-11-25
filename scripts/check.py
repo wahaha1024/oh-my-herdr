@@ -80,22 +80,81 @@ BUILTIN_MODS = frozenset({"workspace-status"})
 
 
 def check_layout(root: Path, files: list[str]) -> list[str]:
-    """layout 引用的 mod 与主题都实际存在于包里（Herdr 内置 mod 除外）。"""
+    """校验 Oh My Herdr 的布局根结构、overlay 引用、mod 与主题。"""
     problems: list[str] = []
     layout_path = root / "layouts/oh-my-herdr.json"
     try:
-        load_json(layout_path)
+        layout = load_json(layout_path)
     except Exception as e:
         return [fail(f"layouts/oh-my-herdr.json 解析失败: {e}")]
-    text = layout_path.read_text(encoding="utf-8")
+    if not isinstance(layout, dict):
+        return [fail("layouts/oh-my-herdr.json 根节点不是对象")]
+
+    # Herdr 只从布局文档外层读取窗口 chrome；放在 root 子节点会被忽略，
+    # 导致系统标题栏重现并把最小化/关闭按钮挤到独立行。
+    if layout.get("titlebar") != "none":
+        problems.append(fail("layout 顶层必须声明 titlebar: none"))
+    lights = layout.get("traffic_lights")
+    if not isinstance(lights, list) or len(lights) != 2:
+        problems.append(fail("layout 顶层必须声明两个 traffic_lights 尺寸"))
+
+    # 本布局的契约是一个 root row。新增根兄弟会改变主窗口分区；
+    # inkstone-space 是 overlay-only，绝不能序列化成布局 block。
+    roots = layout.get("children")
+    if (not isinstance(roots, list) or len(roots) != 1
+            or not isinstance(roots[0], dict)
+            or roots[0].get("id") != "root" or roots[0].get("type") != "row"):
+        problems.append(fail("layout 顶层 children 必须只有一个 id=root、type=row 的节点"))
+    font = layout.get("font")
+    if not isinstance(font, str) or "Nerd Font" not in font:
+        problems.append(fail("layout.font 必须指定含 Nerd Font 的终端字体，以渲染智能体私用区图标"))
+
     mods = collect_mod_names(files)
-    for ref in set(re.findall(r'"mod"\s*:\s*"([^"]+)"', text)):
+    refs: set[str] = set()
+    ids: set[str] = set()
+
+    def walk(node: object, where: str) -> None:
+        if not isinstance(node, dict):
+            problems.append(fail(f"layout 节点不是对象: {where}"))
+            return
+        node_id = node.get("id")
+        if not isinstance(node_id, str) or not node_id:
+            problems.append(fail(f"layout 节点缺 id: {where}"))
+        elif node_id in ids:
+            problems.append(fail(f"layout 节点 id 重复: {node_id}"))
+        else:
+            ids.add(node_id)
+        misplaced = [key for key in ("titlebar", "traffic_lights") if key in node]
+        if misplaced:
+            problems.append(fail(f"layout 窗口 chrome 键只能放文档顶层，节点 {node_id}: {', '.join(misplaced)}"))
+        content = node.get("content")
+        if isinstance(content, dict) and isinstance(content.get("mod"), str):
+            refs.add(content["mod"])
+        children = node.get("children", [])
+        if not isinstance(children, list):
+            problems.append(fail(f"layout children 不是数组: {node_id}"))
+            return
+        for index, child in enumerate(children):
+            walk(child, f"{node_id or where}/{index}")
+
+    if isinstance(roots, list):
+        for index, child in enumerate(roots):
+            walk(child, f"root/{index}")
+    if "inkstone-space" in refs:
+        problems.append(fail("inkstone-space 只能由 mod.open/openOverlay 打开，不得作为布局 block"))
+    for ref in refs:
         if ref not in mods and ref not in BUILTIN_MODS:
             problems.append(fail(f"layout 引用的 mod 不在包里: {ref}"))
+
     themes = {PurePosixPath(rel).stem for rel in files if rel.startswith("themes/") and rel.endswith(".json")}
-    for name in set(re.findall(r'"(?:light|dark)"\s*:\s*"([^"]+)"', text)):
-        if name not in themes:
-            problems.append(fail(f"layout 的 light/dark 主题不在包里: {name}"))
+    theme = layout.get("theme")
+    if isinstance(theme, dict):
+        for mode in ("light", "dark"):
+            name = theme.get(mode)
+            if name is not None and (not isinstance(name, str) or name not in themes):
+                problems.append(fail(f"layout 的 {mode} 主题不在包里: {name}"))
+    elif theme is not None:
+        problems.append(fail("layout.theme 必须是 light/dark 对象"))
     return problems
 
 
