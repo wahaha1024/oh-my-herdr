@@ -1,10 +1,10 @@
-// 新建空间 / 新建文件夹面板。
+// 新建 Space / 新建文件夹面板。
 // 为什么要单独一张面板：OMP 的会话按「启动时的工作目录」归档，而项目常常不在那个目录里。
 // 起空间时把「终端从哪个目录起」与「会话属于哪个项目」一次说清，比事后 cd 修正可靠。
 //
 // props: { mode?: "space" | "folder" | "bind" | "root", folder?: string, machine?: string | null, space?: string }
 //   space  — 目录可手输 / 系统选择器 / 最近用过；机器与起始程序可选。
-//   folder — 在 folder 下建一个新目录，建成后在其中开空间。
+//   folder — 在 folder 下建一个新目录，建成后在其中开 Space。
 //   bind   — 给已有空间指定「归属目录」：侧栏按它归组，不再跟着终端 cwd 跑。
 //   root   — 给一台机器指定根目录：侧栏在它下面先留一行，右键即可新建子项目。
 import { View, div } from "gpui-kit";
@@ -67,7 +67,7 @@ export default class NewSpace extends View {
     const p = props() ?? {};
     this.mode = ["folder", "bind", "root"].includes(p.mode) ? p.mode : "space";
     this.space = p.space ?? "";
-    // 新建空间默认跟着当前空间走：在远端项目里按 + 通常也是想在远端开。
+    // 新建 Space默认跟着当前 Space走：在远端项目里按 + 通常也是想在远端开。
     this.machine = this.mode === "space"
       ? (p.machine ?? (spaces().find((s) => s.active)?.machine ?? null))
       : (p.machine ?? null);
@@ -118,7 +118,7 @@ export default class NewSpace extends View {
       return;
     }
     // 与 create 同理：选择器要等用户操作，回调必须立刻返回。
-    pickFolder({ prompt: this.mode === "folder" ? pick("在这里建文件夹", "create a folder here") : pick("在新目录开空间", "open a space in the new folder") })
+    pickFolder({ prompt: this.mode === "folder" ? pick("在这里建文件夹", "create a folder here") : pick("在新目录开 Space", "open a space in the new folder") })
       .then((hit) => {
         if (!hit) return;
         this.dir.set_value(hit);
@@ -199,11 +199,20 @@ export default class NewSpace extends View {
         return;
       }
       target = join(dir, name);
+    }
+    if (this.machine && this.mode === "folder") {
+      this.err = pick("远程机器暂不支持建目录，请到那台机器的终端里创建", "Remote machines can't create folders; make it in a terminal on that machine");
+      cx.notify();
+      return;
+    }
+    // Space 即文件夹：本机起 Space 时目录不存在就先建出来（已存在是幂等的空操作）。
+    // 远程机器从这边看不出目录在不在，仍只把路径交给 space.new。
+    if (!this.machine) {
       this.busy = true;
       this.err = "";
       cx.notify();
       try {
-        const r = await mkdir(target, this.machine);
+        const r = await mkdir(target, null);
         if (r.code !== 0) throw new Error(r.stderr.trim() || pick(`退出码 ${r.code}`, `exit ${r.code}`));
       } catch (e) {
         this.busy = false;
@@ -297,14 +306,14 @@ export default class NewSpace extends View {
       .p(12)
       .gap(9)
       .text_size(12)
-      .child(div().text_size(13).font_semibold().text_color(t.foreground).child(root ? pick("设置机器根目录", "Set the machine's root folder") : bind ? pick("设置归属目录", "Set the project folder") : folder ? pick("新建文件夹", "New folder") : pick("新建空间", "New space")))
+      .child(div().text_size(13).font_semibold().text_color(t.foreground).child(root ? pick("设置机器根目录", "Set the machine's root folder") : bind ? pick("设置归属目录", "Set the project folder") : folder ? pick("新建文件夹", "New folder") : pick("新建 Space", "New space")))
       .child(div().text_size(11).text_color(t.dim).child(root
-        ? pick("侧栏会在这台机器下面先留出这一行：右键它就能新建子文件夹或空间，不必先有项目。", "The sidebar keeps a row under this machine: right-click it to create folders or spaces without a project first.")
+        ? pick("侧栏会在这台机器下面先留出这一行：右键它就能新建子文件夹或 Space，不必先有项目。", "The sidebar keeps a row under this machine: right-click it to create folders or spaces without a project first.")
         : bind
           ? pick("侧栏按这个目录归组；终端 cd 到别处也还留在同一项目下。", "The sidebar groups the space by this folder; a cd elsewhere keeps it in the same project.")
           : folder
-            ? pick("在上面的目录里建一个子目录，建好后在其中开空间。", "Creates a subfolder above, then opens a space in it.")
-            : pick("空格子里的目录就是终端起步的地方；OMP 会话按它归档，选对项目目录能少走弯路。", "The folder is where terminals start; OMP sessions are filed by it, so pick the project folder.")))
+            ? pick("在上面的目录里建一个子目录，建好后在其中开 Space。", "Creates a subfolder above, then opens a space in it.")
+            : pick("目录就是 Space 的文件夹：不存在会先建出来，终端在这里起步，OMP 会话也按它归档。", "The folder is the space: created if missing, where terminals start, and where OMP sessions are filed.")))
       .child(h_flex().gap(8).items_center()
         .child(this.label(folder ? pick("位置", "Folder") : pick("目录", "Folder")))
         .child(this.field(this.dir))

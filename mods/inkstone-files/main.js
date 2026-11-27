@@ -770,7 +770,7 @@ export default class InkstoneFiles extends View {
               : [div().p(10).text_size(12).text_color(t.dim).child(this.indexLoading ? pick("正在建立文件索引…", "Building the file index…") : pick("没有匹配的文件。", "No matching files."))])
             : this.rows("", 0, [], t, cx))
           .when(!q && (Boolean(this.error) || !this.entries.get("")?.length), (el) => el
-            .child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? pick("正在读取文件…", "Reading the file…") : this.root ? pick("空目录", "Empty folder") : pick("当前空间没有工作目录", "This space has no working folder")))))
+            .child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? pick("正在读取文件…", "Reading the file…") : this.root ? pick("空目录", "Empty folder") : pick("当前 Space没有工作目录", "This space has no working folder")))))
           .when(!q && this.limited, (el) => el
             .child(div().p(8).text_size(11).text_color(t.dim).child(pick("单目录上限 500 项，总显示上限 5,000 项", "500 entries per folder, 5,000 shown overall"))))))
       .when(Boolean(this.file), (el) => el

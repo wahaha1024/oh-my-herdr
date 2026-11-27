@@ -157,10 +157,10 @@ export default class WorkspaceChrome extends View {
           .accessibility_label(pick("知道了", "Got it"))
           .child(svg("mods/inkstone-chrome/close.svg").size(12))))
       .child(row("search", pick("项目跟着文件夹走", "Projects follow folders"),
-        pick("左侧把同一台机器上相邻文件夹的项目归成一组；「新建空间」指向哪个文件夹，终端就在那里起。",
+        pick("左侧把同一台机器上相邻文件夹的项目归成一组；「新建 Space」指向哪个文件夹，终端就在那里起。",
           "The sidebar groups projects by nearby folders on the same machine; a new space opens a terminal in the folder you point it at.")))
-      .child(row("settings", pick("智能体状态在侧栏", "Agent status lives in the sidebar"),
-        pick("有智能体在跑时它挂着自己的标记；不回头刷终端，状态与待处理事项都在那里看。",
+      .child(row("settings", pick("Agents 状态在侧栏", "Agent status lives in the sidebar"),
+        pick("有 Agents 在跑时它挂着自己的标记；不回头刷终端，状态与待处理事项都在那里看。",
           "Running agents hang their tag in the sidebar; check status and pending work there instead of watching the terminal.")))
       .child(row("square-pen", pick("会话与文件都在面板里", "Sessions and files live in panels"),
         pick("「文件 / 会话 / 收藏」共用中间面板，切换不关终端；会话是各程序的记录，只读。",

@@ -5,7 +5,7 @@
 //   - Claude Code：~/.claude/projects/<slug>/<sessionId>.jsonl
 //   - CodeBuddy：~/.codebuddy/projects/<slug>/<sessionId>.jsonl（type=message 且 role 在顶层）
 //   - Pi：~/.pi/agent/sessions/*.jsonl（首行 type=session）
-//   - 本地归档：<当前空间>/.herdr/conversations/*.jsonl|*.json
+//   - 本地归档：<当前 Space>/.herdr/conversations/*.jsonl|*.json
 //   - OpenCode（可选）：仅在本机已有 sqlite3 与 opencode.db 时只读查询
 // 恢复命令：omp --resume <id> / codex resume <id> / claude --resume <id> / codebuddy --resume <id> / pi --session <id> / opencode --session <id>。
 // 会话已经在某个终端里开着时不新起进程，直接切过去——新进程会把整段历史重渲染一遍。
@@ -1047,7 +1047,7 @@ export default class Sessions extends View {
           .text_size(11)
           .text_color(this.all ? t.muted : t.accent)
           .cursor_pointer()
-          .tooltip(this.all ? pick("现在显示全部会话，点一下只看当前目录", "Showing every session — click to narrow to this folder") : pick("只看当前空间的目录，点一下显示全部", "Only this space's folder — click to show everything"))
+          .tooltip(this.all ? pick("现在显示全部会话，点一下只看当前目录", "Showing every session — click to narrow to this folder") : pick("只看当前 Space的目录，点一下显示全部", "Only this space's folder — click to show everything"))
           .accessibility_label(pick("切换会话范围", "Switch the session scope"))
           .hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => {
@@ -1330,7 +1330,7 @@ export default class Sessions extends View {
     }
     if (!this.all && scopedCount === 0 && this.list.length > 0) {
       return v_flex().p(10).gap(8).items_start()
-        .child(div().text_size(12).text_color(t.dim).child(pick("当前空间目录还没有会话记录。", "This space's folder has no sessions yet.")))
+        .child(div().text_size(12).text_color(t.dim).child(pick("当前 Space目录还没有会话记录。", "This space's folder has no sessions yet.")))
         .child(div()
           .id("ses-show-all")
           .px(8)

@@ -84,8 +84,8 @@ function label(tab, lead) {
   return (tab.name === prog || !tab.named) && telling ? live : base;
 }
 
-// 空间配色与 inkstone-workbench 共用同一套序号：顶栏带一点当前空间的颜色，
-// 终端区和侧栏里那一行说的就是同一个空间。切明暗主题只换亮度档，色相不变。
+// 空间配色与 inkstone-workbench 共用同一套序号：顶栏带一点当前 Space的颜色，
+// 终端区和侧栏里那一行说的就是同一个 Space。切明暗主题只换亮度档，色相不变。
 const PALETTE_LIGHT = ["#a84a50", "#8a5619", "#7d640c", "#357041", "#34618f", "#5f5399", "#805083"];
 const PALETTE_DARK = ["#f08a8a", "#f2a46a", "#e8c76a", "#7ecf86", "#6fb3ea", "#9a8ce6", "#c98ae6"];
 
@@ -374,7 +374,8 @@ export default class Tabs extends View {
     const t = theme();
     const space = spaces().find(p => p.active);
     const fill = space ? spaceFill(t, space.id) : null;
-    const shown = space?.tabs ?? [];
+    // 休眠会话（tab.settle）只在侧栏的休眠区出现，标签栏不占位。
+    const shown = (space?.tabs ?? []).filter((c) => !c.settled);
     const active = shown.findIndex(tab => tab.active);
     const selected = shown[active]?.id;
     if (selected !== this.selected || active !== this.selectedIndex) {
@@ -499,15 +500,15 @@ export default class Tabs extends View {
       .when(!PAPER(t), el => el.border_b(1).border_color(t.border))
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel((e, cx) => this.wheel(e, cx))
-      // 当前空间的颜色点：和侧栏那一行、tab 数徽章是同一个颜色，终端区也有了归属。
+      // 当前 Space的颜色点：和侧栏那一行、tab 数徽章是同一个颜色，终端区也有了归属。
       .when(Boolean(space), el => el.child(div()
         .id("space-mark")
         .size(7)
         .flex_none()
         .rounded_full()
         .bg(fill ?? t.border)
-        .tooltip(clean(space.name) || pick("空间", "Space"))
-        .accessibility_label(pick(`当前空间 ${clean(space.name) || ""}`, `current space ${clean(space.name) || ""}`))))
+        .tooltip(clean(space.name) || "Space")
+        .accessibility_label(pick(`当前 Space ${clean(space.name) || ""}`, `current space ${clean(space.name) || ""}`))))
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(shown.map(item)))

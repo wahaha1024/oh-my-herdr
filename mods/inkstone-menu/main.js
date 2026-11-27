@@ -6,7 +6,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, focused, exec, window, shared } from "herdr";
+import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec, window, shared } from "herdr";
 
 // 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
 const LANG = "inkstone.lang";
@@ -83,10 +83,12 @@ function items(p, git, more) {
       return [
         [pick("重命名会话", "Rename session"), "tab.rename", { id: tg.tab }, false],
         [tg.pinned ? pick("取消置顶", "Unpin") : pick("置顶会话", "Pin to top"), "terminal.pin", { terminal: tg.terminal, pinned: !tg.pinned }, false],
-        [pick("暂存会话", "Put the session away"), "tab.settle", { id: tg.tab }, true],
+        tg.settled
+          ? [pick("恢复会话", "Wake session"), "tab.unsettle", { id: tg.tab }, true]
+          : [pick("休眠会话", "Sleep session"), "tab.settle", { id: tg.tab }, true],
         [pick("前移", "Move left"), "tab.move", { id: tg.tab, by: "-" }, false],
         [pick("后移", "Move right"), "tab.move", { id: tg.tab, by: "+" }, false],
-        [pick("同空间新标签", "New tab in this space"), "tab.new", { space: tg.space }, false],
+        [pick("同 Space 新标签", "New tab in this space"), "tab.new", { space: tg.space }, false],
         [pick("左右分屏", "Split right"), "pane.split", { pane: tg.pane, direction: "right" }, false],
         [pick("向下分屏", "Split down"), "pane.split", { pane: tg.pane, direction: "down" }, false],
         [pick("最大化 / 还原", "Maximize / restore"), "pane.zoom", { pane: tg.pane }, false],
@@ -101,19 +103,25 @@ function items(p, git, more) {
         [pick("关闭会话", "Close session"), "tab.close", { id: tg.tab }, false],
       ];
     }
-    case "tab":
+    case "tab": {
+      // 休眠（tab.settle）：从列表收起、仍在后台跑，智能体需要人时自己回来。
+      // 侧栏把休眠的行照样画出来（斜体、淡色），恢复入口就在同一处右键。
+      const asleep = Boolean(tg.settled);
       return [
         [pick("重命名标签", "Rename tab"), "tab.rename", { id: tg.id }, false],
         [pick("新建标签", "New tab"), "tab.new", { space: tg.space }, false],
-        [pick("暂存标签", "Put the tab away"), "tab.settle", { id: tg.id }, false],
+        asleep
+          ? [pick("恢复会话", "Wake session"), "tab.unsettle", { id: tg.id }, false]
+          : [pick("休眠会话", "Sleep session"), "tab.settle", { id: tg.id }, false],
         [pick("关闭标签", "Close tab"), "tab.close", { id: tg.id }, true],
       ];
+    }
     case "dir": {
-      // 目录头右键：这里的动作都以「目录」为目标，不是某个空间。
+      // 目录头右键：这里的动作都以「目录」为目标，不是某个 Space。
       const local = !tg.machine;
       return [
         [pick("新建文件夹…", "New folder…"), "inkstone.space", { mode: "folder", folder: tg.folder, machine: tg.machine ?? null }, false],
-        [pick("在此新建空间…", "New space here…"), "inkstone.space", { mode: "space", folder: tg.folder, machine: tg.machine ?? null }, false],
+        [pick("在此新建 Space…", "New space here…"), "inkstone.space", { mode: "space", folder: tg.folder, machine: tg.machine ?? null }, false],
         [pick("复制路径", "Copy path"), "inkstone.copy", { text: tg.folder ?? "" }, true],
         ...(local ? [[pick("在文件管理器中打开", "Show in files"), "inkstone.open", { folder: tg.folder }, false]] : []),
       ];
@@ -124,14 +132,14 @@ function items(p, git, more) {
       const root = tg.root ?? null;
       return [
         [pick("新建文件夹…", "New folder…"), "inkstone.space", { mode: "folder", folder: root, machine: on }, false],
-        [pick("在此新建空间…", "New space here…"), "inkstone.space", { mode: "space", folder: root, machine: on }, false],
+        [pick("在此新建 Space…", "New space here…"), "inkstone.space", { mode: "space", folder: root, machine: on }, false],
         [pick("设置根目录…", "Set the root folder…"), "inkstone.space", { mode: "root", machine: on }, true],
         ...(root ? [[pick("复制路径", "Copy path"), "inkstone.copy", { text: root }, false]] : []),
       ];
     }
     case "space":
       return [
-        [pick("重命名空间", "Rename space"), "space.rename", { id: tg.id }, false],
+        [pick("重命名 Space", "Rename space"), "space.rename", { id: tg.id }, false],
         [pick("新开终端页", "New terminal tab"), "tab.new", { space: tg.id }, false],
         ...(git
           ? [
@@ -140,13 +148,13 @@ function items(p, git, more) {
             ]
           : []),
         ...(git === "linked" ? [[pick("移除工作树", "Remove worktree"), "worktree", { space: tg.id, action: "remove" }, false]] : []),
-        // 归属目录决定这个空间在侧栏归到哪个项目，独立于它此刻的 cwd。
+        // 归属目录决定这个 Space在侧栏归到哪个项目，独立于它此刻的 cwd。
         [pick("设置归属目录…", "Set the project folder…"), "inkstone.space", { mode: "bind", space: tg.id, folder: tg.folder ?? null, machine: tg.machine ?? null }, true],
-        [pick("关闭空间及其终端", "Close space and its terminals"), "space.close", { id: tg.id }, true],
+        [pick("关闭 Space 及其终端", "Close space and its terminals"), "space.close", { id: tg.id }, true],
       ];
     default:
       return [
-        [pick("新建空间", "New space"), "space.new", {}, false],
+        [pick("新建 Space", "New space"), "space.new", {}, false],
         [pick("命令面板", "Command palette"), "app.palette", {}, false],
         [pick("设置", "Settings"), "app.settings", {}, false],
         [pick("OMH 偏好", "Layout preferences"), "mod.open", { name: "inkstone-settings" }, false],
