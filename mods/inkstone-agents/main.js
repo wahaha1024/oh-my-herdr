@@ -4,7 +4,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, agents, run, hc, checking, theme, shared, setShared, layout } from "herdr";
+import { spaces, agents, run, hc, checking, theme, shared, setShared, layout, openOverlay } from "herdr";
 
 // 中英切换：shared 改动会让所有 mod 重绘，切换语言立即生效。
 const LANG = "inkstone.lang";
@@ -19,6 +19,13 @@ function findNode(node, id) {
   }
   return null;
 }
+// 休眠会话（tab.settle）的智能体不进 Agents 面板：会话已收起，恢复后再出现。
+function asleepTabs() {
+  const set = new Set();
+  for (const s of spaces()) for (const c of s.tabs ?? []) if (c.settled) set.add(c.id);
+  return set;
+}
+
 const rail = () => (findNode(layout(), "sidebar")?.size?.px ?? 999) < 160;
 
 const STATUS = () => ({
@@ -236,6 +243,29 @@ export default class AgentsPanel extends View {
     run("agent.focus", { terminal: a.address });
   }
 
+  // 右键卡片：和工作台会话行同一套菜单（重命名、休眠、分屏、关闭…）。
+  menuFor(a) {
+    openOverlay({
+      mod: "inkstone-menu",
+      kind: "popup",
+      width: 236,
+      height: 480,
+      props: {
+        tab: "agent",
+        target: {
+          tab: a.tab,
+          space: a.space,
+          terminal: a.address,
+          name: clean(a.title) || a.program?.name || a.app || a.address,
+          pane: a.pane,
+          status: a.status,
+          pinned: Boolean(a.pinned),
+          settled: false,
+        },
+      },
+    });
+  }
+
   toggleFlow(key, cx) {
     const open = { needs: true, flight: true, done: true, ...(shared("inkstone.flow.open") ?? {}) };
     open[key] = !open[key];
@@ -277,7 +307,7 @@ export default class AgentsPanel extends View {
       .child(name);
   }
 
-  // 等你处理（红区）：卡住的智能体一张醒目红卡——卡在哪、哪个空间、卡了多久、在问什么。
+  // 等你处理（红区）：卡住的智能体一张醒目红卡——卡在哪、哪个 Space、卡了多久、在问什么。
   askCard(a, t, asks, colors) {
     const name = clean(a.title) || a.program?.name || a.app || a.address;
     const space = clean(a.space_name) || a.address;
@@ -305,6 +335,7 @@ export default class AgentsPanel extends View {
       .tooltip(q ? `${name}\n${q}` : name)
       .accessibility_label(`${name} ${pick("待处理", "waiting")}`)
       .on_click(() => this.openAgent(a))
+      .on_mouse_down("right", () => this.menuFor(a))
       .child(h_flex()
         .gap(6)
         .items_center()
@@ -348,6 +379,7 @@ export default class AgentsPanel extends View {
       .tooltip(`${name}\n${statusLabel(a.status)} · ${a.tab_name ?? ""} · ${a.address}`)
       .accessibility_label(`${name} ${word}`)
       .on_click(() => this.openAgent(a))
+      .on_mouse_down("right", () => this.menuFor(a))
       .child(h_flex()
         .gap(6)
         .items_center()
@@ -430,7 +462,8 @@ export default class AgentsPanel extends View {
 
   render(cx) {
     const t = theme();
-    const list = agents();
+    const asleep = asleepTabs();
+    const list = agents().filter((a) => !asleep.has(a.tab));
     const colors = this.colors();
     const asks = shared("inkstone.asks") ?? {};
     const open = shared("inkstone.flow.open") ?? {};
@@ -485,7 +518,7 @@ export default class AgentsPanel extends View {
           .line_height("18px")
           .font_bold()
           .text_color(inkOf(t, "ink", "foreground"))
-          .child(pick("智能体", "Agents")))
+          .child("Agents"))
         .child(h_flex()
           .gap(6)
           .items_center()

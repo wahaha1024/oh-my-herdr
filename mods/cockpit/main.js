@@ -2,7 +2,7 @@
 // 取自 quaresc/cockpit 的核心三件事，用本机 API 重写为中文面板：
 //   1. 待您处理（NEEDS YOU）：被确认 / 提问 / 报错卡住的智能体置顶，一键跳过去；
 //   2. 下一步行动（NEXT MOVE）：等得最久的那个智能体，带时长；
-//   3. 全景：每个空间 / 标签里的智能体、状态与已经运行多久。
+//   3. 全景：每个 Space / 标签里的智能体、状态与已经运行多久。
 // Cockpit 上游是 macOS / Linux 的 Rust TUI 插件，Windows 上无法运行它的二进制，
 // 所以这里保留它的信息结构，界面用 herdr 的 mod 重画。
 
@@ -148,7 +148,7 @@ export default class Cockpit extends View {
       .rounded(8)
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
-      .tooltip(`${a.program?.name ?? a.app ?? pick("智能体", "Agents")} · ${a.space_name} · ${a.tab_name}`)
+      .tooltip(`${a.program?.name ?? a.app ?? "Agents"} · ${a.space_name} · ${a.tab_name}`)
       .on_click(() => this.go(a))
       .child(dot(t, a.status))
       .child(v_flex()
@@ -162,7 +162,10 @@ export default class Cockpit extends View {
 
   render() {
     const t = theme();
-    const list = agents();
+    // 休眠会话（tab.settle）的智能体不进驾驶舱：会话已收起，恢复后再出现。
+    const asleep = new Set();
+    for (const s of spaces()) for (const c of s.tabs ?? []) if (c.settled) asleep.add(c.id);
+    const list = agents().filter((a) => !asleep.has(a.tab));
     const blocked = list.filter((a) => a.status === "blocked");
     const working = list.filter((a) => a.status === "working");
     const done = list.filter((a) => a.status === "done");
@@ -223,7 +226,7 @@ export default class Cockpit extends View {
           .gap(8)
           .px(10)
           .pt(10)
-          .child(this.tile("ck-t-agents", pick("智能体", "Agents"), String(list.length), t.foreground, t))
+          .child(this.tile("ck-t-agents", "Agents", String(list.length), t.foreground, t))
           .child(this.tile("ck-t-needs", pick("待处理", "Waiting"), String(blocked.length), blocked.length ? t.blocked : t.foreground, t))
           .child(this.tile("ck-t-work", pick("运行中", "Running"), String(working.length), t.foreground, t))
           .child(this.tile("ck-t-done", pick("已完成", "Done"), String(done.length), done.length ? t.done : t.foreground, t)))
@@ -261,8 +264,8 @@ export default class Cockpit extends View {
                 .child(pick("去处理", "Handle it"))))),
         )
         .when(blocked.length > 0, (el) => el.child(header(pick("待您处理", "Needs you"), blocked.length, t.blocked)).children(blocked.map((a) => this.row(a, t, pick("等待中", "Waiting")))))
-        .child(header(pick("智能体", "Agents"), list.length))
-        .when(list.length === 0, (el) => el.child(div().px(14).py(8).text_size(12).text_color(t.dim).child(pick("还没有智能体在跑。在终端里启动一个 agent 就会出现在这里。", "No agent is running yet. Start one in a terminal and it shows up here."))))
+        .child(header("Agents", list.length))
+        .when(list.length === 0, (el) => el.child(div().px(14).py(8).text_size(12).text_color(t.dim).child(pick("还没有 Agents 在跑。在终端里启动一个 agent 就会出现在这里。", "No agent is running yet. Start one in a terminal and it shows up here."))))
         .children(list.filter((a) => a.status !== "blocked").map((a) => {
           const started = since(a.space, a.tab);
           return this.row(a, t, started ? duration(Date.now() - started) : "");

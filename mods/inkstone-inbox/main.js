@@ -102,7 +102,7 @@ export default class Inbox extends View {
       .items_center()
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
-      .tooltip(list.length ? pick(`${list.length} 个智能体在等你 · 点开看是哪些`, `${list.length} agents are waiting · click to see them`) : pick("没有智能体在等你", "No agent is waiting"))
+      .tooltip(list.length ? pick(`${list.length} 个 Agents 在等你 · 点开看是哪些`, `${list.length} agents are waiting · click to see them`) : pick("没有 Agents 在等你", "No agent is waiting"))
       .accessibility_label(pick("待处理列表", "Waiting list"))
       .on_click(() => openOverlay({ mod: "inkstone-inbox", kind: "dialog", frame: "none", width: 424, height: 344, props: { framed: true } }))
       .child(dot(t, urgent ? "blocked" : list.length ? "done" : "idle"))
@@ -174,7 +174,7 @@ export default class Inbox extends View {
         .overflow_y_scrollbar()
         .children(list.length
           ? list.map((a, i) => this.row(a, i, t))
-          : [div().p(10).text_size(12).text_color(t.dim).child(pick("没有智能体在等你。", "No agent is waiting for you."))]));
+          : [div().p(10).text_size(12).text_color(t.dim).child(pick("没有 Agents 在等你。", "No agent is waiting for you."))]));
     return props()?.framed ? paperCard(this, t, inner) : inner;
   }
 

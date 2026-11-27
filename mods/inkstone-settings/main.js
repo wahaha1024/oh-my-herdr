@@ -88,7 +88,7 @@ const THEMES = () => [
 const STATUS = () => [
   { id: "metrics", label: pick("系统资源", "System resources"), hint: pick("状态栏的 CPU / 内存", "CPU and memory in the status bar") },
   { id: "ports", label: pick("活跃端口", "Open ports"), hint: pick("状态栏的端口计数", "port count in the status bar") },
-  { id: "inbox", label: pick("待处理提醒", "Waiting alerts"), hint: pick("状态栏的智能体等待提醒", "agents waiting for you, in the status bar") },
+  { id: "inbox", label: pick("待处理提醒", "Waiting alerts"), hint: pick("状态栏的 Agents 等待提醒", "agents waiting for you, in the status bar") },
   { id: "review", label: pick("代码审查", "Code review"), hint: pick("状态栏的审查按钮", "the review button in the status bar") },
 ];
 

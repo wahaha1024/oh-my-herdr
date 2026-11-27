@@ -1,4 +1,4 @@
-// 目录收藏：把常去的文件夹钉在这里，一点就切过去（已开着就选中，没开就新建空间）。
+// 目录收藏：把常去的文件夹钉在这里，一点就切过去（已开着就选中，没开就新建 Space）。
 // 移植自 Lamb-Yang/herdr-sessions 的 hs-favorites，去掉跨机器（machine）字段，文案改中文。
 
 import { View, div, svg } from "gpui-kit";
@@ -132,7 +132,7 @@ export default class Favorites extends View {
           .text_size(11)
           .text_color(t.muted)
           .cursor_pointer()
-          .tooltip(pick("把当前空间所在目录加进来", "Add the folder this space lives in"))
+          .tooltip(pick("把当前 Space所在目录加进来", "Add the folder this space lives in"))
           .accessibility_label(pick("收藏当前目录", "Save this folder"))
           .hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => this.addCurrent())
